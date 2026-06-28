@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>我的笔记</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html { font-size: 16px; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #f2f2f6;
+    color: #1c1c1e;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 20px 48px;
+  }
+
+  /* ============ NAV ============ */
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    width: 100%;
+    max-width: 800px;
+    padding: 16px 0 8px;
+    background: rgba(242,242,246,0.82);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+  .nav-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .nav-title {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .nav-title svg { flex-shrink: 0; }
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .nav-date {
+    font-size: 14px;
+    font-weight: 500;
+    color: #8e8e93;
+  }
+  .btn-today {
+    background: #007aff;
+    color: #fff;
+    border: none;
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .2s, transform .15s;
+  }
+  .btn-today:hover { opacity: .85; transform: scale(1.03); }
+  .btn-today:active { transform: scale(.96); }
+
+  /* ── 日历切换按钮 ── */
+  .nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #007aff;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity .2s;
+    margin-top: 2px;
+    margin-left: 34px;
+  }
+  .nav-toggle:hover { opacity: .7; }
+  .nav-toggle .arrow {
+    display: inline-block;
+    transition: transform .25s ease;
+    font-size: 10px;
+  }
+  .nav-toggle .arrow.open { transform: rotate(180deg); }
+
+  /* ============ CONTAINER ============ */
+  .container {
+    width: 100%;
+    max-width: 800px;
+    margin-top: 8px;
+  }
+
+  /* ============ CALENDAR (可折叠) ============ */
+  .calendar-wrap {
+    overflow: hidden;
+    max-height: 360px;
+    transition: max-height .35s ease, opacity .3s ease, margin .3s ease;
+    opacity: 1;
+    margin-bottom: 20px;
+  }
+  .calendar-wrap.collapsed {
+    max-height: 0;
+    opacity: 0;
+    margin-bottom: 0;
+  }
+  .calendar-card {
+    background: rgba(255,255,255,0.75);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 20px;
+    padding: 20px 24px 16px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.02);
+    border: 0.5px solid rgba(255,255,255,0.7);
+    max-width: 400px;
+  }
+
+  .cal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .cal-nav { display: flex; align-items: center; gap: 4px; }
+  .cal-nav-btn {
+    background: none; border: none; width: 30px; height: 30px;
+    border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: #007aff;
+    transition: background .2s; font-weight: 300;
+  }
+  .cal-nav-btn:hover { background: rgba(0,122,255,0.1); }
+  .cal-nav-btn:active { background: rgba(0,122,255,0.18); }
+  .cal-month {
+    font-size: 15px; font-weight: 700; letter-spacing: -0.2px;
+    min-width: 104px; text-align: center;
+  }
+
+  .cal-weekdays {
+    display: grid; grid-template-columns: repeat(7,1fr);
+    text-align: center; font-size: 11px; font-weight: 600;
+    color: #8e8e93; letter-spacing: 0.4px; margin-bottom: 4px;
+  }
+  .cal-grid {
+    display: grid; grid-template-columns: repeat(7,1fr); gap: 1px;
+  }
+  .cal-cell {
+    aspect-ratio: 1;
+    display: flex; align-items: center; justify-content: center;
+    position: relative; cursor: pointer; border-radius: 50%;
+    font-size: 14px; font-weight: 500;
+    color: #1c1c1e; transition: background .18s, transform .12s;
+    user-select: none;
+  }
+  .cal-cell:hover { background: rgba(0,0,0,0.04); }
+  .cal-cell:active { transform: scale(.88); }
+  .cal-cell.other { color: #c7c7cc; }
+
+  /* 今天 */
+  .cal-cell.today { background: #007aff; color: #fff; font-weight: 700; }
+
+  /* 有规划但未全部完成 → 蓝色 */
+  .cal-cell.has-plan { color: #007aff; font-weight: 600; }
+  .cal-cell.today.has-plan { color: #fff; }
+
+  /* 全部完成 → 绿色 */
+  .cal-cell.done-all { color: #34c759; font-weight: 700; }
+  .cal-cell.today.done-all { color: #fff; }
+
+  /* 选中轮廓 */
+  .cal-cell.selected:not(.today)::after {
+    content: ''; position: absolute; inset: -2px;
+    border-radius: 50%; border: 2.5px solid #007aff;
+    pointer-events: none;
+  }
+
+  .cal-footer {
+    display: flex; justify-content: center; margin-top: 8px;
+  }
+  .cal-footer .selected-date-label {
+    font-size: 12px; color: #8e8e93; font-weight: 500;
+  }
+
+  /* ============ 规划与完成情况 ============ */
+  .panel {
+    background: rgba(255,255,255,0.78);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.02);
+    border: 0.5px solid rgba(255,255,255,0.7);
+    display: flex;
+    flex-direction: column;
+  }
+  .panel-title {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #1c1c1e;
+  }
+  .panel-title .badge {
+    font-size: 12px;
+    font-weight: 600;
+    color: #8e8e93;
+    margin-left: auto;
+  }
+
+  .plan-list { list-style: none; }
+
+  /* ── 单个规划项 ── */
+  .plan-item {
+    padding: 14px 0 10px;
+    border-bottom: 0.5px solid rgba(60,60,67,0.07);
+  }
+  .plan-item:last-of-type { border-bottom: none; }
+
+  .plan-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  /* 序号 */
+  .plan-num {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: rgba(0,122,255,0.1);
+    color: #007aff;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+  }
+  .plan-item.done .plan-num {
+    background: rgba(52,199,89,0.12);
+    color: #34c759;
+  }
+
+  /* 勾选框 */
+  .plan-check {
+    flex-shrink: 0;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 2px solid #c7c7cc;
+    background: none;
+    cursor: pointer;
+    transition: border-color .2s, background .2s, transform .12s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+  }
+  .plan-check:hover { border-color: #007aff; transform: scale(1.08); }
+  .plan-check:active { transform: scale(.88); }
+  .plan-check.checked { background: #34c759; border-color: #34c759; }
+  .plan-check.checked svg { opacity: 1; }
+
+  .plan-check svg {
+    opacity: 0; transition: opacity .15s; pointer-events: none;
+  }
+
+  .plan-body {
+    flex: 1;
+    min-width: 0;
+  }
+  .plan-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .plan-time {
+    font-size: 13px;
+    font-weight: 600;
+    color: #007aff;
+    letter-spacing: 0.2px;
+  }
+  .plan-text {
+    font-size: 14px;
+    color: #1c1c1e;
+    line-height: 1.4;
+    transition: color .2s;
+  }
+  .plan-item.done .plan-text { color: #8e8e93; text-decoration: line-through; }
+
+  .plan-delete {
+    flex-shrink: 0;
+    background: none; border: none;
+    width: 24px; height: 24px;
+    border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    color: #c7c7cc; font-size: 14px;
+    transition: background .2s, color .2s;
+    opacity: 0;
+  }
+  .plan-item:hover .plan-delete { opacity: 1; }
+  .plan-delete:hover { background: rgba(255,59,48,0.1); color: #ff3b30; }
+
+  /* ── 完成情况输入 ── */
+  .plan-completion {
+    margin-top: 8px;
+    margin-left: 34px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .plan-completion-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #aeaeb2;
+    flex-shrink: 0;
+  }
+  .plan-completion input {
+    flex: 1;
+    border: none;
+    background: rgba(118,118,128,0.06);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    color: #1c1c1e;
+    outline: none;
+    transition: background .2s;
+  }
+  .plan-completion input:focus { background: rgba(0,122,255,0.06); }
+  .plan-completion input::placeholder { color: #c7c7cc; }
+
+  /* ── 添加规划 ── */
+  .plan-add {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 14px;
+    border-top: 0.5px solid rgba(60,60,67,0.08);
+  }
+  .plan-add input[type="time"] {
+    border: none;
+    background: rgba(118,118,128,0.08);
+    border-radius: 10px;
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 600;
+    color: #007aff;
+    width: 80px;
+    outline: none;
+    transition: background .2s;
+  }
+  .plan-add input[type="time"]:focus { background: rgba(0,122,255,0.08); }
+  .plan-add input[type="text"] {
+    flex: 1;
+    border: none;
+    background: rgba(118,118,128,0.08);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    color: #1c1c1e;
+    outline: none;
+    transition: background .2s;
+  }
+  .plan-add input[type="text"]:focus { background: rgba(0,122,255,0.08); }
+  .plan-add input[type="text"]::placeholder { color: #aeaeb2; }
+  .plan-add-btn {
+    flex-shrink: 0;
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    border: none;
+    background: #007aff;
+    color: #fff;
+    font-size: 20px;
+    font-weight: 300;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity .2s, transform .12s;
+  }
+  .plan-add-btn:hover { opacity: .85; }
+  .plan-add-btn:active { transform: scale(.92); }
+
+  .empty-state {
+    color: #aeaeb2;
+    font-size: 14px;
+    text-align: center;
+    padding: 40px 0;
+    line-height: 1.8;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ NAV ============ -->
+<header class="nav">
+  <div class="nav-row">
+    <div class="nav-title">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+        <rect x="4" y="2" width="16" height="20" rx="3" fill="#007aff" opacity=".2"/>
+        <path d="M8 7h8M8 11h8M8 15h5" stroke="#007aff" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      我的笔记
+    </div>
+    <div class="nav-right">
+      <span class="nav-date" id="navDate"></span>
+      <button class="btn-today" id="btnToday">今天</button>
+    </div>
+  </div>
+  <div class="nav-toggle" id="calToggle">
+    日历 <span class="arrow" id="calArrow">▸</span>
+  </div>
+</header>
+
+<!-- ============ MAIN ============ -->
+<div class="container">
+
+  <!-- 可折叠日历 -->
+  <div class="calendar-wrap" id="calendarWrap">
+    <div class="calendar-card">
+      <div class="cal-header">
+        <div class="cal-nav">
+          <button class="cal-nav-btn" id="calPrev">‹</button>
+          <span class="cal-month" id="calMonth"></span>
+          <button class="cal-nav-btn" id="calNext">›</button>
+        </div>
+      </div>
+      <div class="cal-weekdays">
+        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+      <div class="cal-footer">
+        <span class="selected-date-label" id="selectedDateLabel">今天</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 规划与完成情况 -->
+  <div class="panel">
+    <div class="panel-title">
+      📋 规划与完成情况
+      <span class="badge" id="planCount">0 项</span>
+    </div>
+    <div class="plan-list" id="planList"></div>
+    <div class="plan-add">
+      <input type="time" id="planTime" value="09:00">
+      <input type="text" id="planInput" placeholder="添加事项…" maxlength="100">
+      <button class="plan-add-btn" id="addPlanBtn">+</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─── 状态 ───
+let viewYear, viewMonth;
+let selectedDate = '';
+let calOpen = false;
+const STORAGE_KEY = 'my_notes_data';
+
+// ─── DOM ───
+const $ = id => document.getElementById(id);
+const calGrid = $('calGrid');
+const calMonth = $('calMonth');
+const calWrap = $('calendarWrap');
+const calToggle = $('calToggle');
+const calArrow = $('calArrow');
+const planList = $('planList');
+const planInput = $('planInput');
+const planTime = $('planTime');
+const planCount = $('planCount');
+const selectedDateLabel = $('selectedDateLabel');
+const navDate = $('navDate');
+
+// ─── 工具 ───
+function fmtDate(y,m,d) { return `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`; }
+function todayStr() { const d=new Date(); return fmtDate(d.getFullYear(),d.getMonth(),d.getDate()); }
+function parseDate(str) { const [y,m,d]=str.split('-').map(Number); return new Date(y,m-1,d); }
+
+// ─── 数据 ───
+function loadAll() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
+}
+function saveAll(data) { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+function getDayData(dateStr) {
+  const all = loadAll();
+  if (!all[dateStr]) all[dateStr] = { plans: [] };
+  return all[dateStr];
+}
+function putDayData(dateStr, data) {
+  const all = loadAll();
+  all[dateStr] = data;
+  saveAll(all);
+}
+
+// ─── 日历标记状态 ───
+function getDayStatus(dateStr) {
+  const all = loadAll();
+  const d = all[dateStr];
+  if (!d || !d.plans || !d.plans.length) return 'none';
+  const hasPending = d.plans.some(p => !p.done);
+  if (hasPending) return 'has-plan';    // 有规划但未全部完成 → 蓝色
+  return 'done-all';                     // 全部完成 → 绿色
+}
+
+// ─── 渲染日历 ───
+function renderCalendar(year, month) {
+  viewYear = year; viewMonth = month;
+  calMonth.textContent = `${year}年${month+1}月`;
+
+  const first = new Date(year, month, 1);
+  const last = new Date(year, month+1, 0);
+  const daysInMonth = last.getDate();
+  let startOffset = (first.getDay() + 6) % 7;
+  const prevLast = new Date(year, month, 0);
+  const prevDays = prevLast.getDate();
+  const today = todayStr();
+  let html = '';
+  const totalCells = Math.ceil((startOffset + daysInMonth) / 7) * 7;
+
+  for (let i = 0; i < totalCells; i++) {
+    let day, dateStr, cls = 'cal-cell';
+    if (i < startOffset) {
+      day = prevDays - startOffset + 1 + i;
+      const m = month === 0 ? 11 : month - 1;
+      const y = month === 0 ? year - 1 : year;
+      dateStr = fmtDate(y, m, day);
+      cls += ' other';
+    } else if (i >= startOffset + daysInMonth) {
+      day = i - startOffset - daysInMonth + 1;
+      const m = month === 11 ? 0 : month + 1;
+      const y = month === 11 ? year + 1 : year;
+      dateStr = fmtDate(y, m, day);
+      cls += ' other';
+    } else {
+      day = i - startOffset + 1;
+      dateStr = fmtDate(year, month, day);
+      if (dateStr === today) cls += ' today';
+    }
+    if (dateStr === selectedDate) cls += ' selected';
+
+    // 状态颜色
+    const status = getDayStatus(dateStr);
+    if (status === 'has-plan') cls += ' has-plan';
+    else if (status === 'done-all') cls += ' done-all';
+
+    html += `<div class="${cls}" data-date="${dateStr}">${day}</div>`;
+  }
+  calGrid.innerHTML = html;
+
+  calGrid.querySelectorAll('.cal-cell').forEach(el => {
+    el.addEventListener('click', () => selectDate(el.dataset.date));
+  });
+}
+
+// ─── 选中日期 ───
+function selectDate(dateStr) {
+  selectedDate = dateStr;
+  renderCalendar(viewYear, viewMonth);
+  renderDay(dateStr);
+  updateNavDate(dateStr);
+  updateSelectedLabel(dateStr);
+}
+
+function updateNavDate(dateStr) {
+  const d = parseDate(dateStr);
+  navDate.textContent = `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
+}
+function updateSelectedLabel(dateStr) {
+  const d = parseDate(dateStr);
+  const t = todayStr();
+  if (dateStr === t) { selectedDateLabel.textContent = '📌 今天'; return; }
+  const wk = ['日','一','二','三','四','五','六'];
+  selectedDateLabel.textContent = `${d.getMonth()+1}月${d.getDate()}日 星期${wk[d.getDay()]}`;
+}
+
+// ─── 渲染规划与完成情况 ───
+function renderDay(dateStr) {
+  const data = getDayData(dateStr);
+  const plans = data.plans || [];
+
+  if (plans.length === 0) {
+    planList.innerHTML = `<div class="empty-state">暂无规划<br>在下方添加今日事项</div>`;
+    planCount.textContent = '0 项';
+    return;
+  }
+
+  planList.innerHTML = plans.map((p, idx) => {
+    const doneClass = p.done ? 'done' : '';
+    const checkedClass = p.done ? 'checked' : '';
+    return `
+      <div class="plan-item ${doneClass}" data-id="${p.id}">
+        <div class="plan-top">
+          <span class="plan-num">${idx + 1}</span>
+          <button class="plan-check ${checkedClass}" data-id="${p.id}">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2.5 6l2.5 2.5L9.5 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <div class="plan-body">
+            <div class="plan-meta">
+              <span class="plan-time">${p.time || ''}</span>
+              <span class="plan-text">${escapeHtml(p.text)}</span>
+              <button class="plan-delete" data-id="${p.id}">✕</button>
+            </div>
+            <div class="plan-completion">
+              <span class="plan-completion-label">完成情况</span>
+              <input type="text" placeholder="写下完成情况…" value="${escapeHtml(p.completion || '')}" data-id="${p.id}">
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  planCount.textContent = `${plans.length} 项`;
+
+  // 事件绑定
+  planList.querySelectorAll('.plan-check').forEach(btn => {
+    btn.addEventListener('click', () => togglePlan(dateStr, btn.dataset.id));
+  });
+  planList.querySelectorAll('.plan-delete').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); deletePlan(dateStr, btn.dataset.id); });
+  });
+  planList.querySelectorAll('.plan-completion input').forEach(inp => {
+    inp.addEventListener('input', () => updateCompletion(dateStr, inp.dataset.id, inp.value));
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ─── 添加规划 ───
+function addPlan() {
+  const text = planInput.value.trim();
+  if (!text) return;
+  const data = getDayData(selectedDate);
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2,4);
+  data.plans.push({ id, time: planTime.value, text, done: false, completion: '' });
+  putDayData(selectedDate, data);
+  planInput.value = '';
+  renderDay(selectedDate);
+  renderCalendar(viewYear, viewMonth);
+}
+
+// ─── 勾选切换 ───
+function togglePlan(dateStr, id) {
+  const data = getDayData(dateStr);
+  const plan = data.plans.find(p => p.id === id);
+  if (!plan) return;
+  plan.done = !plan.done;
+  putDayData(dateStr, data);
+  renderDay(dateStr);
+  renderCalendar(viewYear, viewMonth);
+}
+
+// ─── 删除 ───
+function deletePlan(dateStr, id) {
+  const data = getDayData(dateStr);
+  data.plans = data.plans.filter(p => p.id !== id);
+  putDayData(dateStr, data);
+  renderDay(dateStr);
+  renderCalendar(viewYear, viewMonth);
+}
+
+// ─── 更新完成情况 ───
+let completionTimers = {};
+function updateCompletion(dateStr, id, value) {
+  clearTimeout(completionTimers[id]);
+  completionTimers[id] = setTimeout(() => {
+    const data = getDayData(dateStr);
+    const plan = data.plans.find(p => p.id === id);
+    if (plan) { plan.completion = value.trim(); putDayData(dateStr, data); }
+    renderCalendar(viewYear, viewMonth);
+  }, 400);
+}
+
+// ─── 日历折叠切换 ───
+calToggle.addEventListener('click', () => {
+  calOpen = !calOpen;
+  calWrap.classList.toggle('collapsed', !calOpen);
+  calArrow.classList.toggle('open', calOpen);
+});
+
+// ─── 快捷键 ───
+planInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addPlan(); });
+$('addPlanBtn').addEventListener('click', addPlan);
+
+// ─── 日历导航 ───
+$('calPrev').addEventListener('click', () => {
+  const m = viewMonth - 1;
+  renderCalendar(m < 0 ? viewYear - 1 : viewYear, m < 0 ? 11 : m);
+});
+$('calNext').addEventListener('click', () => {
+  const m = viewMonth + 1;
+  renderCalendar(m > 11 ? viewYear + 1 : viewYear, m > 11 ? 0 : m);
+});
+$('btnToday').addEventListener('click', () => {
+  const d = new Date();
+  const y = d.getFullYear(), m = d.getMonth();
+  const s = todayStr();
+  selectedDate = s;
+  renderCalendar(y, m);
+  renderDay(s);
+  updateNavDate(s);
+  updateSelectedLabel(s);
+});
+
+// ─── 初始化 ───
+(function init() {
+  const d = new Date();
+  const s = todayStr();
+  selectedDate = s;
+  viewYear = d.getFullYear();
+  viewMonth = d.getMonth();
+  renderCalendar(viewYear, viewMonth);
+  renderDay(s);
+  updateNavDate(s);
+  updateSelectedLabel(s);
+})();
+</script>
+</body>
+</html>
