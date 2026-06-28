@@ -284,10 +284,41 @@
     gap: 10px;
   }
   .plan-time {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
     font-size: 13px;
     font-weight: 600;
     color: #007aff;
-    letter-spacing: 0.2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .plan-time svg {
+    flex-shrink: 0;
+    opacity: .6;
+    margin-right: 4px;
+  }
+  .plan-time .pt-sep {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    margin: 0 1px;
+    color: #007aff;
+    opacity: .45;
+    font-weight: 300;
+    font-size: 14px;
+  }
+  .plan-time .pt-sep::after {
+    content: ':';
+    display: inline;
+    background: none;
+    width: auto;
+    height: auto;
+  }
+  .plan-time .pt-part {
+    display: inline-block;
+    min-width: 18px;
+    text-align: center;
   }
   .plan-text {
     font-size: 14px;
@@ -339,28 +370,145 @@
   .plan-completion input:focus { background: rgba(0,122,255,0.06); }
   .plan-completion input::placeholder { color: #c7c7cc; }
 
-  /* ── 添加规划 ── */
+  /* ── 自定义苹果风时间选择器 ── */
   .plan-add {
     display: flex;
     gap: 8px;
     margin-top: 8px;
     padding-top: 14px;
     border-top: 0.5px solid rgba(60,60,67,0.08);
+    position: relative;
   }
-  .plan-add input[type="time"] {
-    border: none;
+  .plan-add .time-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+  .plan-add .time-wrap svg {
+    position: absolute;
+    left: 10px;
+    pointer-events: none;
+    opacity: .5;
+    z-index: 1;
+  }
+  .time-picker-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
     background: rgba(118,118,128,0.08);
     border-radius: 10px;
-    padding: 8px 10px;
-    font-size: 13px;
-    font-family: inherit;
+    padding: 8px 10px 8px 34px;
+    font-size: 14px;
     font-weight: 600;
     color: #007aff;
-    width: 80px;
-    outline: none;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    user-select: none;
     transition: background .2s;
+    min-width: 92px;
+    justify-content: center;
   }
-  .plan-add input[type="time"]:focus { background: rgba(0,122,255,0.08); }
+  .time-picker-trigger:hover { background: rgba(0,122,255,0.08); }
+  .time-picker-trigger:active { background: rgba(0,122,255,0.14); }
+  .time-picker-trigger .tp-sep {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    margin: 0 1px;
+    color: #007aff;
+    opacity: .5;
+    font-weight: 300;
+    font-size: 15px;
+  }
+  .time-picker-trigger .tp-sep::after {
+    content: ':';
+    display: inline;
+    background: none;
+    width: auto;
+    height: auto;
+  }
+  .time-picker-trigger .tp-part {
+    display: inline-block;
+    min-width: 24px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .time-picker-trigger .tp-part:first-child {
+    min-width: 26px;
+  }
+
+  /* 下拉面板 — 从上方弹出 */
+  .tp-dropdown {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: -10px;
+    z-index: 200;
+    background: rgba(255,255,255,0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 16px;
+    box-shadow: 0 -8px 40px rgba(0,0,0,0.12), 0 -2px 8px rgba(0,0,0,0.04);
+    border: 0.5px solid rgba(255,255,255,0.8);
+    padding: 8px 6px;
+    display: none;
+    min-width: 144px;
+  }
+  .tp-dropdown.open { display: block; }
+  .tp-dropdown-inner {
+    display: flex;
+    gap: 2px;
+    align-items: stretch;
+  }
+  .tp-col {
+    flex: 1;
+    height: 180px;
+    position: relative;
+  }
+  .tp-col::-webkit-scrollbar { display: none; }
+  .tp-item {
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 500;
+    color: #8e8e93;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+  }
+  .tp-item.active {
+    color: #007aff;
+    font-weight: 700;
+    font-size: 20px;
+  }
+  .tp-col-sep {
+    width: 1px;
+    background: rgba(60,60,67,0.1);
+    margin: 8px 4px;
+    flex-shrink: 0;
+  }
+  .tp-confirm {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 0.5px solid rgba(60,60,67,0.08);
+  }
+  .tp-confirm button {
+    background: #007aff;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 5px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity .2s;
+  }
+  .tp-confirm button:hover { opacity: .8; }
   .plan-add input[type="text"] {
     flex: 1;
     border: none;
@@ -455,7 +603,25 @@
     </div>
     <div class="plan-list" id="planList"></div>
     <div class="plan-add">
-      <input type="time" id="planTime" value="09:00">
+      <div class="time-wrap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="#007aff" stroke-width="1.5" opacity=".6"/>
+          <path d="M12 7.5v4.5l3 3" stroke="#007aff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity=".8"/>
+        </svg>
+        <div class="time-picker-trigger" id="tpTrigger">
+          <span class="tp-part" id="tpHour">09</span>
+          <span class="tp-sep"></span>
+          <span class="tp-part" id="tpMin">00</span>
+        </div>
+        <div class="tp-dropdown" id="tpDropdown">
+          <div class="tp-dropdown-inner">
+            <div class="tp-col" id="tpColHour"></div>
+            <div class="tp-col-sep"></div>
+            <div class="tp-col" id="tpColMin"></div>
+          </div>
+          <div class="tp-confirm"><button id="tpConfirm">完成</button></div>
+        </div>
+      </div>
       <input type="text" id="planInput" placeholder="添加事项…" maxlength="100">
       <button class="plan-add-btn" id="addPlanBtn">+</button>
     </div>
@@ -479,10 +645,135 @@ const calToggle = $('calToggle');
 const calArrow = $('calArrow');
 const planList = $('planList');
 const planInput = $('planInput');
-const planTime = $('planTime');
 const planCount = $('planCount');
 const selectedDateLabel = $('selectedDateLabel');
 const navDate = $('navDate');
+
+// ─── 自定义时间选择器（简单原生滚动）
+let tpHour = 9, tpMin = 0;
+const tpHourEl = $('tpHour');
+const tpMinEl = $('tpMin');
+const tpTrigger = $('tpTrigger');
+const tpDropdown = $('tpDropdown');
+const tpColHour = $('tpColHour');
+const tpColMin = $('tpColMin');
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+function getTimeStr() { return `${pad2(tpHour)}:${pad2(tpMin)}`; }
+
+function makeCol(container, range, val, onChange) {
+  const H = 36;
+  const R = 99;
+  const mid = Math.floor(R / 2);
+  container.innerHTML = '';
+  container.style.cssText = 'height:180px;overflow-y:scroll;scrollbar-width:none;';
+
+  const inner = document.createElement('div');
+  inner.style.cssText = `padding:72px 0;`;
+
+  for (let r = 0; r < R; r++) {
+    for (let i = 0; i < range; i++) {
+      const el = document.createElement('div');
+      el.className = 'tp-item';
+      el.dataset.val = i;
+      el.textContent = pad2(i);
+      if (r === mid && i === val) el.classList.add('active');
+      inner.appendChild(el);
+    }
+  }
+  container.appendChild(inner);
+
+  // 滚动时高亮中间项 + 循环
+  let ticking = false;
+  container.addEventListener('scroll', () => {
+    if (!ticking) {
+      window.requestAnimationFrame(() => {
+        ticking = false;
+        const st = container.scrollTop;
+        const max = container.scrollHeight - container.clientHeight;
+        const block = range * H;
+        const threshold = block * 1.5;
+
+        if (st < threshold) container.scrollTop = st + block * (R - 3);
+        else if (st > max - threshold) container.scrollTop = st - block * (R - 3);
+
+        const center = container.scrollTop + container.clientHeight / 2;
+        const idx = Math.round((center - 72) / H);
+        const items = container.querySelectorAll('.tp-item');
+        items.forEach(el => el.classList.remove('active'));
+        const item = items[idx];
+        if (!item) return;
+        item.classList.add('active');
+        onChange(+item.dataset.val);
+      });
+      ticking = true;
+    }
+  }, { passive: true });
+
+  container.addEventListener('click', (e) => {
+    const el = e.target.closest('.tp-item');
+    if (!el) return;
+    const items = container.querySelectorAll('.tp-item');
+    const idx = Array.from(items).indexOf(el);
+    container.scrollTop = idx * H;
+    items.forEach(e => e.classList.remove('active'));
+    el.classList.add('active');
+    onChange(+el.dataset.val);
+  });
+}
+
+// 面板显示后，居中滚动到当前值
+function scrollToCenter(container, val) {
+  const H = 36;
+  const range = container === tpColHour ? 24 : 60;
+  const R = 99;
+  const mid = Math.floor(R / 2);
+  container.scrollTop = (mid * range + val) * H;
+}
+
+function buildTimeOptions() {
+  makeCol(tpColHour, 24, tpHour, (v) => {
+    tpHour = v;
+    tpHourEl.textContent = pad2(tpHour);
+    tpMinEl.textContent = pad2(tpMin);
+  });
+  makeCol(tpColMin, 60, tpMin, (v) => {
+    tpMin = v;
+    tpHourEl.textContent = pad2(tpHour);
+    tpMinEl.textContent = pad2(tpMin);
+  });
+}
+
+
+tpTrigger.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const wasOpen = tpDropdown.classList.contains('open');
+  document.querySelectorAll('.tp-dropdown.open').forEach(d => d.classList.remove('open'));
+  if (!wasOpen) {
+    buildTimeOptions();
+    tpDropdown.classList.add('open');
+    // 等 display:block 生效后再设 scrollTop
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollToCenter(tpColHour, tpHour);
+        scrollToCenter(tpColMin, tpMin);
+      });
+    });
+  }
+});
+
+$('tpConfirm').addEventListener('click', () => {
+  tpHourEl.textContent = pad2(tpHour);
+  tpMinEl.textContent = pad2(tpMin);
+  tpDropdown.classList.remove('open');
+});
+
+// 点击外部关闭
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.time-wrap')) {
+    tpDropdown.classList.remove('open');
+  }
+});
 
 // ─── 工具 ───
 function fmtDate(y,m,d) { return `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`; }
@@ -611,7 +902,15 @@ function renderDay(dateStr) {
           </button>
           <div class="plan-body">
             <div class="plan-meta">
-              <span class="plan-time">${p.time || ''}</span>
+              ${p.time ? `<span class="plan-time">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="9" stroke="#007aff" stroke-width="1.6" opacity=".6"/>
+                  <path d="M12 7.5v4.5l3 3" stroke="#007aff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity=".8"/>
+                </svg>
+                <span class="pt-part">${p.time.split(':')[0] || '00'}</span>
+                <span class="pt-sep"></span>
+                <span class="pt-part">${p.time.split(':')[1] || '00'}</span>
+              </span>` : ''}
               <span class="plan-text">${escapeHtml(p.text)}</span>
               <button class="plan-delete" data-id="${p.id}">✕</button>
             </div>
@@ -651,7 +950,7 @@ function addPlan() {
   if (!text) return;
   const data = getDayData(selectedDate);
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2,4);
-  data.plans.push({ id, time: planTime.value, text, done: false, completion: '' });
+  data.plans.push({ id, time: getTimeStr(), text, done: false, completion: '' });
   putDayData(selectedDate, data);
   planInput.value = '';
   renderDay(selectedDate);
