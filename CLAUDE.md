@@ -9,6 +9,9 @@
 - 原生 HTML + CSS + JavaScript（`<script>` 顺序加载，非 ES Module）
 - 无框架、无构建工具、无后端
 - 存储：浏览器 `localStorage`
+- **PWA**：`manifest.json` + `sw.js`（支持安装到桌面 + 离线缓存）
+  - `sw.js` 使用网络优先策略，安装时预缓存所有静态资源
+  - 离线时回退到缓存内容
 
 ## 设计语言
 
@@ -25,9 +28,13 @@
 
 ```
 note/
-├── index.html            ← 入口
+├── index.html            ← 入口（PWA 入口点）
+├── manifest.json         ← PWA 清单文件
+├── sw.js                 ← Service Worker（离线缓存）
 ├── README.md             ← 项目文档
 ├── CLAUDE.md             ← 本文件
+│
+├── icons/                ← SVG 图标（48/192/512）
 │
 ├── css/
 │   ├── base.css          ← 全局重置、字体、容器

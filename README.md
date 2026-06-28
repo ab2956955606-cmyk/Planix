@@ -39,6 +39,11 @@
 
 ### ✨ 功能
 
+#### 📱 PWA 应用
+- **可安装**：支持添加到桌面，像原生应用一样启动
+- **离线可用**：首次加载后，断网也能正常使用
+- **沉浸体验**：无浏览器地址栏的全屏模式
+
 #### 📅 日历
 - 点击 **「日历 ▾」** 展开或折叠月视图
 - 左右箭头 `‹` `›` 切换月份
@@ -107,8 +112,15 @@
 
 ```
 note/
-├── index.html            ← 入口页面
+├── index.html            ← 入口页面（PWA 入口）
+├── manifest.json         ← PWA 清单（可安装配置）
+├── sw.js                 ← Service Worker（离线缓存）
 ├── README.md             ← 本文件
+│
+├── icons/                ← 应用图标
+│   ├── icon-48.svg
+│   ├── icon-192.svg
+│   └── icon-512.svg
 │
 ├── css/
 │   ├── base.css          ← 全局重置、字体、容器布局
@@ -169,6 +181,11 @@ MIT License — 随意使用、修改、分享。
 ---
 
 ### ✨ Features
+
+#### 📱 PWA App
+- **Installable**: Add to your home screen, launches like a native app
+- **Offline Ready**: Works without internet after first load
+- **Immersive**: Full-screen mode without browser chrome
 
 #### 📅 Calendar
 - Click **"Calendar ▾"** to expand or collapse the month view
@@ -238,8 +255,15 @@ All data is stored in browser `localStorage`:
 
 ```
 note/
-├── index.html            ← Entry page
+├── index.html            ← Entry page (PWA entry point)
+├── manifest.json         ← PWA manifest (installable config)
+├── sw.js                 ← Service Worker (offline cache)
 ├── README.md             ← This file
+│
+├── icons/                ← App icons
+│   ├── icon-48.svg
+│   ├── icon-192.svg
+│   └── icon-512.svg
 │
 ├── css/
 │   ├── base.css          ← Global reset, fonts, container layout

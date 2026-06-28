@@ -1,0 +1,21 @@
+{
+  "name": "我的笔记 — MyNotes",
+  "short_name": "MyNotes",
+  "description": "一款纯前端、无需后端的个人日常规划工具",
+  "start_url": "/note/index.html",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "background_color": "#f2f2f6",
+  "theme_color": "#007aff",
+  "orientation": "portrait",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    { "src": "icons/icon-48.svg",   "sizes": "48x48",   "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-192.svg",  "sizes": "192x192", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "icons/icon-512.svg",  "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "screenshots": [],
+  "shortcuts": []
+}

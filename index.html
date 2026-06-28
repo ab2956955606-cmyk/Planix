@@ -2,7 +2,17 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+
+<!-- PWA Meta -->
+<meta name="theme-color" content="#007aff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="MyNotes">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.svg">
+<link rel="icon" type="image/svg+xml" href="icons/icon-48.svg">
+
 <title>我的笔记</title>
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/nav.css">
@@ -108,5 +118,14 @@
 <script src="js/calendar.js"></script>
 <script src="js/plans.js"></script>
 <script src="js/app.js"></script>
+
+<!-- Service Worker 注册 -->
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js')
+    .then(() => console.log('✅ SW registered'))
+    .catch(err => console.warn('⚠️ SW registration failed:', err));
+}
+</script>
 </body>
 </html>
