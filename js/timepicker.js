@@ -43,7 +43,7 @@ function makeCol(container, range, val, onChange) {
         if (st < threshold) container.scrollTop = st + block * (R - 3);
         else if (st > max - threshold) container.scrollTop = st - block * (R - 3);
 
-        const centerIdx = Math.round((container.scrollTop + 90 - HALF * H) / H);
+        const centerIdx = Math.round(container.scrollTop / H);
         const items = container.querySelectorAll('.tp-item');
         items.forEach(el => el.classList.remove('active'));
         const item = items[centerIdx];
