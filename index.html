@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>我的笔记</title>
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/nav.css">
+<link rel="stylesheet" href="css/calendar.css">
+<link rel="stylesheet" href="css/panel.css">
+<link rel="stylesheet" href="css/time-picker.css">
+</head>
+<body>
+<svg class="icon-sprite" aria-hidden="true">
+  <symbol id="icon-notebook" viewBox="0 0 24 24">
+    <path d="M7 3.5h9.5A2.5 2.5 0 0 1 19 6v12a2.5 2.5 0 0 1-2.5 2.5H7A2.5 2.5 0 0 1 4.5 18V6A2.5 2.5 0 0 1 7 3.5Z" fill="none" stroke="currentColor" stroke-width="1.7"/>
+    <path d="M8 3.5v17M10.5 8h5M10.5 12h4M10.5 16h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="icon-calendar" viewBox="0 0 24 24">
+    <path d="M7 3v3M17 3v3M4.5 9.5h15M7 5h10a2.5 2.5 0 0 1 2.5 2.5V18A2.5 2.5 0 0 1 17 20.5H7A2.5 2.5 0 0 1 4.5 18V7.5A2.5 2.5 0 0 1 7 5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="icon-note" viewBox="0 0 24 24">
+    <path d="M6.5 4.5h8.8L19.5 9v10A1.5 1.5 0 0 1 18 20.5H6.5A2 2 0 0 1 4.5 18.5v-12A2 2 0 0 1 6.5 4.5Z" fill="none" stroke="currentColor" stroke-width="1.7"/>
+    <path d="M15 4.8V9h4.1M8 12h7M8 16h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="icon-list" viewBox="0 0 24 24">
+    <path d="M9 7h10M9 12h10M9 17h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M5.2 7h.1M5.2 12h.1M5.2 17h.1" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="icon-clock" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+    <path d="M12 7.5v4.8l3.1 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="icon-plus" viewBox="0 0 24 24">
+    <path d="M12 5.5v13M5.5 12h13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="icon-check" viewBox="0 0 24 24">
+    <path d="m5.5 12.5 4.1 4.1 8.9-9.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="icon-trash" viewBox="0 0 24 24">
+    <path d="M8 8.5v10M12 8.5v10M16 8.5v10M5 6.5h14M9 6.5l.8-2h4.4l.8 2M7 6.5l.8 14h8.4l.8-14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="icon-chevron-left" viewBox="0 0 24 24">
+    <path d="m15 6-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="icon-chevron-right" viewBox="0 0 24 24">
+    <path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+</svg>
+
+<!-- ============ NAV ============ -->
+<header class="nav">
+  <div class="nav-row">
+    <div class="nav-title">
+      <span class="app-mark"><svg class="icon"><use href="#icon-notebook"></use></svg></span>
+      <span data-i18n="navTitle">我的笔记</span>
+    </div>
+    <div class="nav-right">
+      <div class="lang-selector">
+        <span class="lang-label">Language</span>
+        <span class="lang-opt active" data-lang="zh">中文</span>
+        <span class="lang-sep">|</span>
+        <span class="lang-opt" data-lang="en">EN</span>
+      </div>
+      <span class="nav-date" id="navDate"></span>
+      <button class="btn-today" id="btnToday" data-i18n="btnToday">今天</button>
+    </div>
+  </div>
+  <div class="nav-toggle" id="calToggle">
+    <svg class="icon icon-sm"><use href="#icon-calendar"></use></svg>
+    <span data-i18n="navToggle">日历</span>
+    <span class="arrow" id="calArrow">▾</span>
+  </div>
+</header>
+
+<!-- ============ MAIN ============ -->
+<div class="container">
+
+  <!-- 可折叠日历 -->
+  <div class="calendar-wrap" id="calendarWrap">
+    <div class="calendar-card">
+      <div class="cal-header">
+        <div class="cal-nav">
+          <button class="cal-nav-btn" id="calPrev" aria-label="上一月"><svg class="icon"><use href="#icon-chevron-left"></use></svg></button>
+          <span class="cal-month" id="calMonth"></span>
+          <button class="cal-nav-btn" id="calNext" aria-label="下一月"><svg class="icon"><use href="#icon-chevron-right"></use></svg></button>
+        </div>
+      </div>
+      <div class="cal-weekdays">
+        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+      <div class="cal-footer">
+        <span class="selected-date-label" id="selectedDateLabel">今天</span>
+      </div>
+    </div>
+    <div class="cal-note">
+      <div class="cal-note-label">
+        <svg class="icon icon-sm"><use href="#icon-note"></use></svg>
+        <span data-i18n="notesLabel">备注</span>
+      </div>
+      <textarea id="calNoteInput" data-i18n-placeholder="notesPlaceholder" placeholder="这个月的备注…"></textarea>
+    </div>
+  </div>
+
+  <!-- 规划与完成情况 -->
+  <div class="panel">
+    <div class="panel-title">
+      <svg class="icon"><use href="#icon-list"></use></svg>
+      <span data-i18n="panelTitle">规划与完成情况</span>
+      <span class="badge" id="planCount">0 项</span>
+    </div>
+    <div class="plan-list" id="planList"></div>
+    <div class="plan-add">
+      <div class="time-wrap">
+        <svg class="icon icon-sm time-icon"><use href="#icon-clock"></use></svg>
+        <div class="time-picker-trigger" id="tpTrigger">
+          <span class="tp-part" id="tpHour">09</span>
+          <span class="tp-sep"></span>
+          <span class="tp-part" id="tpMin">00</span>
+        </div>
+        <div class="tp-dropdown" id="tpDropdown">
+          <div class="tp-dropdown-inner">
+            <div class="tp-col" id="tpColHour"></div>
+            <div class="tp-col-sep"></div>
+            <div class="tp-col" id="tpColMin"></div>
+          </div>
+          <div class="tp-confirm"><button id="tpConfirm" data-i18n="tpConfirm">完成</button></div>
+        </div>
+      </div>
+      <textarea id="planInput" placeholder="添加事项…" rows="1" data-i18n-placeholder="addPlaceholder"></textarea>
+      <button class="plan-add-btn" id="addPlanBtn" aria-label="添加"><svg class="icon"><use href="#icon-plus"></use></svg></button>
+    </div>
+  </div>
+
+</div>
+
+<script src="js/helpers.js"></script>
+<script src="js/state.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/lang.js"></script>
+<script src="js/notes.js"></script>
+<script src="js/timepicker.js"></script>
+<script src="js/calendar.js"></script>
+<script src="js/plans.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

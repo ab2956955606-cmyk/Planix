@@ -1,0 +1,19 @@
+# 系统文件
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# 本地代理/工具配置
+.agents/
+.codex/
+
+# 临时文件
+*.log
+*.tmp
