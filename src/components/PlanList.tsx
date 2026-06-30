@@ -1,0 +1,76 @@
+import { Check, Clock3, Plus, Trash2 } from 'lucide-react';
+import type { Plan } from '../types';
+import { formatReadable } from '../utils/date';
+
+interface PlanListProps {
+  date: string;
+  lang: 'zh' | 'en';
+  plans: Plan[];
+  draft: string;
+  time: string;
+  onDraftChange: (value: string) => void;
+  onTimeChange: (value: string) => void;
+  onAdd: () => void;
+  onToggle: (id: string) => void;
+  onDelete: (id: string) => void;
+  onCompletionChange: (id: string, value: string) => void;
+  t: (key: string) => string;
+}
+
+export function PlanList(props: PlanListProps) {
+  const { date, lang, plans, draft, time, onDraftChange, onTimeChange, onAdd, onToggle, onDelete, onCompletionChange, t } = props;
+
+  return (
+    <section className="surface plan-panel">
+      <div className="section-head">
+        <div>
+          <span className="eyebrow">{formatReadable(date, lang)}</span>
+          <h2>{t('plans')} · {plans.length}</h2>
+        </div>
+      </div>
+      <div className="plan-list">
+        {plans.length === 0 && (
+          <div className="empty-state">
+            <strong>{t('emptyPlans')}</strong>
+            <p>{t('emptyHint')}</p>
+          </div>
+        )}
+        {plans.map((plan, index) => (
+          <article className={`plan-card ${plan.done ? 'is-done' : ''}`} key={plan.id}>
+            <button className="check-button" onClick={() => onToggle(plan.id)} aria-label={plan.done ? t('done') : t('pending')}>
+              {plan.done && <Check size={15} />}
+            </button>
+            <div className="plan-main">
+              <div className="plan-line">
+                <span className="plan-index">{String(index + 1).padStart(2, '0')}</span>
+                <span className="time-pill"><Clock3 size={14} />{plan.time}</span>
+                {plan.source === 'ai' && <span className="source-pill">AI</span>}
+              </div>
+              <p className="plan-title">{plan.title}</p>
+              <label className="completion-box">
+                <span>{t('completion')}</span>
+                <textarea value={plan.completion} onChange={(event) => onCompletionChange(plan.id, event.target.value)} placeholder={t('completion')} />
+              </label>
+            </div>
+            <button className="icon-button danger" onClick={() => onDelete(plan.id)} aria-label={t('delete')}><Trash2 size={16} /></button>
+          </article>
+        ))}
+      </div>
+      <div className="add-row">
+        <input className="time-input" type="time" value={time} onChange={(event) => onTimeChange(event.target.value)} />
+        <textarea
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+              event.preventDefault();
+              onAdd();
+            }
+          }}
+          placeholder={t('taskPlaceholder')}
+        />
+        <button className="primary-icon" onClick={onAdd} aria-label={t('addTask')}><Plus size={20} /></button>
+      </div>
+    </section>
+  );
+}

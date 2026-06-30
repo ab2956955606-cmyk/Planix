@@ -2,33 +2,30 @@
 
 ```mermaid
 flowchart LR
-  U["User"] --> F["MyNotes.html"]
-  F --> L["localStorage tasks and notes"]
-  F --> A["FastAPI /api"]
-  A --> AG["PlannerAgent"]
-  AG --> T["Agent tools"]
-  AG --> M["Preference memory"]
-  AG --> R["RAG retrieval"]
-  AG --> E["Planner evaluation"]
-  A --> DB["SQLite"]
-  R --> DB
-  M --> DB
-  E --> A
-  AG --> LLM["OpenAI-compatible LLM or mock"]
+  U["User"] --> FE["React + TypeScript + Vite"]
+  FE --> LS["localStorage plans and notes"]
+  FE --> API["FastAPI /api"]
+  API --> AG["PlannerAgent"]
+  API --> RAG["RAG Service"]
+  API --> MEM["Preference Memory"]
+  API --> EV["Planner Evaluation"]
+  AG --> TOOLS["Agent Tools"]
+  RAG --> DB["SQLite"]
+  MEM --> DB
+  API --> DB
+  AG --> MOCK["Mock / LLM adapter"]
 ```
 
-## Modules
+## Why This Architecture
 
-- Frontend: plain HTML, CSS and JavaScript, no build step.
-- Backend: FastAPI API service.
-- Agent: goal planning, review generation and tool-call style outputs.
-- RAG: lightweight chunking and keyword retrieval over pasted materials.
-- Memory: user preference storage for planning rhythm.
-- Evaluation: simple test-case scoring for planner quality.
-- Storage: browser localStorage for user tasks, SQLite for backend AI events, memory and RAG chunks.
+- React + TypeScript shows modern frontend engineering instead of only DOM scripting.
+- FastAPI separates AI workflows from the UI and makes the project easier to deploy.
+- RAG, Memory, Agent tools and Eval map directly to AI application internship keywords.
+- Mock mode keeps the demo stable without requiring a paid API key.
 
-## Demo Modes
+## Interview Talking Points
 
-- File preview: `MyNotes.html` uses Mock AI by default.
-- Backend mode: enable API calls with `my_notes_api_enabled=1`.
-- LLM mode: set `.env` values for an OpenAI-compatible provider.
+- How local-first planning data differs from backend AI event data.
+- How pasted materials become retrievable chunks.
+- How preference memory changes planning rhythm.
+- How evaluation cases can be expanded into a real quality benchmark.

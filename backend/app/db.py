@@ -7,26 +7,16 @@ def resolve_db_path() -> Path:
     database_url = os.getenv("DATABASE_URL", "")
     if database_url.startswith("sqlite:///"):
         return Path(database_url.removeprefix("sqlite:///"))
-    return Path(os.getenv("MYNOTES_DB_PATH", "data/mynotes.db"))
+    return Path("data/mynotes.db")
 
 
 DB_PATH = resolve_db_path()
 
 
-def get_conn():
+def get_conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS ai_events (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          kind TEXT NOT NULL,
-          payload TEXT NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS memories (
@@ -42,6 +32,16 @@ def get_conn():
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           title TEXT NOT NULL,
           chunk TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind TEXT NOT NULL,
+          payload TEXT NOT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -73,12 +73,12 @@ def load_memory(user_id: str = "local-user") -> str:
     return row["preferences"] if row else ""
 
 
-def save_rag_chunk(title: str, chunk: str) -> None:
+def save_chunk(title: str, chunk: str) -> None:
     with get_conn() as conn:
         conn.execute("INSERT INTO rag_chunks(title, chunk) VALUES (?, ?)", (title, chunk))
 
 
-def load_rag_chunks() -> list[dict[str, str]]:
+def list_chunks(limit: int = 200) -> list[dict[str, str]]:
     with get_conn() as conn:
-        rows = conn.execute("SELECT title, chunk FROM rag_chunks ORDER BY id DESC LIMIT 200").fetchall()
+        rows = conn.execute("SELECT title, chunk FROM rag_chunks ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return [{"title": row["title"], "chunk": row["chunk"]} for row in rows]

@@ -3,41 +3,27 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class GoalRequest(BaseModel):
+class AiPayload(BaseModel):
     goal: str = ""
     deadline: str = ""
-    daily_hours: float = 2
-    context: str = ""
+    daily_hours: float = Field(default=2, alias="dailyHours")
+    materials: str = ""
     preferences: str = ""
     date: str = ""
-    plans: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
-class ReviewRequest(BaseModel):
-    goal: str = ""
-    context: str = ""
+class MemoryPayload(BaseModel):
+    user_id: str = Field(default="local-user", alias="userId")
     preferences: str = ""
-    date: str = ""
-    plans: dict[str, Any] = Field(default_factory=dict)
 
 
-class RagRequest(BaseModel):
-    goal: str = ""
-    context: str = ""
-    date: str = ""
-    plans: dict[str, Any] = Field(default_factory=dict)
-
-
-class RagIngestRequest(BaseModel):
+class RagIngestPayload(BaseModel):
     title: str = "Untitled material"
     content: str
 
 
-class MemoryRequest(BaseModel):
-    user_id: str = "local-user"
-    preferences: str = ""
-
-
-class EvalRequest(BaseModel):
-    goal: str = "Land an AI application internship"
-    cases: list[str] = Field(default_factory=list)
+class ToolSpec(BaseModel):
+    name: str
+    description: str
+    parameters: dict[str, str]

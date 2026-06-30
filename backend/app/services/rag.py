@@ -1,46 +1,42 @@
-import re
 from collections import Counter
+from re import findall
 
-from ..db import load_rag_chunks, save_rag_chunk
-from ..schemas import RagIngestRequest, RagRequest
-
-
-def tokenize(text: str) -> list[str]:
-    return re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+from backend.app.db import list_chunks, save_chunk
+from backend.app.schemas import AiPayload, RagIngestPayload
 
 
-class RagIndex:
-    def ingest(self, req: RagIngestRequest):
-        chunks = [c.strip() for c in re.split(r"\n{2,}|[。.!?]", req.content or "") if c.strip()]
+def chunk_text(text: str, size: int = 420) -> list[str]:
+    cleaned = " ".join(text.split())
+    return [cleaned[i : i + size] for i in range(0, len(cleaned), size) if cleaned[i : i + size]]
+
+
+def tokenize(text: str) -> set[str]:
+    return set(findall(r"[\w\u4e00-\u9fff]+", text.lower()))
+
+
+class RagService:
+    def ingest(self, payload: RagIngestPayload) -> dict[str, int | str]:
+        chunks = chunk_text(payload.content)
         for chunk in chunks:
-            save_rag_chunk(req.title, chunk)
-        return {
-            "ok": True,
-            "title": req.title,
-            "chunks": len(chunks),
-        }
+            save_chunk(payload.title, chunk)
+        return {"title": payload.title, "chunks": len(chunks)}
 
-    def query(self, req: RagRequest):
-        inline_chunks = [
-            {"title": "Inline context", "chunk": c.strip()}
-            for c in re.split(r"\n{2,}|[。.!?]", req.context or "")
-            if c.strip()
-        ]
-        chunks = inline_chunks + load_rag_chunks()
-        if not chunks:
-            chunks = [{"title": "Empty material", "chunk": "No material provided. Paste a JD, course note, or resume to enable retrieval."}]
-        query_terms = Counter(tokenize(req.goal + " " + req.date))
+    def query(self, payload: AiPayload) -> dict[str, object]:
+        candidates = [{"title": "current input", "chunk": payload.materials}] if payload.materials else []
+        candidates.extend(list_chunks())
+        query_terms = tokenize(" ".join([payload.goal, payload.materials]))
         scored = []
-        for idx, item in enumerate(chunks):
-            terms = Counter(tokenize(item["chunk"]))
-            score = sum((query_terms & terms).values()) or (1 if idx == 0 else 0)
-            scored.append((score, idx, item))
-        top = sorted(scored, reverse=True)[:3]
+        for item in candidates:
+            terms = tokenize(item["chunk"])
+            score = len(query_terms & terms)
+            scored.append((score, item))
+        top = [item for score, item in sorted(scored, key=lambda row: row[0], reverse=True)[:3] if score > 0]
+        if not top and candidates:
+            top = candidates[:2]
+        keywords = Counter(" ".join(source["chunk"] for source in top).split()).most_common(5)
         return {
-            "mode": "rag-lite",
-            "answer": "Retrieved the most relevant material snippets for planning.",
-            "sources": [
-                {"title": item["title"], "quote": item["chunk"][:220]}
-                for _, _, item in top
-            ],
+            "mode": "api",
+            "answer": "建议优先把资料中的高频技能、项目产出和时间约束转化为可执行任务。",
+            "sources": [{"title": item["title"], "quote": item["chunk"][:180]} for item in top],
+            "keywords": [word for word, _ in keywords],
         }

@@ -1,69 +1,69 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .schemas import EvalRequest, GoalRequest, MemoryRequest, RagIngestRequest, RagRequest, ReviewRequest
-from .services.agent import PlannerAgent
-from .services.evaluator import PlannerEvaluator
-from .services.memory import MemoryStore
-from .services.rag import RagIndex
-from .services.tools import list_tools
+from backend.app.schemas import AiPayload, MemoryPayload, RagIngestPayload
+from backend.app.services.evaluator import PlannerEvaluator
+from backend.app.services.memory import MemoryStore
+from backend.app.services.planner import PlannerAgent
+from backend.app.services.rag import RagService
+from backend.app.services.tools import list_tools
 
-app = FastAPI(title="MyNotes AI Planner API", version="0.2.0")
+app = FastAPI(title="MyNotes AI API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 agent = PlannerAgent()
-rag = RagIndex()
+rag = RagService()
 memory = MemoryStore()
 evaluator = PlannerEvaluator()
 
 
 @app.get("/api/health")
-def health():
-    return {"ok": True, "service": "mynotes-ai"}
+def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.post("/api/agent/plan")
-async def generate_plan(req: GoalRequest):
-    return await agent.plan(req)
+def plan(payload: AiPayload) -> dict[str, object]:
+    return agent.plan(payload)
 
 
 @app.post("/api/agent/review")
-async def review_day(req: ReviewRequest):
-    return await agent.review(req)
-
-
-@app.post("/api/rag/query")
-async def query_materials(req: RagRequest):
-    return rag.query(req)
-
-
-@app.post("/api/rag/ingest")
-async def ingest_materials(req: RagIngestRequest):
-    return rag.ingest(req)
-
-
-@app.post("/api/memory/preferences")
-async def save_preferences(req: MemoryRequest):
-    return memory.save(req)
-
-
-@app.get("/api/memory/preferences")
-async def get_preferences(user_id: str = "local-user"):
-    return memory.get(user_id)
+def review(payload: AiPayload) -> dict[str, object]:
+    return agent.review(payload)
 
 
 @app.get("/api/agent/tools")
-async def agent_tools():
+def tools() -> list[dict[str, object]]:
     return list_tools()
 
 
+@app.post("/api/rag/ingest")
+def rag_ingest(payload: RagIngestPayload) -> dict[str, int | str]:
+    return rag.ingest(payload)
+
+
+@app.post("/api/rag/query")
+def rag_query(payload: AiPayload) -> dict[str, object]:
+    return rag.query(payload)
+
+
+@app.post("/api/memory/preferences")
+def save_preferences(payload: MemoryPayload) -> dict[str, str]:
+    return memory.save(payload)
+
+
+@app.get("/api/memory/preferences")
+def get_preferences(user_id: str = "local-user") -> dict[str, str]:
+    return memory.get(user_id)
+
+
 @app.post("/api/eval/planner")
-async def evaluate_planner(req: EvalRequest):
-    return evaluator.run(req)
+def eval_planner(payload: AiPayload) -> dict[str, object]:
+    return evaluator.run(payload)

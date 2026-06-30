@@ -1,45 +1,30 @@
-from ..schemas import EvalRequest
+from backend.app.schemas import AiPayload
 
 
-DEFAULT_CASES = [
-    "User has only 1 hour per day and a 30-day deadline.",
-    "User missed two tasks and needs a lighter tomorrow plan.",
-    "User uploaded a JD requiring Agent, RAG and FastAPI.",
-    "User prefers deep work in the morning and review at night.",
-    "User needs a weekly review with measurable outputs.",
+CRITERIA = [
+    "actionable",
+    "time-aware",
+    "context-grounded",
+    "adaptive",
+    "reviewable",
 ]
 
 
 class PlannerEvaluator:
-    def run(self, req: EvalRequest):
-        cases = req.cases or DEFAULT_CASES
-        results = []
-        for case in cases:
-            score = self._score_case(case)
-            results.append({
-                "case": case,
-                "score": score,
-                "reason": self._reason(score),
-            })
-        avg = round(sum(item["score"] for item in results) / len(results), 2)
+    def run(self, payload: AiPayload) -> dict[str, object]:
+        has_goal = bool(payload.goal.strip())
+        has_context = bool(payload.materials.strip())
+        has_memory = bool(payload.preferences.strip())
+        has_history = bool(payload.data)
+        score = 3.4 + (0.45 if has_goal else 0) + (0.35 if has_context else 0) + (0.25 if has_memory else 0) + (0.25 if has_history else 0)
         return {
-            "average_score": avg,
-            "criteria": ["actionable", "time-aware", "adaptive", "context-grounded", "reviewable"],
-            "results": results,
+            "mode": "api",
+            "score": round(min(score, 5), 1),
+            "criteria": CRITERIA,
+            "results": [
+                {"case": "clear long-term goal", "score": 5 if has_goal else 3, "reason": "goal is used as the planning anchor"},
+                {"case": "materials or JD available", "score": 5 if has_context else 3, "reason": "context improves retrieval-grounded planning"},
+                {"case": "preference memory available", "score": 5 if has_memory else 3, "reason": "memory personalizes schedule rhythm"},
+                {"case": "historical completion records", "score": 5 if has_history else 3, "reason": "history enables dynamic review and adjustment"},
+            ],
         }
-
-    def _score_case(self, case: str) -> int:
-        score = 3
-        lowered = case.lower()
-        if any(word in lowered for word in ["hour", "deadline", "morning", "night"]):
-            score += 1
-        if any(word in lowered for word in ["jd", "rag", "agent", "fastapi", "missed", "review"]):
-            score += 1
-        return min(score, 5)
-
-    def _reason(self, score: int) -> str:
-        if score >= 5:
-            return "Covers context, time constraints and review loop."
-        if score == 4:
-            return "Mostly useful, but needs more measurable outputs."
-        return "Needs stronger grounding and adaptation."
