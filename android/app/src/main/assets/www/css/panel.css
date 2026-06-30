@@ -1,0 +1,255 @@
+/* ============ 规划与完成情况 ============ */
+.panel {
+  background: rgba(255,255,255,0.78);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.02);
+  border: 0.5px solid rgba(255,255,255,0.7);
+  display: flex;
+  flex-direction: column;
+}
+.panel-title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1c1c1e;
+}
+.panel-title .badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #8e8e93;
+  margin-left: auto;
+}
+
+.plan-list { list-style: none; }
+
+/* 单个规划项 */
+.plan-item {
+  padding: 14px 0 10px;
+  border-bottom: 0.5px solid rgba(60,60,67,0.07);
+}
+.plan-item:last-of-type { border-bottom: none; }
+
+.plan-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+/* 序号 */
+.plan-num {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(0,122,255,0.1);
+  color: #007aff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+.plan-item.done .plan-num {
+  background: rgba(52,199,89,0.12);
+  color: #34c759;
+}
+
+/* 勾选框 */
+.plan-check {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 2px solid #c7c7cc;
+  background: none;
+  cursor: pointer;
+  transition: border-color .2s, background .2s, transform .12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+.plan-check:hover { border-color: #007aff; transform: scale(1.08); }
+.plan-check:active { transform: scale(.88); }
+.plan-check.checked { background: #34c759; border-color: #34c759; }
+.plan-check.checked svg { opacity: 1; }
+
+.plan-check svg {
+  opacity: 0; transition: opacity .15s; pointer-events: none;
+}
+
+.plan-body {
+  flex: 1;
+  min-width: 0;
+}
+.plan-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.plan-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #007aff;
+  font-variant-numeric: tabular-nums;
+}
+.plan-time svg {
+  flex-shrink: 0;
+  opacity: .6;
+  margin-right: 4px;
+}
+.plan-time .pt-sep {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  margin: 0 1px;
+  color: #007aff;
+  opacity: .45;
+  font-weight: 300;
+  font-size: 14px;
+}
+.plan-time .pt-sep::after {
+  content: ':';
+  display: inline;
+  background: none;
+  width: auto;
+  height: auto;
+}
+.plan-time .pt-part {
+  display: inline-block;
+  min-width: 18px;
+  text-align: center;
+}
+.plan-text {
+  font-size: 14px;
+  color: #1c1c1e;
+  line-height: 1.4;
+  transition: color .2s;
+}
+.plan-item.done .plan-text { color: #8e8e93; text-decoration: line-through; }
+
+.plan-delete {
+  flex-shrink: 0;
+  background: none; border: none;
+  width: 24px; height: 24px;
+  border-radius: 50%; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: #c7c7cc; font-size: 14px;
+  transition: background .2s, color .2s;
+  opacity: 0;
+}
+.plan-item:hover .plan-delete { opacity: 1; }
+.plan-delete:hover { background: rgba(255,59,48,0.1); color: #ff3b30; }
+
+/* 完成情况输入 */
+.plan-completion {
+  margin-top: 8px;
+  margin-left: 34px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.plan-completion-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #aeaeb2;
+  flex-shrink: 0;
+  line-height: 28px;
+}
+.plan-completion textarea {
+  flex: 1;
+  border: none;
+  background: rgba(118,118,128,0.06);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #1c1c1e;
+  outline: none;
+  transition: background .2s;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.4;
+  min-height: 28px;
+  max-height: 120px;
+}
+.plan-completion textarea:focus { background: rgba(0,122,255,0.06); }
+.plan-completion textarea::placeholder { color: #c7c7cc; }
+
+/* 添加区域 */
+.plan-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 0.5px solid rgba(60,60,67,0.08);
+  position: relative;
+}
+.plan-add .time-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.plan-add .time-wrap svg {
+  position: absolute;
+  left: 10px;
+  pointer-events: none;
+  opacity: .5;
+  z-index: 1;
+}
+
+.plan-add textarea {
+  flex: 1;
+  border: none;
+  background: rgba(118,118,128,0.08);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #1c1c1e;
+  outline: none;
+  transition: background .2s;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.4;
+  min-height: 36px;
+  max-height: 120px;
+}
+.plan-add textarea:focus { background: rgba(0,122,255,0.08); }
+.plan-add textarea::placeholder { color: #aeaeb2; }
+.plan-add-btn {
+  flex-shrink: 0;
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  border: none;
+  background: #007aff;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 300;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity .2s, transform .12s;
+}
+.plan-add-btn:hover { opacity: .85; }
+.plan-add-btn:active { transform: scale(.92); }
+
+.empty-state {
+  color: #aeaeb2;
+  font-size: 14px;
+  text-align: center;
+  padding: 40px 0;
+  line-height: 1.8;
+}

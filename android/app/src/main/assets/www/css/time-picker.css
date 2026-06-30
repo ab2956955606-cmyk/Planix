@@ -1,0 +1,119 @@
+/* ============ 自定义时间选择器 ============ */
+.time-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  background: rgba(118,118,128,0.08);
+  border-radius: 10px;
+  padding: 8px 10px 8px 34px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #007aff;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .2s;
+  min-width: 92px;
+  justify-content: center;
+}
+.time-picker-trigger:hover { background: rgba(0,122,255,0.08); }
+.time-picker-trigger:active { background: rgba(0,122,255,0.14); }
+.time-picker-trigger .tp-sep {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  margin: 0 1px;
+  color: #007aff;
+  opacity: .5;
+  font-weight: 300;
+  font-size: 15px;
+}
+.time-picker-trigger .tp-sep::after {
+  content: ':';
+  display: inline;
+  background: none;
+  width: auto;
+  height: auto;
+}
+.time-picker-trigger .tp-part {
+  display: inline-block;
+  min-width: 24px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.time-picker-trigger .tp-part:first-child {
+  min-width: 26px;
+}
+
+/* 下拉面板 */
+.tp-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: -10px;
+  z-index: 200;
+  background: rgba(255,255,255,0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 16px;
+  box-shadow: 0 -8px 40px rgba(0,0,0,0.12), 0 -2px 8px rgba(0,0,0,0.04);
+  border: 0.5px solid rgba(255,255,255,0.8);
+  padding: 8px 6px;
+  display: none;
+  min-width: 144px;
+}
+.tp-dropdown.open { display: block; }
+.tp-dropdown-inner {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+}
+.tp-col {
+  flex: 1;
+  height: 180px;
+  position: relative;
+}
+.tp-col::-webkit-scrollbar { display: none; }
+.tp-item {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 500;
+  color: #8e8e93;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.tp-item.active {
+  color: #007aff;
+  font-weight: 700;
+  font-size: 20px;
+}
+.tp-col-sep {
+  width: 1px;
+  background: rgba(60,60,67,0.1);
+  margin: 8px 4px;
+  flex-shrink: 0;
+}
+.tp-confirm {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 0.5px solid rgba(60,60,67,0.08);
+}
+.tp-confirm button {
+  background: #007aff;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 5px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity .2s;
+}
+.tp-confirm button:hover { opacity: .8; }
