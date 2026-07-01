@@ -35,6 +35,21 @@ flowchart LR
 
 The frontend is API-first for plans, month notes, and AI settings. When the backend is available, data is stored in SQLite through FastAPI. When the backend or AI provider is unavailable, the UI still works through localStorage and mock fallback.
 
+## Desktop Flow
+
+```mermaid
+flowchart LR
+  T["Tauri window"] --> W["apps/web/dist/MyNotes.html"]
+  W --> API["127.0.0.1:8000 /api"]
+  T --> S["mynotes-api sidecar"]
+  S --> F["FastAPI app"]
+  F --> DB["SQLite user data dir"]
+```
+
+Phase 7 prepares the Tauri v2 scaffold in `apps/desktop`, the PyInstaller entry in `scripts/pyinstaller`, and PowerShell build scripts in `scripts`. The packaged desktop app is expected to start the `mynotes-api` sidecar with `MYNOTES_ENV=desktop`, so SQLite resolves to `%APPDATA%\MyNotes AI\mynotes.db` unless `MYNOTES_DB_PATH` overrides it.
+
+Development mode still points the Tauri window to `http://127.0.0.1:5173/MyNotes.html`, so the browser demo and desktop scaffold can evolve without breaking each other.
+
 ## Planning Loop
 
 1. `POST /api/planning/goal-plan` retrieves matching knowledge-base chunks, turns a long-term goal into phases and today tasks, then stores the result in `planning_goals`.

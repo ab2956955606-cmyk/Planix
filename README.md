@@ -2,12 +2,12 @@
   <br>
   <strong>MyNotes AI</strong>
   <br>
-  <span>AI learning planner, daily review, file RAG, and local knowledge-base assistant.</span>
+  <span>AI learning planner, daily review, local RAG, and desktop-ready knowledge assistant.</span>
   <br><br>
   <img alt="React" src="https://img.shields.io/badge/React-TypeScript-0a84ff">
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-SQLite-30d158">
   <img alt="RAG" src="https://img.shields.io/badge/RAG-FTS5%20%2B%20BM25-ff9f0a">
-  <img alt="LLM" src="https://img.shields.io/badge/LLM-DeepSeek%20Compatible-6e6e73">
+  <img alt="Desktop" src="https://img.shields.io/badge/Desktop-Tauri%20Ready-6e6e73">
 </p>
 
 ![MyNotes AI Chinese Demo](assets/mynotes-demo.png)
@@ -15,15 +15,15 @@
 
 ## 中文介绍
 
-**MyNotes AI** 是一个面向学习、求职和长期目标管理的 AI 规划系统。它不只是一个日历页面，而是把“目标输入、资料沉淀、AI 规划、日程执行、日报复盘、重排预览”连成一个可演示的闭环。
+**MyNotes AI** 是一个面向学习、求职和长期目标管理的 AI 规划系统。它不是简单的日历或聊天框，而是把“目标输入、资料沉淀、AI 规划、日程执行、日报复盘、重排预览、资料问答”连成一个完整闭环。
 
-当前版本已经升级到强作品集方向：前端使用 React + TypeScript + Vite，后端使用 FastAPI，数据层使用 SQLite；AI 能力支持 DeepSeek / OpenAI-compatible 调用，同时保留 mock fallback，确保没有 API key 也能完整演示。Phase 6 已支持本地资料库、TXT/MD 文件上传、SQLite FTS5 索引、BM25 检索引用来源和六维规划质量评测，让资料问答和目标规划更接近真实 AI 应用。
+当前版本已经升级到强作品集方向：前端使用 React + TypeScript + Vite，后端使用 FastAPI，数据层使用 SQLite，AI 能力支持 DeepSeek / OpenAI-compatible 调用，并保留稳定 mock fallback，所以没有 API key 也能完整演示。项目支持粘贴资料、TXT/MD 文件上传、SQLite FTS5 全文索引、BM25 检索、引用来源展示、目标规划 grounding、六维规划质量评测，以及 Tauri + FastAPI sidecar 桌面化骨架。
 
 ## English
 
-**MyNotes AI** is an AI planning and review system for learning, job search, and long-term goal management. It connects goal planning, knowledge grounding, calendar execution, daily review, and replan preview into a portfolio-ready AI application.
+**MyNotes AI** is an AI planning and review system for learning, job search, and long-term goal management. It connects goal planning, knowledge grounding, calendar execution, daily review, replan preview, material Q&A, and local evaluation into one portfolio-ready AI application.
 
-The project uses React + TypeScript + Vite on the frontend, FastAPI on the backend, and SQLite as the local data layer. It supports DeepSeek/OpenAI-compatible LLM calls with deterministic mock fallback, so the full workflow remains demoable without an API key. The current version supports pasted materials plus TXT/MD file uploads, stores chunks in SQLite FTS5, ranks retrieval with BM25, and returns source citations for material Q&A and goal planning.
+The project uses React + TypeScript + Vite on the frontend, FastAPI on the backend, and SQLite as the local data layer. It supports DeepSeek/OpenAI-compatible LLM calls with deterministic mock fallback, so the full workflow remains demoable without an API key. It also prepares a Tauri desktop shell that can later bundle the web app and a FastAPI sidecar.
 
 ## Current Stage
 
@@ -36,7 +36,8 @@ The project uses React + TypeScript + Vite on the frontend, FastAPI on the backe
 | Phase 4 | Done | Persistent goal planning, daily reviews, replan preview, apply-to-calendar flow |
 | Phase 5 | Done | SQLite FTS5/BM25 RAG, document library, source citations |
 | Phase 6 | Done | TXT/MD upload RAG and six-dimension planner evaluation |
-| Phase 7 | Next | Desktop shell and packaging preparation |
+| Phase 7 | Done | Tauri desktop shell, FastAPI sidecar packaging entry, build scripts, desktop CI check |
+| Phase 8 | Next | PyInstaller sidecar build, Tauri installer, GitHub Release assets |
 
 ## Features
 
@@ -53,6 +54,7 @@ The project uses React + TypeScript + Vite on the frontend, FastAPI on the backe
 | Model settings | Configure provider, base URL, model, API key, temperature, and timeout |
 | Mock fallback | All AI workflows remain demoable without a paid API key |
 | Evaluation | Score planning quality across six fixed dimensions |
+| Desktop scaffold | Prepare Tauri window, sidecar backend strategy, packaging scripts, and CI checks |
 
 ## Tech Stack
 
@@ -62,13 +64,15 @@ The project uses React + TypeScript + Vite on the frontend, FastAPI on the backe
 | Backend | Python, FastAPI, Pydantic, httpx |
 | Database | SQLite, FTS5 virtual table, BM25 ranking |
 | AI workflow | Planner Agent, Planning Loop, RAG, Memory, Eval, DeepSeek/OpenAI-compatible client |
-| Quality | Pytest, Vitest, ESLint, TypeScript build |
+| Desktop | Tauri v2 scaffold, FastAPI sidecar strategy, PyInstaller spec |
+| Quality | Pytest, Vitest, ESLint, TypeScript build, GitHub Actions |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
   U["User"] --> FE["React + TypeScript UI"]
+  DESK["Tauri Desktop Shell"] --> FE
   FE --> API["FastAPI /api"]
   FE --> LS["localStorage fallback"]
   API --> PLAN["Plans + Month Notes"]
@@ -84,9 +88,14 @@ flowchart LR
   RAG --> LLM["OpenAI-compatible LLM Client"]
   LOOP --> LLM
   LLM --> PROVIDER["DeepSeek / OpenAI / Custom"]
+  DESK --> SIDE["mynotes-api sidecar"]
+  SIDE --> API
 ```
 
-More details: [docs/architecture.md](docs/architecture.md)
+More details:
+
+- [Architecture](docs/architecture.md)
+- [Desktop Packaging Notes](docs/desktop.md)
 
 ## Run Locally
 
@@ -112,6 +121,32 @@ Open:
 ```text
 http://127.0.0.1:5173/MyNotes.html
 ```
+
+## Desktop Preparation
+
+Phase 7 provides the desktop scaffold only. It does not ship a final Windows installer yet.
+
+```powershell
+.\scripts\build-web.ps1
+.\scripts\build-backend.ps1
+cd apps\desktop
+npm install
+npm run build
+```
+
+The release design is:
+
+```text
+Tauri window -> MyNotes.html -> mynotes-api sidecar -> FastAPI -> SQLite user data directory
+```
+
+Desktop environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `MYNOTES_ENV=desktop` | Makes the backend resolve SQLite data under the user data directory |
+| `MYNOTES_DB_PATH` | Optional database path override |
+| `MYNOTES_API_PORT` | Optional API port, default `8000` |
 
 ## AI Configuration
 
@@ -163,6 +198,18 @@ npm.cmd run test
 npm.cmd run build
 ```
 
+Desktop scaffold:
+
+```powershell
+.\scripts\check-desktop-config.ps1
+```
+
+Sidecar health check:
+
+```powershell
+.\scripts\wait-api-health.ps1 -Url http://127.0.0.1:8000/api/health
+```
+
 ## API
 
 | Endpoint | Purpose |
@@ -194,7 +241,7 @@ npm.cmd run build
 
 ## Resume Pitch
 
-独立开发 **MyNotes AI** 学习规划系统，基于 React + TypeScript + Vite 构建前端，使用 FastAPI + SQLite 实现本地数据层，支持日程管理、目标拆解、日报复盘、重排预览、资料库问答、文件上传、偏好记忆、模型配置和规划质量评估；实现 DeepSeek-first 的 OpenAI-compatible LLM client，并保留 mock fallback，保证无 API key 时也可完整演示；基于 SQLite FTS5/BM25 构建本地 RAG 检索能力，对粘贴资料和 TXT/MD 文件进行切片、索引、Top-K 召回和引用来源展示，并将检索结果接入目标规划流程；设计六维规则评测体系，从目标明确度、资料 grounding、时间可行性、偏好个性化、执行闭环和作品集信号评估规划质量。
+独立开发 **MyNotes AI** 学习规划系统，基于 React + TypeScript + Vite 构建前端，使用 FastAPI + SQLite 实现本地数据层，支持日程管理、目标拆解、日报复盘、重排预览、资料库问答、文件上传、偏好记忆、模型配置和规划质量评估；实现 DeepSeek-first 的 OpenAI-compatible LLM client，并保留 mock fallback，保证无 API key 时也可完整演示；基于 SQLite FTS5/BM25 构建本地 RAG 检索能力，对粘贴资料和 TXT/MD 文件进行切片、索引、Top-K 召回和引用来源展示，并将检索结果接入目标规划流程；补齐 Tauri 桌面壳、FastAPI sidecar 打包入口、构建脚本和 CI 静态检查，为后续 Windows 安装包发布做准备。
 
 ## License
 

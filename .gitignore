@@ -1,4 +1,4 @@
-# 系统文件
+# System files
 .DS_Store
 Thumbs.db
 *.swp
@@ -10,7 +10,7 @@ Thumbs.db
 .vscode/
 *.sublime-*
 
-# 临时文件
+# Temporary files
 *.log
 *.tmp
 
@@ -27,3 +27,15 @@ venv/
 __pycache__/
 *.pyc
 data/
+
+# Desktop / packaging
+build/
+apps/desktop/node_modules/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/binaries/*
+!apps/desktop/src-tauri/binaries/.gitkeep
+*.msi
+*.dmg
+*.AppImage
+*.app/

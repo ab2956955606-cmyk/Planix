@@ -1,0 +1,14 @@
+{
+  "name": "mynotes-ai-desktop",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "check": "powershell -ExecutionPolicy Bypass -File ../../scripts/check-desktop-config.ps1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

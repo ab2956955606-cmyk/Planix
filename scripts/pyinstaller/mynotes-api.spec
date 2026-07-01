@@ -1,0 +1,47 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+from pathlib import Path
+
+
+ROOT = Path.cwd()
+entry = ROOT / "scripts" / "pyinstaller" / "mynotes_api_entry.py"
+
+a = Analysis(
+    [str(entry)],
+    pathex=[str(ROOT)],
+    binaries=[],
+    datas=[],
+    hiddenimports=[
+        "backend.app.main",
+        "backend.app.routers.health",
+        "backend.app.routers.plans",
+        "backend.app.routers.month_notes",
+        "backend.app.routers.settings",
+        "backend.app.routers.agent",
+        "backend.app.routers.planning",
+        "backend.app.routers.rag",
+        "backend.app.routers.preferences",
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name="mynotes-api",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+)
