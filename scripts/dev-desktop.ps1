@@ -29,7 +29,7 @@ Start-Process -FilePath $Python -ArgumentList @(
 
 & (Join-Path $PSScriptRoot "wait-api-health.ps1") -Url "http://127.0.0.1:$env:MYNOTES_API_PORT/api/health" -TimeoutSeconds 30
 
-Write-Host "Starting Vite frontend on http://127.0.0.1:5173/MyNotes.html"
+Write-Host "Starting Vite frontend on http://127.0.0.1:5173"
 Start-Process -FilePath "npm.cmd" -ArgumentList @(
     "run",
     "dev",

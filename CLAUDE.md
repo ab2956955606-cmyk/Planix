@@ -31,7 +31,7 @@ uvicorn backend.app.main:app --reload
 Open:
 
 ```text
-http://127.0.0.1:5173/MyNotes.html
+http://127.0.0.1:5173/index.html
 ```
 
 ## Verify
@@ -50,7 +50,7 @@ npm run lint
 
 ## Development Rules
 
-- Keep the Vite entry file as `apps/web/MyNotes.html`.
+- Keep the Vite entry file as `apps/web/index.html`.
 - Keep backend routes under `/api/*`, except `/health` for simple checks.
 - Store core planning data in SQLite through FastAPI.
 - Preserve localStorage fallback for frontend-only demos.

@@ -9,6 +9,10 @@ $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
 $Python = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
 $DesktopDir = Join-Path $Root "apps\desktop"
 $Missing = New-Object System.Collections.Generic.List[string]
+$CargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+if ((Test-Path $CargoBin) -and ($env:Path -notlike "*$CargoBin*")) {
+    $env:Path = "$CargoBin;$env:Path"
+}
 
 function Test-CommandPresent {
     param(

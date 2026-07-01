@@ -41,6 +41,11 @@ try {
 
     $TauriSidecar = Join-Path $SidecarDir "mynotes-api-$TargetTriple.exe"
     Copy-Item -LiteralPath $BuiltExe -Destination $TauriSidecar -Force
+
+    if (-not (Test-Path $TauriSidecar)) {
+        throw "Missing Tauri sidecar: $TauriSidecar"
+    }
+
     Write-Host "Sidecar copied to $TauriSidecar"
 }
 finally {

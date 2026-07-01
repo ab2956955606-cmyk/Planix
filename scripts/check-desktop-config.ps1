@@ -24,7 +24,7 @@ if ($Config.identifier -ne "com.mynotes.ai") {
     throw "Unexpected bundle identifier: $($Config.identifier)"
 }
 
-if ($Config.build.devUrl -ne "http://127.0.0.1:5173/MyNotes.html") {
+if ($Config.build.devUrl -ne "http://127.0.0.1:5173") {
     throw "Unexpected devUrl: $($Config.build.devUrl)"
 }
 
@@ -34,6 +34,15 @@ if ($Config.build.frontendDist -ne "../../web/dist") {
 
 if (-not ($Config.bundle.externalBin -contains "binaries/mynotes-api")) {
     throw "Desktop bundle must declare the mynotes-api sidecar."
+}
+
+if ($Config.bundle.windows.webviewInstallMode.type -ne "embedBootstrapper") {
+    throw "Windows bundle should embed the WebView2 bootstrapper."
+}
+
+$WebEntryPath = Join-Path $Root "apps\web\index.html"
+if (-not (Test-Path $WebEntryPath)) {
+    throw "Missing frontend entry: $WebEntryPath"
 }
 
 Write-Host "Desktop scaffold configuration looks ready for Phase 8 packaging."

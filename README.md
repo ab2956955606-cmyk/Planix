@@ -120,12 +120,26 @@ npm run dev
 Open:
 
 ```text
-http://127.0.0.1:5173/MyNotes.html
+http://127.0.0.1:5173
 ```
 
 ## Desktop Preparation
 
-Phase 8 provides the Windows release pipeline. A machine with Node.js, Python, PyInstaller, Rust/Cargo, and the Tauri CLI can build the installer locally, while GitHub Actions can publish release assets from a `v*` tag.
+Phase 8 provides the Windows MSI release pipeline. Normal users only need to download the `.msi` installer, double-click it, and open `MyNotes AI` from the Windows Start menu.
+
+Normal users do not need Node.js, Python, Rust, Cargo, npm, pip, a command line, `mynotes-api.exe`, or `$env:MYNOTES_SKIP_SIDECAR="1"`. The FastAPI backend is bundled as a Tauri sidecar and starts automatically.
+
+Do not download `Source code.zip` as the installer. Download the MSI asset:
+
+```text
+release/MyNotes-AI-v1.1.1-windows-x64.msi
+```
+
+If the desktop app shows `asset not found: index.html`, the installer was built incorrectly or the frontend assets are missing. Download the latest MSI again and reinstall.
+
+AI features require the user to enter their own DeepSeek API key inside the app. Calendar, planning records, local notes, local RAG materials, and basic offline mock AI behavior remain available locally without a developer environment.
+
+For developers, a machine with Node.js, Python, PyInstaller, Rust/Cargo, and the Tauri CLI can build the installer locally, while GitHub Actions can publish release assets from a `v*` tag.
 
 ```powershell
 .\scripts\check-packaging-toolchain.ps1
@@ -139,20 +153,20 @@ npm run build
 Build the full release package:
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.1.0
+.\scripts\build-release.ps1 -Version 1.1.1
 ```
 
 The expected release assets are:
 
 ```text
-release/MyNotes-AI-v1.1.0-windows-x64.msi
-release/MyNotes-AI-v1.1.0-windows-x64.sha256
+release/MyNotes-AI-v1.1.1-windows-x64.msi
+release/MyNotes-AI-v1.1.1-windows-x64.sha256
 ```
 
 The release design is:
 
 ```text
-Tauri window -> MyNotes.html -> mynotes-api sidecar -> FastAPI -> SQLite user data directory
+Tauri window -> index.html -> mynotes-api sidecar -> FastAPI -> SQLite user data directory
 ```
 
 Desktop environment variables:
@@ -229,6 +243,12 @@ Sidecar health check:
 
 ```powershell
 .\scripts\wait-api-health.ps1 -Url http://127.0.0.1:8000/api/health
+```
+
+Installed MSI smoke test for developers:
+
+```powershell
+.\scripts\smoke-test-installed.ps1
 ```
 
 ## API

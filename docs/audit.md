@@ -34,7 +34,7 @@ Current root-level structure:
 
 ```text
 MyNotes/
-├── MyNotes.html
+├── index.html
 ├── package.json
 ├── package-lock.json
 ├── vite.config.ts
@@ -65,7 +65,7 @@ Important observation: the repository is already in a partial React + FastAPI mi
 - Vite
 - lucide-react
 - Custom CSS in `src/styles.css`
-- Entry file: `MyNotes.html`
+- Entry file: `index.html`
 
 ### Backend
 
@@ -98,7 +98,7 @@ Important observation: the repository is already in a partial React + FastAPI mi
 src/
 backend/
 docs/
-MyNotes.html
+index.html
 package.json
 requirements.txt
 ```
@@ -210,7 +210,7 @@ The current backend database does not yet support the required offline desktop d
 
 Current README is partially accurate for the current web/FastAPI prototype:
 
-- It correctly says the entry is `MyNotes.html`.
+- It correctly says the entry is `index.html`.
 - It correctly says the full React app must run through Vite.
 - It correctly lists the current AI prototype APIs.
 
@@ -329,7 +329,7 @@ Goal: move current frontend into `apps/web` without changing product behavior.
 Minimum changes:
 
 - Create `apps/web`.
-- Move `src/`, `MyNotes.html`, `package.json`, `vite.config.ts`, `tsconfig*`, `eslint.config.js` into `apps/web`.
+- Move `src/`, `index.html`, `package.json`, `vite.config.ts`, `tsconfig*`, `eslint.config.js` into `apps/web`.
 - Update scripts and README paths.
 - Add `legacy/` and preserve old project history or a snapshot note.
 - Keep calendar, plans, completion records, month notes and AI workspace working.
@@ -406,7 +406,7 @@ Recommended first change:
 1. Create `legacy/README.md` explaining the old pure frontend version and localStorage keys.
 2. Create `apps/web`.
 3. Move current web files into `apps/web`.
-4. Update Vite entry from root `MyNotes.html` to `apps/web/MyNotes.html`.
+4. Update Vite entry from root `index.html` to `apps/web/index.html`.
 5. Fix TypeScript config issue around Vite `Worker` types.
 6. Verify build/test/lint from `apps/web`.
 

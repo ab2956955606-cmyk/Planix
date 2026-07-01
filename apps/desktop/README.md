@@ -16,7 +16,7 @@ npm run dev
 The desktop dev window loads:
 
 ```text
-http://127.0.0.1:5173/MyNotes.html
+http://127.0.0.1:5173
 ```
 
 ## Release Strategy
@@ -30,12 +30,12 @@ http://127.0.0.1:5173/MyNotes.html
 
 ```powershell
 .\scripts\check-packaging-toolchain.ps1
-.\scripts\build-release.ps1 -Version 1.1.0
+.\scripts\build-release.ps1 -Version 1.1.1
 ```
 
 Outputs:
 
 ```text
-release/MyNotes-AI-v1.1.0-windows-x64.msi
-release/MyNotes-AI-v1.1.0-windows-x64.sha256
+release/MyNotes-AI-v1.1.1-windows-x64.msi
+release/MyNotes-AI-v1.1.1-windows-x64.sha256
 ```

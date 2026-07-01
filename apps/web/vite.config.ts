@@ -11,7 +11,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      input: 'MyNotes.html'
+      input: 'index.html'
     }
   }
 });

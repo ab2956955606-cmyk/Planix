@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.1.0",
+    [string]$Version = "1.1.1",
     [switch]$CreateGitHubRelease
 )
 
@@ -15,15 +15,30 @@ $InstallerPath = Join-Path $ReleaseDir $InstallerName
 $HashPath = Join-Path $ReleaseDir $HashName
 $DesktopDir = Join-Path $Root "apps\desktop"
 $TauriTargetDir = Join-Path $DesktopDir "src-tauri\target\release\bundle\msi"
+$WebIndexPath = Join-Path $Root "apps\web\dist\index.html"
+$SidecarPath = Join-Path $Root "apps\desktop\src-tauri\binaries\mynotes-api-x86_64-pc-windows-msvc.exe"
 
 New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
 
 & (Join-Path $PSScriptRoot "build-web.ps1")
+if (-not (Test-Path $WebIndexPath)) {
+    throw "Missing frontend asset after web build: $WebIndexPath"
+}
+
 & (Join-Path $PSScriptRoot "build-backend.ps1")
+if (-not (Test-Path $SidecarPath)) {
+    throw "Missing Tauri sidecar: $SidecarPath"
+}
 
 Push-Location $DesktopDir
 try {
-    if (Test-Path "package-lock.json") {
+    if (Test-Path "node_modules") {
+        npm.cmd install
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install failed for apps/desktop."
+        }
+    }
+    elseif (Test-Path "package-lock.json") {
         npm.cmd ci
         if ($LASTEXITCODE -ne 0) {
             throw "npm ci failed for apps/desktop."
@@ -37,6 +52,7 @@ try {
     }
 
     & (Join-Path $PSScriptRoot "check-packaging-toolchain.ps1")
+
     npm.cmd run build
     if ($LASTEXITCODE -ne 0) {
         throw "npm run build failed for apps/desktop."
@@ -62,7 +78,7 @@ Write-Host "Release installer: $InstallerPath"
 Write-Host "SHA256 file: $HashPath"
 
 if ($CreateGitHubRelease) {
-    $NotesPath = Join-Path $Root "docs\release-v1.1.0.md"
+    $NotesPath = Join-Path $Root "docs\release-v1.1.1.md"
     & (Join-Path $PSScriptRoot "check-packaging-toolchain.ps1") -RequireGitHubAuth
     $GhCommand = Get-Command "gh.exe" -ErrorAction SilentlyContinue
     if (-not $GhCommand) {

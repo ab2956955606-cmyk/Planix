@@ -1,12 +1,12 @@
 # MyNotes AI Desktop Packaging Notes
 
-Phase 8 turns the desktop scaffold into a Windows installer and GitHub Release pipeline.
+Phase 8 turns the desktop scaffold into a Windows installer that normal users can install and run without a developer toolchain.
 
 ## Target Shape
 
 ```mermaid
 flowchart LR
-  T["Tauri window"] --> W["apps/web/dist/MyNotes.html"]
+  T["Tauri window"] --> W["apps/web/dist/index.html"]
   W --> A["http://127.0.0.1:8000/api"]
   T --> S["mynotes-api sidecar"]
   S --> F["FastAPI backend"]
@@ -18,6 +18,20 @@ The release app should bundle:
 - The built web frontend from `apps/web/dist`
 - The backend sidecar binary named `mynotes-api`
 - A Tauri window named `MyNotes AI`
+
+## Normal User Install
+
+Normal users should download the MSI installer only:
+
+```text
+MyNotes-AI-v1.1.1-windows-x64.msi
+```
+
+They should not download `Source code.zip` as the installer, run `mynotes-api.exe` directly, or set `$env:MYNOTES_SKIP_SIDECAR="1"`. After installation, open `MyNotes AI` from the Windows Start menu.
+
+The app bundles the frontend and the FastAPI sidecar. Users do not need Node.js, Python, Rust, Cargo, npm, pip, or a command line. Basic local features work immediately. AI features require the user to enter their own DeepSeek API key inside the app.
+
+If a user sees `asset not found: index.html`, the MSI was built incorrectly or is missing frontend assets. Rebuild and reinstall the latest MSI.
 
 ## Environment Contract
 
@@ -65,7 +79,7 @@ npm run dev
 Development mode loads:
 
 ```text
-http://127.0.0.1:5173/MyNotes.html
+http://127.0.0.1:5173
 ```
 
 The web app can still run without Tauri:
@@ -111,33 +125,41 @@ Run the static desktop check:
 ## Build The Release Package
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.1.0
+.\scripts\build-release.ps1 -Version 1.1.1
 ```
 
 Expected outputs:
 
 ```text
-release/MyNotes-AI-v1.1.0-windows-x64.msi
-release/MyNotes-AI-v1.1.0-windows-x64.sha256
+release/MyNotes-AI-v1.1.1-windows-x64.msi
+release/MyNotes-AI-v1.1.1-windows-x64.sha256
 ```
 
 Publish locally with the official GitHub CLI after the build succeeds:
 
 ```powershell
 gh.exe auth status
-.\scripts\build-release.ps1 -Version 1.1.0 -CreateGitHubRelease
+.\scripts\build-release.ps1 -Version 1.1.1 -CreateGitHubRelease
 ```
 
 The project also includes `.github/workflows/desktop-release.yml`. Pushing a `v*` tag or manually running the workflow builds the Windows installer and uploads the MSI plus SHA256 checksum to GitHub Release.
 
 ## Manual Acceptance
 
-- Install `MyNotes-AI-v1.1.0-windows-x64.msi`.
+- Install `MyNotes-AI-v1.1.1-windows-x64.msi`.
 - Open `MyNotes AI`.
 - Confirm the web UI loads.
 - Confirm the FastAPI sidecar responds on `/api/health`.
 - Try calendar, goal planning, RAG query, TXT/MD material flow, and planner evaluation.
 - Close the app and confirm the `mynotes-api` sidecar process exits.
+
+Run the installed-app smoke test:
+
+```powershell
+.\scripts\smoke-test-installed.ps1
+```
+
+The smoke test starts the installed app and checks `http://127.0.0.1:8000/api/health`. If it fails, check `%APPDATA%\MyNotes AI\logs\desktop.log`.
 
 ## Common Failures
 
@@ -148,6 +170,8 @@ The project also includes `.github/workflows/desktop-release.yml`. Pushing a `v*
 | `tauri` missing | Run `cd apps\desktop; npm.cmd install` |
 | `gh.ps1` blocked | Use official `gh.exe`, or publish through GitHub Actions |
 | MSI missing | Check `apps/desktop/src-tauri/target/release/bundle/msi` and rerun `npm.cmd run build` |
+| `asset not found: index.html` | Rebuild with `.\scripts\build-release.ps1 -Version 1.1.1`; `apps/web/dist/index.html` must exist |
+| App opens but API is unavailable | Check port `8000`, sidecar file, and `%APPDATA%\MyNotes AI\logs\desktop.log` |
 
 ## Phase 9 Checklist
 

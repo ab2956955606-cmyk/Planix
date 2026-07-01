@@ -14,7 +14,7 @@ The project is being rebuilt in stages:
 
 ## Current Entry Points
 
-- Frontend entry: `apps/web/MyNotes.html`
+- Frontend entry: `apps/web/index.html`
 - Frontend app: `apps/web/src/App.tsx`
 - Backend app: `backend/app/main.py`
 - API routers: `backend/app/routers`
