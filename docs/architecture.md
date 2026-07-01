@@ -45,11 +45,16 @@ The frontend is API-first for plans, month notes, and AI settings. When the back
 ## RAG Flow
 
 1. `POST /api/rag/documents` saves pasted material metadata into `documents`.
-2. The backend splits the content into overlapping chunks and stores them in `document_chunks`.
-3. Each chunk is mirrored into `document_chunks_fts`, a SQLite FTS5 virtual table.
-4. `POST /api/rag/query` builds an FTS query, ranks matches with `bm25(document_chunks_fts)`, and returns stable source objects.
-5. Source objects include `documentId`, `title`, `chunk`, `score`, and `chunkIndex`.
-6. The legacy `POST /api/rag/ingest` endpoint remains available and writes through the new document path.
+2. `POST /api/rag/documents/upload` accepts `.txt/.md` multipart uploads and turns them into the same document records.
+3. The backend splits content into overlapping chunks and stores them in `document_chunks`.
+4. Each chunk is mirrored into `document_chunks_fts`, a SQLite FTS5 virtual table.
+5. `POST /api/rag/query` builds an FTS query, ranks matches with `bm25(document_chunks_fts)`, and returns stable source objects.
+6. Source objects include `documentId`, `title`, `chunk`, `score`, and `chunkIndex`.
+7. The legacy `POST /api/rag/ingest` endpoint remains available and writes through the new document path.
+
+## Evaluation Flow
+
+`POST /api/eval/planner` is deterministic and does not call an LLM. It scores planning quality across six dimensions: goal clarity, material grounding, time feasibility, preference personalization, execution loop, and portfolio signal. This keeps the feature testable without API keys while still producing resume-friendly evaluation evidence.
 
 ## LLM Flow
 
@@ -101,7 +106,7 @@ backend/app/
 | `ai_settings` | Provider, model, key state, temperature, and timeout |
 | `user_preferences` | Preference memory |
 | `documents` | Pasted material metadata, source type, summary, content hash |
-| `document_chunks` | Retrieval chunks with chunk index and token count |
+| `document_chunks` | Retrieval chunks from pasted materials or TXT/MD uploads |
 | `document_chunks_fts` | SQLite FTS5 virtual table used for BM25 retrieval |
 | `ai_runs` | AI call logs, mock fallback records, and error records |
 

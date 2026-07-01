@@ -11,7 +11,8 @@ import {
   Save,
   Settings,
   Sparkles,
-  Trash2
+  Trash2,
+  UploadCloud
 } from 'lucide-react';
 import type {
   AiSettings,
@@ -37,7 +38,8 @@ import {
   fetchRagDocuments,
   saveAiSettings,
   saveMemory,
-  testAiSettings
+  testAiSettings,
+  uploadRagDocument
 } from '../lib/api';
 
 interface AIWorkspaceProps {
@@ -72,6 +74,8 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   const [materials, setMaterials] = useState('');
   const [docTitle, setDocTitle] = useState('');
   const [docContent, setDocContent] = useState('');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
   const [documents, setDocuments] = useState<RagDocument[]>([]);
   const [documentStatus, setDocumentStatus] = useState('');
   const [goalPlan, setGoalPlan] = useState<GoalPlanResponse | null>(null);
@@ -120,6 +124,24 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       setDocumentStatus(t('materialSaved'));
     } catch {
       setDocumentStatus(t('materialSaveError'));
+    } finally {
+      setLoading('');
+    }
+  }
+
+  async function uploadMaterial() {
+    if (!uploadFile) return;
+    setLoading('upload-material');
+    setDocumentStatus('');
+    try {
+      const saved = await uploadRagDocument(uploadFile, docTitle.trim() || undefined);
+      setDocuments((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setUploadFile(null);
+      setDocTitle('');
+      setFileInputKey((current) => current + 1);
+      setDocumentStatus(t('materialUploaded'));
+    } catch {
+      setDocumentStatus(t('materialUploadError'));
     } finally {
       setLoading('');
     }
@@ -236,14 +258,28 @@ export function AIWorkspace(props: AIWorkspaceProps) {
             <span>{t('materialLibrary')}</span>
             <strong>{t('materialLibraryHint')}</strong>
           </div>
-          <button onClick={saveMaterial} disabled={loading === 'material' || !docContent.trim()}>
-            <Library size={16} />{t('saveMaterial')}
-          </button>
+          <div className="workflow-buttons">
+            <button onClick={saveMaterial} disabled={loading === 'material' || !docContent.trim()}>
+              <Library size={16} />{t('saveMaterial')}
+            </button>
+            <button onClick={uploadMaterial} disabled={loading === 'upload-material' || !uploadFile}>
+              <UploadCloud size={16} />{t('uploadMaterial')}
+            </button>
+          </div>
         </div>
         <div className="ai-grid material-grid">
           <label>
             <span>{t('materialTitle')}</span>
             <input value={docTitle} onChange={(event) => setDocTitle(event.target.value)} placeholder={t('materialTitlePlaceholder')} />
+          </label>
+          <label>
+            <span>{t('materialFile')}</span>
+            <input
+              key={fileInputKey}
+              type="file"
+              accept=".txt,.md,text/plain,text/markdown"
+              onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+            />
           </label>
           <label className="wide">
             <span>{t('materialContent')}</span>

@@ -100,6 +100,7 @@ export interface PlannerResponse {
   score?: number;
   provider?: string;
   model?: string;
+  criteria?: string[];
   results?: Array<{ case: string; score: number; reason: string }>;
 }
 

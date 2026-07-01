@@ -2,7 +2,7 @@
   <br>
   <strong>MyNotes AI</strong>
   <br>
-  <span>AI learning planner, daily review, and local knowledge-base assistant.</span>
+  <span>AI learning planner, daily review, file RAG, and local knowledge-base assistant.</span>
   <br><br>
   <img alt="React" src="https://img.shields.io/badge/React-TypeScript-0a84ff">
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-SQLite-30d158">
@@ -17,13 +17,13 @@
 
 **MyNotes AI** 是一个面向学习、求职和长期目标管理的 AI 规划系统。它不只是一个日历页面，而是把“目标输入、资料沉淀、AI 规划、日程执行、日报复盘、重排预览”连成一个可演示的闭环。
 
-当前版本已经升级到强作品集方向：前端使用 React + TypeScript + Vite，后端使用 FastAPI，数据层使用 SQLite；AI 能力支持 DeepSeek / OpenAI-compatible 调用，同时保留 mock fallback，确保没有 API key 也能完整演示。Phase 5 新增本地资料库：用户可以粘贴 JD、课程笔记、面经或项目资料，系统会自动切片并写入 SQLite FTS5 索引，通过 BM25 检索返回引用来源，让资料问答和目标规划更接近真实 RAG 应用。
+当前版本已经升级到强作品集方向：前端使用 React + TypeScript + Vite，后端使用 FastAPI，数据层使用 SQLite；AI 能力支持 DeepSeek / OpenAI-compatible 调用，同时保留 mock fallback，确保没有 API key 也能完整演示。Phase 6 已支持本地资料库、TXT/MD 文件上传、SQLite FTS5 索引、BM25 检索引用来源和六维规划质量评测，让资料问答和目标规划更接近真实 AI 应用。
 
 ## English
 
 **MyNotes AI** is an AI planning and review system for learning, job search, and long-term goal management. It connects goal planning, knowledge grounding, calendar execution, daily review, and replan preview into a portfolio-ready AI application.
 
-The project uses React + TypeScript + Vite on the frontend, FastAPI on the backend, and SQLite as the local data layer. It supports DeepSeek/OpenAI-compatible LLM calls with deterministic mock fallback, so the full workflow remains demoable without an API key. Phase 5 adds a local knowledge base powered by SQLite FTS5/BM25, returning source citations for material Q&A and goal planning.
+The project uses React + TypeScript + Vite on the frontend, FastAPI on the backend, and SQLite as the local data layer. It supports DeepSeek/OpenAI-compatible LLM calls with deterministic mock fallback, so the full workflow remains demoable without an API key. The current version supports pasted materials plus TXT/MD file uploads, stores chunks in SQLite FTS5, ranks retrieval with BM25, and returns source citations for material Q&A and goal planning.
 
 ## Current Stage
 
@@ -35,7 +35,8 @@ The project uses React + TypeScript + Vite on the frontend, FastAPI on the backe
 | Phase 3 | Done | AI settings, DeepSeek-first OpenAI-compatible client, model test endpoint |
 | Phase 4 | Done | Persistent goal planning, daily reviews, replan preview, apply-to-calendar flow |
 | Phase 5 | Done | SQLite FTS5/BM25 RAG, document library, source citations |
-| Phase 6 | Next | File upload, stronger evaluation set, desktop packaging roadmap |
+| Phase 6 | Done | TXT/MD upload RAG and six-dimension planner evaluation |
+| Phase 7 | Next | Desktop shell and packaging preparation |
 
 ## Features
 
@@ -45,12 +46,13 @@ The project uses React + TypeScript + Vite on the frontend, FastAPI on the backe
 | Daily review loop | Generate persisted daily reviews and preview tomorrow's replanning |
 | Replan apply | AI suggestions never mutate data until the user confirms |
 | Knowledge base | Save pasted JD, notes, interview materials, or project context |
+| File RAG upload | Upload `.txt` and `.md` materials into the same FTS5 knowledge base |
 | FTS5/BM25 RAG | Chunk local materials, search with SQLite FTS5, rank with BM25 |
 | Source citations | Return document title, chunk, score, and chunk index for every answer |
 | Goal grounding | Goal planning can retrieve relevant knowledge-base chunks before generation |
 | Model settings | Configure provider, base URL, model, API key, temperature, and timeout |
 | Mock fallback | All AI workflows remain demoable without a paid API key |
-| Evaluation | Score planning quality with simple test cases and criteria |
+| Evaluation | Score planning quality across six fixed dimensions |
 
 ## Tech Stack
 
@@ -136,8 +138,8 @@ DATABASE_URL=sqlite:///./data/mynotes.db
 
 ## RAG Workflow
 
-1. Paste a JD, course note, interview note, or project brief into the knowledge base.
-2. `POST /api/rag/documents` saves metadata into `documents` and chunks into `document_chunks`.
+1. Paste a JD, course note, interview note, or project brief into the knowledge base, or upload a `.txt/.md` file.
+2. `POST /api/rag/documents` and `POST /api/rag/documents/upload` save metadata into `documents` and chunks into `document_chunks`.
 3. Each chunk is inserted into `document_chunks_fts`.
 4. `POST /api/rag/query` searches with FTS5, ranks with `bm25()`, and returns `answer`, `sources`, and `keywords`.
 5. `POST /api/planning/goal-plan` also retrieves matching sources and shows them as planning references.
@@ -180,6 +182,7 @@ npm.cmd run build
 | `GET /api/planning/daily-review?date=YYYY-MM-DD` | Read a saved daily review |
 | `POST /api/planning/replan/apply` | Apply preview tasks to the calendar |
 | `POST /api/rag/documents` | Save pasted material and build FTS chunks |
+| `POST /api/rag/documents/upload` | Upload a TXT/MD file and build FTS chunks |
 | `GET /api/rag/documents` | List knowledge-base documents |
 | `DELETE /api/rag/documents/{id}` | Delete a document and its chunks |
 | `POST /api/rag/ingest` | Legacy ingest endpoint, still supported |
@@ -187,11 +190,11 @@ npm.cmd run build
 | `POST /api/agent/plan` | Generate staged planning output |
 | `POST /api/agent/review` | Generate daily review suggestions |
 | `POST /api/memory/preferences` | Save preferences |
-| `POST /api/eval/planner` | Evaluate planner quality |
+| `POST /api/eval/planner` | Evaluate planner quality across six dimensions |
 
 ## Resume Pitch
 
-独立开发 **MyNotes AI** 学习规划系统，基于 React + TypeScript + Vite 构建前端，使用 FastAPI + SQLite 实现本地数据层，支持日程管理、目标拆解、日报复盘、重排预览、资料库问答、偏好记忆、模型配置和规划质量评估；实现 DeepSeek-first 的 OpenAI-compatible LLM client，并保留 mock fallback，保证无 API key 时也可完整演示；基于 SQLite FTS5/BM25 构建本地 RAG 检索能力，对粘贴资料进行切片、索引、Top-K 召回和引用来源展示，并将检索结果接入目标规划流程。
+独立开发 **MyNotes AI** 学习规划系统，基于 React + TypeScript + Vite 构建前端，使用 FastAPI + SQLite 实现本地数据层，支持日程管理、目标拆解、日报复盘、重排预览、资料库问答、文件上传、偏好记忆、模型配置和规划质量评估；实现 DeepSeek-first 的 OpenAI-compatible LLM client，并保留 mock fallback，保证无 API key 时也可完整演示；基于 SQLite FTS5/BM25 构建本地 RAG 检索能力，对粘贴资料和 TXT/MD 文件进行切片、索引、Top-K 召回和引用来源展示，并将检索结果接入目标规划流程；设计六维规则评测体系，从目标明确度、资料 grounding、时间可行性、偏好个性化、执行闭环和作品集信号评估规划质量。
 
 ## License
 

@@ -430,6 +430,12 @@ h1 {
   gap: 3px;
 }
 
+.workflow-head .workflow-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .workflow-head span {
   color: #1d1d1f;
   font-size: 15px;
@@ -655,6 +661,10 @@ h1 {
   .workflow-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .workflow-head .workflow-buttons {
+    justify-content: flex-start;
   }
 
   .plan-panel {

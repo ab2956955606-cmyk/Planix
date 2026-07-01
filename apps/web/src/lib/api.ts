@@ -53,10 +53,11 @@ export type PlanPatch = Partial<Pick<Plan, 'time' | 'title' | 'done' | 'completi
 async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 1800): Promise<T> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const isFormData = init.body instanceof FormData;
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       ...init,
-      headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+      headers: isFormData ? init.headers : { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
       signal: controller.signal
     });
     if (!res.ok) throw new Error(`API ${res.status}`);
@@ -162,6 +163,14 @@ export async function fetchRagDocuments(): Promise<RagDocument[]> {
 
 export async function createRagDocument(payload: RagDocumentInput): Promise<RagDocument> {
   return post<RagDocument>('/api/rag/documents', payload, 45000);
+}
+
+export async function uploadRagDocument(file: File, title?: string): Promise<RagDocument> {
+  const form = new FormData();
+  form.append('file', file);
+  if (title?.trim()) form.append('title', title.trim());
+  form.append('sourceType', 'upload');
+  return request<RagDocument>('/api/rag/documents/upload', { method: 'POST', body: form }, 45000);
 }
 
 export async function deleteRagDocument(id: string): Promise<void> {
