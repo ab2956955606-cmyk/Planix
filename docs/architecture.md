@@ -9,6 +9,7 @@ flowchart LR
   API --> ROUTERS["Routers"]
   ROUTERS --> PLANS["Plans"]
   ROUTERS --> NOTES["Month Notes"]
+  ROUTERS --> LOOP["Planning Loop"]
   ROUTERS --> SETTINGS["AI Settings"]
   ROUTERS --> AGENT["Planner Agent"]
   ROUTERS --> RAG["RAG Prototype"]
@@ -17,6 +18,7 @@ flowchart LR
 
   PLANS --> DB["SQLite"]
   NOTES --> DB
+  LOOP --> DB
   SETTINGS --> DB
   AGENT --> LLM["OpenAI-compatible LLM Client"]
   RAG --> LLM
@@ -30,6 +32,13 @@ flowchart LR
 ## Data Flow
 
 The frontend is API-first for plans, month notes, and AI settings. When the backend is available, data is stored in SQLite through FastAPI. When the backend or AI provider is unavailable, the UI still works through localStorage and mock fallback.
+
+## Planning Loop
+
+1. `POST /api/planning/goal-plan` turns a long-term goal into phases and today tasks, then stores the result in `planning_goals`.
+2. The frontend can apply generated tasks into the current day's `plans`.
+3. `POST /api/planning/daily-review` reads today's task state, stores a review in `daily_reviews`, and returns a replan preview for the next day.
+4. Replan previews never modify calendar data until `POST /api/planning/replan/apply` is called.
 
 ## LLM Flow
 
@@ -52,6 +61,7 @@ backend/app/
     health.py
     plans.py
     month_notes.py
+    planning.py
     settings.py
     agent.py
     rag.py
@@ -59,6 +69,7 @@ backend/app/
   services/
     ai_settings.py
     llm.py
+    planning.py
     plans.py
     month_notes.py
     planner.py
@@ -74,7 +85,8 @@ backend/app/
 | --- | --- |
 | `plans` | Daily task records |
 | `month_notes` | Monthly notes |
-| `daily_reviews` | AI review output planned for later phases |
+| `planning_goals` | Saved long-term goal plans, phases, and generated tasks |
+| `daily_reviews` | Daily review records, suggestions, and replan previews |
 | `ai_settings` | Provider, model, key state, temperature, and timeout |
 | `user_preferences` | Preference memory |
 | `documents` | Uploaded or pasted material metadata |
@@ -87,4 +99,5 @@ backend/app/
 - AI provider settings are persisted locally but API keys are not returned to the browser after save.
 - The LLM client is OpenAI-compatible, so DeepSeek, OpenAI, or a custom compatible endpoint can be swapped.
 - Planner and RAG services read the latest model settings on each request.
+- The planning loop separates AI preview from data mutation, so users confirm replan tasks before they touch the calendar.
 - Mock fallback keeps the project demoable without paid credentials.

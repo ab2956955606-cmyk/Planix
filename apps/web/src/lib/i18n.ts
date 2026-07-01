@@ -56,7 +56,20 @@ const dict: Record<Lang, Dict> = {
     testModel: '测试模型',
     settingsSaved: '模型设置已保存',
     settingsMock: '当前是 mock 模式，不需要 API key',
-    settingsError: '模型测试失败，请检查 key、模型名和 Base URL'
+    settingsError: '模型测试失败，请检查 key、模型名和 Base URL',
+    goalPlanning: '目标规划',
+    goalPlanningHint: '把长期目标拆成阶段计划和今日任务',
+    generateGoalPlan: '生成目标规划',
+    todayTasks: '今日任务',
+    dailyReview: '今日复盘',
+    dailyReviewHint: '根据完成情况生成日报和明日重排预览',
+    runDailyReview: '生成复盘',
+    reviewEmpty: '完成或更新今天的任务后，可以生成日报和重排预览。',
+    replanPreview: '重排预览',
+    applyReplan: '应用重排',
+    noReplanTasks: '暂无重排任务',
+    replanApplied: '重排任务已写入日程',
+    completionRatio: '完成比例'
   },
   en: {
     appName: 'MyNotes AI',
@@ -111,7 +124,20 @@ const dict: Record<Lang, Dict> = {
     testModel: 'Test model',
     settingsSaved: 'Model settings saved',
     settingsMock: 'Mock mode is active and does not need an API key',
-    settingsError: 'Model test failed. Check key, model, and Base URL'
+    settingsError: 'Model test failed. Check key, model, and Base URL',
+    goalPlanning: 'Goal planning',
+    goalPlanningHint: 'Turn a long-term goal into phases and today tasks',
+    generateGoalPlan: 'Generate goal plan',
+    todayTasks: 'Today tasks',
+    dailyReview: 'Daily review',
+    dailyReviewHint: 'Create a review and a preview of tomorrow replanning',
+    runDailyReview: 'Generate review',
+    reviewEmpty: 'Complete or update today tasks, then generate a review and replan preview.',
+    replanPreview: 'Replan preview',
+    applyReplan: 'Apply replan',
+    noReplanTasks: 'No replan tasks',
+    replanApplied: 'Replan tasks added to calendar',
+    completionRatio: 'Completion'
   }
 };
 

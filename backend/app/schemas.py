@@ -133,3 +133,70 @@ class AiSettingsTestOut(BaseModel):
     message: str
     provider: str
     model: str
+
+
+class PhaseItem(BaseModel):
+    title: str
+    detail: str
+
+
+class PlannerTask(BaseModel):
+    time: str = "09:00"
+    title: str
+    reason: str = ""
+
+
+class ReplanTask(PlannerTask):
+    target_date: str = Field(alias="targetDate")
+    source_plan_id: str | None = Field(default=None, alias="sourcePlanId")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class GoalPlanRequest(BaseModel):
+    goal: str
+    deadline: str = ""
+    daily_hours: float = Field(default=2, alias="dailyHours")
+    materials: str = ""
+    preferences: str = ""
+    date: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class GoalPlanOut(BaseModel):
+    id: str
+    mode: Literal["mock", "llm"]
+    summary: str
+    phases: list[PhaseItem]
+    tasks: list[PlannerTask]
+    provider: str | None = None
+    model: str | None = None
+
+
+class DailyReviewRequest(BaseModel):
+    date: str
+    goal: str = ""
+    preferences: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class DailyReviewOut(BaseModel):
+    id: str
+    mode: Literal["mock", "llm", "saved"]
+    date: str
+    summary: str
+    suggestions: list[str]
+    done_count: int = Field(alias="doneCount")
+    total_count: int = Field(alias="totalCount")
+    target_date: str = Field(alias="targetDate")
+    replan_tasks: list[ReplanTask] = Field(alias="replanTasks")
+    provider: str | None = None
+    model: str | None = None
+    updated_at: str = Field(default="", alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ReplanApplyRequest(BaseModel):
+    tasks: list[ReplanTask]

@@ -1,12 +1,25 @@
 import { useEffect, useState } from 'react';
-import { Bot, ClipboardCheck, DatabaseZap, FileSearch, KeyRound, PlugZap, Save, Settings, Sparkles } from 'lucide-react';
-import type { AiSettings, AppData, PlannerResponse, PlannerTask } from '../types';
 import {
+  Bot,
+  ClipboardCheck,
+  DatabaseZap,
+  FileSearch,
+  KeyRound,
+  PlugZap,
+  RotateCcw,
+  Save,
+  Settings,
+  Sparkles
+} from 'lucide-react';
+import type { AiSettings, AppliedPlan, AppData, DailyReviewResponse, GoalPlanResponse, PlannerResponse, PlannerTask } from '../types';
+import {
+  applyReplanTasks,
   askMaterials,
+  createDailyReview,
+  createGoalPlan,
   evaluatePlanner,
   fetchAiSettings,
-  generatePlan,
-  reviewToday,
+  fetchDailyReview,
   saveAiSettings,
   saveMemory,
   testAiSettings
@@ -18,6 +31,7 @@ interface AIWorkspaceProps {
   preferences: string;
   onPreferencesChange: (value: string) => void;
   onApplyTasks: (tasks: PlannerTask[]) => void;
+  onReplanApplied: (plans: AppliedPlan[]) => void;
   t: (key: string) => string;
 }
 
@@ -32,7 +46,7 @@ const defaultSettings: AiSettings = {
 };
 
 export function AIWorkspace(props: AIWorkspaceProps) {
-  const { data, date, preferences, onPreferencesChange, onApplyTasks, t } = props;
+  const { data, date, preferences, onPreferencesChange, onApplyTasks, onReplanApplied, t } = props;
   const [goal, setGoal] = useState('3 个月内拿到北京 AI 应用开发实习');
   const [deadline, setDeadline] = useState(() => {
     const d = new Date();
@@ -41,14 +55,16 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   });
   const [dailyHours, setDailyHours] = useState(3);
   const [materials, setMaterials] = useState('');
-  const [result, setResult] = useState<PlannerResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [goalPlan, setGoalPlan] = useState<GoalPlanResponse | null>(null);
+  const [dailyReview, setDailyReview] = useState<DailyReviewResponse | null>(null);
+  const [utilityResult, setUtilityResult] = useState<PlannerResponse | null>(null);
+  const [loading, setLoading] = useState('');
   const [settings, setSettings] = useState<AiSettings>(defaultSettings);
   const [apiKey, setApiKey] = useState('');
   const [settingsStatus, setSettingsStatus] = useState('');
+  const [reviewStatus, setReviewStatus] = useState('');
 
   const payload = { goal, deadline, dailyHours, materials, preferences, date, data };
-  const aiTasks = result?.tasks ?? [];
 
   useEffect(() => {
     fetchAiSettings()
@@ -56,19 +72,55 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       .catch(() => undefined);
   }, []);
 
-  async function run(action: 'plan' | 'review' | 'rag' | 'eval' | 'memory') {
-    setLoading(true);
+  useEffect(() => {
+    fetchDailyReview(date)
+      .then(setDailyReview)
+      .catch(() => setDailyReview(null));
+  }, [date]);
+
+  async function runGoalPlan() {
+    setLoading('goal');
+    setUtilityResult(null);
     try {
-      if (action === 'plan') setResult(await generatePlan(payload));
-      if (action === 'review') setResult(await reviewToday(payload));
-      if (action === 'rag') setResult(await askMaterials(payload));
-      if (action === 'eval') setResult(await evaluatePlanner(payload));
+      setGoalPlan(await createGoalPlan({ goal, deadline, dailyHours, materials, preferences, date }));
+    } finally {
+      setLoading('');
+    }
+  }
+
+  async function runDailyReview() {
+    setLoading('review');
+    setReviewStatus('');
+    try {
+      setDailyReview(await createDailyReview({ goal, preferences, date, data }));
+    } finally {
+      setLoading('');
+    }
+  }
+
+  async function applyReviewReplan() {
+    if (!dailyReview?.replanTasks.length) return;
+    setLoading('apply-replan');
+    try {
+      const applied = await applyReplanTasks({ tasks: dailyReview.replanTasks });
+      onReplanApplied(applied);
+      setReviewStatus(t('replanApplied'));
+    } finally {
+      setLoading('');
+    }
+  }
+
+  async function runUtility(action: 'rag' | 'eval' | 'memory') {
+    setLoading(action);
+    try {
+      if (action === 'rag') setUtilityResult(await askMaterials(payload));
+      if (action === 'eval') setUtilityResult(await evaluatePlanner(payload));
       if (action === 'memory') {
         await saveMemory(preferences);
-        setResult({ summary: t('saved') });
+        setUtilityResult({ summary: t('saved') });
       }
     } finally {
-      setLoading(false);
+      setLoading('');
     }
   }
 
@@ -99,7 +151,8 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     }
   }
 
-  const modeLabel = result?.mode === 'mock' ? t('mockMode') : result?.mode === 'llm' ? t('llmMode') : t('apiMode');
+  const mode = goalPlan?.mode ?? dailyReview?.mode ?? utilityResult?.mode;
+  const modeLabel = mode === 'mock' ? t('mockMode') : mode === 'llm' ? t('llmMode') : t('apiMode');
 
   return (
     <section className="surface ai-panel">
@@ -110,119 +163,179 @@ export function AIWorkspace(props: AIWorkspaceProps) {
         </div>
       </div>
 
-      <div className="model-settings">
-        <div className="settings-title">
-          <span><Settings size={15} />{t('aiSettings')}</span>
-          <strong>{settings.hasApiKey ? t('hasKey') : t('noKey')}</strong>
+      <ModelSettings
+        settings={settings}
+        apiKey={apiKey}
+        settingsStatus={settingsStatus}
+        setSettings={setSettings}
+        setApiKey={setApiKey}
+        saveModelSettings={saveModelSettings}
+        testModel={testModel}
+        t={t}
+      />
+
+      <div className="workflow-card">
+        <div className="workflow-head">
+          <div>
+            <span>{t('goalPlanning')}</span>
+            <strong>{t('goalPlanningHint')}</strong>
+          </div>
+          <button onClick={runGoalPlan} disabled={loading === 'goal'}><Sparkles size={16} />{t('generateGoalPlan')}</button>
         </div>
-        <div className="settings-grid">
+        <div className="ai-grid">
           <label>
-            <span>{t('provider')}</span>
-            <select
-              value={settings.provider}
-              onChange={(event) => setSettings((current) => ({ ...current, provider: event.target.value as AiSettings['provider'] }))}
-            >
-              <option value="deepseek">DeepSeek</option>
-              <option value="openai">OpenAI</option>
-              <option value="custom">Custom</option>
-              <option value="mock">Mock</option>
-            </select>
+            <span>{t('goal')}</span>
+            <input value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} />
           </label>
           <label>
-            <span>{t('baseUrl')}</span>
-            <input value={settings.baseUrl} onChange={(event) => setSettings((current) => ({ ...current, baseUrl: event.target.value }))} />
+            <span>{t('deadline')}</span>
+            <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
           </label>
           <label>
-            <span>{t('model')}</span>
-            <input value={settings.model} onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))} />
+            <span>{t('dailyHours')}</span>
+            <input type="number" min={1} max={12} value={dailyHours} onChange={(event) => setDailyHours(Number(event.target.value))} />
           </label>
-          <label>
-            <span><KeyRound size={13} />{t('apiKey')}</span>
-            <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={t('apiKeyPlaceholder')} />
+          <label className="wide">
+            <span>{t('preference')}</span>
+            <input value={preferences} onChange={(event) => onPreferencesChange(event.target.value)} placeholder={t('preferencePlaceholder')} />
           </label>
-          <label>
-            <span>{t('temperature')}</span>
-            <input
-              type="number"
-              min={0}
-              max={2}
-              step={0.1}
-              value={settings.temperature}
-              onChange={(event) => setSettings((current) => ({ ...current, temperature: Number(event.target.value) }))}
-            />
-          </label>
-          <label>
-            <span>{t('timeout')}</span>
-            <input
-              type="number"
-              min={5}
-              max={120}
-              value={settings.timeoutSeconds}
-              onChange={(event) => setSettings((current) => ({ ...current, timeoutSeconds: Number(event.target.value) }))}
-            />
+          <label className="wide">
+            <span>{t('materials')}</span>
+            <textarea value={materials} onChange={(event) => setMaterials(event.target.value)} placeholder={t('materialsPlaceholder')} />
           </label>
         </div>
-        <div className="settings-actions">
-          <button onClick={saveModelSettings}><Save size={16} />{t('saveSettings')}</button>
-          <button onClick={testModel}><PlugZap size={16} />{t('testModel')}</button>
-          {settingsStatus && <span>{settingsStatus}</span>}
-        </div>
+        {loading === 'goal' && <div className="empty-state">{t('loading')}</div>}
+        {goalPlan && <GoalPlanView plan={goalPlan} t={t} />}
+        <button className="apply-button" onClick={() => onApplyTasks(goalPlan?.tasks ?? [])} disabled={!goalPlan?.tasks.length}>
+          {goalPlan?.tasks.length ? t('applyTasks') : t('noAiTasks')}
+        </button>
       </div>
 
-      <div className="ai-grid">
-        <label>
-          <span>{t('goal')}</span>
-          <input value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} />
-        </label>
-        <label>
-          <span>{t('deadline')}</span>
-          <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
-        </label>
-        <label>
-          <span>{t('dailyHours')}</span>
-          <input type="number" min={1} max={12} value={dailyHours} onChange={(event) => setDailyHours(Number(event.target.value))} />
-        </label>
-        <label className="wide">
-          <span>{t('preference')}</span>
-          <input value={preferences} onChange={(event) => onPreferencesChange(event.target.value)} placeholder={t('preferencePlaceholder')} />
-        </label>
-        <label className="wide">
-          <span>{t('materials')}</span>
-          <textarea value={materials} onChange={(event) => setMaterials(event.target.value)} placeholder={t('materialsPlaceholder')} />
-        </label>
+      <div className="workflow-card">
+        <div className="workflow-head">
+          <div>
+            <span>{t('dailyReview')}</span>
+            <strong>{t('dailyReviewHint')}</strong>
+          </div>
+          <button onClick={runDailyReview} disabled={loading === 'review'}><ClipboardCheck size={16} />{t('runDailyReview')}</button>
+        </div>
+        {loading === 'review' && <div className="empty-state">{t('loading')}</div>}
+        {!dailyReview && loading !== 'review' && <div className="empty-state">{t('reviewEmpty')}</div>}
+        {dailyReview && <DailyReviewView review={dailyReview} t={t} />}
+        <button className="apply-button" onClick={applyReviewReplan} disabled={!dailyReview?.replanTasks.length || loading === 'apply-replan'}>
+          {dailyReview?.replanTasks.length ? t('applyReplan') : t('noReplanTasks')}
+        </button>
+        {reviewStatus && <p className="inline-status">{reviewStatus}</p>}
       </div>
+
       <div className="command-row">
-        <button onClick={() => run('plan')}><Sparkles size={16} />{t('generate')}</button>
-        <button onClick={() => run('review')}><ClipboardCheck size={16} />{t('review')}</button>
-        <button onClick={() => run('rag')}><FileSearch size={16} />{t('rag')}</button>
-        <button onClick={() => run('memory')}><Save size={16} />{t('saveMemory')}</button>
-        <button onClick={() => run('eval')}><DatabaseZap size={16} />{t('evaluate')}</button>
+        <button onClick={() => runUtility('rag')}><FileSearch size={16} />{t('rag')}</button>
+        <button onClick={() => runUtility('memory')}><Save size={16} />{t('saveMemory')}</button>
+        <button onClick={() => runUtility('eval')}><DatabaseZap size={16} />{t('evaluate')}</button>
       </div>
-      <div className="ai-output">
-        {loading && <div className="empty-state">{t('loading')}</div>}
-        {!loading && !result && <div className="empty-state">{t('backendTip')}</div>}
-        {!loading && result && <ResultView result={result} t={t} />}
-      </div>
-      <button className="apply-button" onClick={() => onApplyTasks(aiTasks)} disabled={!aiTasks.length}>
-        {aiTasks.length ? t('applyTasks') : t('noAiTasks')}
-      </button>
+      {utilityResult && <ResultView result={utilityResult} t={t} />}
     </section>
+  );
+}
+
+function ModelSettings(props: {
+  settings: AiSettings;
+  apiKey: string;
+  settingsStatus: string;
+  setSettings: (updater: (settings: AiSettings) => AiSettings) => void;
+  setApiKey: (value: string) => void;
+  saveModelSettings: () => void;
+  testModel: () => void;
+  t: (key: string) => string;
+}) {
+  const { settings, apiKey, settingsStatus, setSettings, setApiKey, saveModelSettings, testModel, t } = props;
+  return (
+    <div className="model-settings">
+      <div className="settings-title">
+        <span><Settings size={15} />{t('aiSettings')}</span>
+        <strong>{settings.hasApiKey ? t('hasKey') : t('noKey')}</strong>
+      </div>
+      <div className="settings-grid">
+        <label>
+          <span>{t('provider')}</span>
+          <select value={settings.provider} onChange={(event) => setSettings((current) => ({ ...current, provider: event.target.value as AiSettings['provider'] }))}>
+            <option value="deepseek">DeepSeek</option>
+            <option value="openai">OpenAI</option>
+            <option value="custom">Custom</option>
+            <option value="mock">Mock</option>
+          </select>
+        </label>
+        <label>
+          <span>{t('baseUrl')}</span>
+          <input value={settings.baseUrl} onChange={(event) => setSettings((current) => ({ ...current, baseUrl: event.target.value }))} />
+        </label>
+        <label>
+          <span>{t('model')}</span>
+          <input value={settings.model} onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))} />
+        </label>
+        <label>
+          <span><KeyRound size={13} />{t('apiKey')}</span>
+          <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={t('apiKeyPlaceholder')} />
+        </label>
+        <label>
+          <span>{t('temperature')}</span>
+          <input type="number" min={0} max={2} step={0.1} value={settings.temperature} onChange={(event) => setSettings((current) => ({ ...current, temperature: Number(event.target.value) }))} />
+        </label>
+        <label>
+          <span>{t('timeout')}</span>
+          <input type="number" min={5} max={120} value={settings.timeoutSeconds} onChange={(event) => setSettings((current) => ({ ...current, timeoutSeconds: Number(event.target.value) }))} />
+        </label>
+      </div>
+      <div className="settings-actions">
+        <button onClick={saveModelSettings}><Save size={16} />{t('saveSettings')}</button>
+        <button onClick={testModel}><PlugZap size={16} />{t('testModel')}</button>
+        {settingsStatus && <span>{settingsStatus}</span>}
+      </div>
+    </div>
+  );
+}
+
+function GoalPlanView({ plan, t }: { plan: GoalPlanResponse; t: (key: string) => string }) {
+  return (
+    <div className="result-view">
+      <h3>{plan.summary}</h3>
+      {plan.provider && <p><strong>{plan.provider}</strong> / {plan.model}</p>}
+      {plan.phases.map((phase) => <p key={phase.title}><strong>{phase.title}</strong>: {phase.detail}</p>)}
+      <h3>{t('todayTasks')}</h3>
+      {plan.tasks.map((task) => <TaskPreview key={`${task.time}-${task.title}`} time={task.time} title={task.title} reason={task.reason} />)}
+    </div>
+  );
+}
+
+function DailyReviewView({ review, t }: { review: DailyReviewResponse; t: (key: string) => string }) {
+  return (
+    <div className="result-view">
+      <h3>{review.summary}</h3>
+      <p>{t('completionRatio')}: {review.doneCount}/{review.totalCount}</p>
+      <ul>{review.suggestions.map((item) => <li key={item}>{item}</li>)}</ul>
+      <h3><RotateCcw size={15} /> {t('replanPreview')} / {review.targetDate}</h3>
+      {review.replanTasks.map((task) => (
+        <TaskPreview key={`${task.targetDate}-${task.time}-${task.title}`} time={task.time} title={task.title} reason={task.reason} />
+      ))}
+    </div>
+  );
+}
+
+function TaskPreview({ time, title, reason }: PlannerTask) {
+  return (
+    <div className="ai-task">
+      <time>{time}</time>
+      <div><strong>{title}</strong><p>{reason}</p></div>
+    </div>
   );
 }
 
 function ResultView({ result, t }: { result: PlannerResponse; t: (key: string) => string }) {
   const heading = result.score ? `${t('score')}: ${result.score}/5` : result.summary ?? result.answer ?? t('aiWorkspace');
   return (
-    <div className="result-view">
+    <div className="result-view utility-result">
       <h3>{heading}</h3>
       {result.provider && <p><strong>{result.provider}</strong> / {result.model}</p>}
-      {result.phases?.map((phase) => <p key={phase.title}><strong>{phase.title}</strong>: {phase.detail}</p>)}
-      {result.tasks?.map((task) => (
-        <div className="ai-task" key={`${task.time}-${task.title}`}>
-          <time>{task.time}</time>
-          <div><strong>{task.title}</strong><p>{task.reason}</p></div>
-        </div>
-      ))}
       {result.suggestions && <ul>{result.suggestions.map((item) => <li key={item}>{item}</li>)}</ul>}
       {result.answer && result.answer !== heading && <p>{result.answer}</p>}
       {result.sources && <ul>{result.sources.map((item) => <li key={item.title}><strong>{item.title}</strong>: {item.quote}</li>)}</ul>}

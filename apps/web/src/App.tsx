@@ -13,7 +13,7 @@ import {
 } from './lib/api';
 import { useText } from './lib/i18n';
 import { ensureDay, loadData, loadLang, loadMonthNote, loadPreferences, saveData, saveLang, saveMonthNote, savePreferences } from './lib/storage';
-import type { AppData, Lang, Plan, PlannerTask } from './types';
+import type { AppData, AppliedPlan, Lang, Plan, PlannerTask } from './types';
 import { monthKey, todayISO } from './utils/date';
 
 function createId(): string {
@@ -132,6 +132,28 @@ export function App() {
     persistCreatedPlans(date, plans);
   }
 
+  function applyRemotePlans(plans: AppliedPlan[]) {
+    const grouped = plans.reduce<Record<string, Plan[]>>((acc, plan) => {
+      const { date, ...rest } = plan;
+      acc[date] = [...(acc[date] ?? []), rest];
+      return acc;
+    }, {});
+    setData((current) => {
+      let next = current;
+      for (const [date, datePlans] of Object.entries(grouped)) {
+        const existing = ensureDay(next, date).plans;
+        const existingIds = new Set(existing.map((plan) => plan.id));
+        next = {
+          ...next,
+          [date]: {
+            plans: [...existing, ...datePlans.filter((plan) => !existingIds.has(plan.id))]
+          }
+        };
+      }
+      return next;
+    });
+  }
+
   function selectToday() {
     const today = todayISO();
     setSelectedDate(today);
@@ -166,6 +188,7 @@ export function App() {
             preferences={preferences}
             onPreferencesChange={setPreferences}
             onApplyTasks={applyAiTasks}
+            onReplanApplied={applyRemotePlans}
             t={t}
           />
         </div>

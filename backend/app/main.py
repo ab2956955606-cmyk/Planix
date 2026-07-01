@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import agent, health, month_notes, plans, preferences, rag, settings
+from .routers import agent, health, month_notes, planning, plans, preferences, rag, settings
 
 
 def create_app() -> FastAPI:
@@ -18,6 +18,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(plans.router)
     app.include_router(month_notes.router)
+    app.include_router(planning.router)
     app.include_router(agent.router)
     app.include_router(rag.router)
     app.include_router(preferences.router)

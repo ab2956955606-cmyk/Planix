@@ -52,6 +52,25 @@ def init_db(conn: sqlite3.Connection) -> None:
           date TEXT NOT NULL UNIQUE,
           summary TEXT NOT NULL,
           suggestions TEXT NOT NULL DEFAULT '[]',
+          done_count INTEGER NOT NULL DEFAULT 0,
+          total_count INTEGER NOT NULL DEFAULT 0,
+          suggestions_json TEXT NOT NULL DEFAULT '[]',
+          replan_tasks_json TEXT NOT NULL DEFAULT '[]',
+          target_date TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS planning_goals (
+          id TEXT PRIMARY KEY,
+          goal TEXT NOT NULL,
+          deadline TEXT NOT NULL DEFAULT '',
+          daily_hours REAL NOT NULL DEFAULT 2,
+          materials TEXT NOT NULL DEFAULT '',
+          preferences TEXT NOT NULL DEFAULT '',
+          summary TEXT NOT NULL DEFAULT '',
+          phases_json TEXT NOT NULL DEFAULT '[]',
+          tasks_json TEXT NOT NULL DEFAULT '[]',
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -109,6 +128,11 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     ensure_column(conn, "ai_settings", "temperature", "REAL NOT NULL DEFAULT 0.3")
     ensure_column(conn, "ai_settings", "timeout_seconds", "INTEGER NOT NULL DEFAULT 40")
+    ensure_column(conn, "daily_reviews", "done_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "daily_reviews", "total_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "daily_reviews", "suggestions_json", "TEXT NOT NULL DEFAULT '[]'")
+    ensure_column(conn, "daily_reviews", "replan_tasks_json", "TEXT NOT NULL DEFAULT '[]'")
+    ensure_column(conn, "daily_reviews", "target_date", "TEXT NOT NULL DEFAULT ''")
 
 
 def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

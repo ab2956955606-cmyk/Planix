@@ -408,6 +408,40 @@ h1 {
   border: 1px solid rgba(60, 60, 67, 0.08);
 }
 
+.workflow-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(60, 60, 67, 0.08);
+}
+
+.workflow-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workflow-head div {
+  display: grid;
+  gap: 3px;
+}
+
+.workflow-head span {
+  color: #1d1d1f;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.workflow-head strong {
+  color: #6e6e73;
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .settings-title {
   display: flex;
   justify-content: space-between;
@@ -451,7 +485,11 @@ h1 {
   flex-wrap: wrap;
 }
 
-.settings-actions button {
+.settings-actions button,
+.workflow-head button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   min-height: 34px;
   padding: 0 11px;
   border-radius: 11px;
@@ -459,9 +497,19 @@ h1 {
   color: #fff;
 }
 
+.workflow-head button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .settings-actions span {
   color: #6e6e73;
   font-size: 12px;
+}
+
+.inline-status {
+  color: #248a3d;
+  font-size: 13px;
 }
 
 .command-row {
@@ -506,8 +554,18 @@ h1 {
 }
 
 .result-view h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: #1d1d1f;
   font-size: 16px;
+}
+
+.utility-result {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(118, 118, 128, 0.08);
 }
 
 .ai-task {
@@ -535,6 +593,11 @@ h1 {
   .ai-grid,
   .settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .workflow-head {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .plan-panel {

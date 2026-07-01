@@ -9,6 +9,10 @@ export interface Plan {
   source?: 'manual' | 'ai';
 }
 
+export interface AppliedPlan extends Plan {
+  date: string;
+}
+
 export interface DayRecord {
   plans: Plan[];
 }
@@ -21,10 +25,49 @@ export interface PlannerTask {
   reason: string;
 }
 
+export interface PhaseItem {
+  title: string;
+  detail: string;
+}
+
+export interface ReplanTask extends PlannerTask {
+  targetDate: string;
+  sourcePlanId?: string;
+}
+
+export interface GoalPlanResponse {
+  id: string;
+  mode: 'mock' | 'llm';
+  summary: string;
+  phases: PhaseItem[];
+  tasks: PlannerTask[];
+  provider?: string;
+  model?: string;
+}
+
+export interface DailyReviewResponse {
+  id: string;
+  mode: 'mock' | 'llm' | 'saved';
+  date: string;
+  summary: string;
+  suggestions: string[];
+  doneCount: number;
+  totalCount: number;
+  targetDate: string;
+  replanTasks: ReplanTask[];
+  provider?: string;
+  model?: string;
+  updatedAt?: string;
+}
+
+export interface ReplanApplyPayload {
+  tasks: ReplanTask[];
+}
+
 export interface PlannerResponse {
   mode?: 'api' | 'mock' | 'llm';
   summary?: string;
-  phases?: Array<{ title: string; detail: string }>;
+  phases?: PhaseItem[];
   tasks?: PlannerTask[];
   suggestions?: string[];
   answer?: string;

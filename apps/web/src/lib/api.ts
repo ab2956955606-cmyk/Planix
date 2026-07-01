@@ -1,4 +1,16 @@
-import type { AiSettings, AiSettingsInput, AiSettingsTestResult, AppData, Plan, PlannerResponse, PlannerTask } from '../types';
+import type {
+  AiSettings,
+  AiSettingsInput,
+  AiSettingsTestResult,
+  AppData,
+  AppliedPlan,
+  DailyReviewResponse,
+  GoalPlanResponse,
+  Plan,
+  PlannerResponse,
+  PlannerTask,
+  ReplanApplyPayload
+} from '../types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
@@ -65,6 +77,10 @@ function fromBackendPlan(plan: BackendPlan): Plan {
     completion: plan.result ?? '',
     source: plan.source
   };
+}
+
+function fromAppliedBackendPlan(plan: BackendPlan): AppliedPlan {
+  return { ...fromBackendPlan(plan), date: plan.date };
 }
 
 function toBackendPlan(date: string, plan: Plan) {
@@ -135,6 +151,24 @@ export async function saveAiSettings(payload: AiSettingsInput): Promise<AiSettin
 
 export async function testAiSettings(prompt = 'Say OK in one short sentence.'): Promise<AiSettingsTestResult> {
   return post<AiSettingsTestResult>('/api/ai/test', { prompt }, 45000);
+}
+
+export async function createGoalPlan(payload: Omit<AiPayload, 'data'>): Promise<GoalPlanResponse> {
+  return post<GoalPlanResponse>('/api/planning/goal-plan', payload, 45000);
+}
+
+export async function createDailyReview(payload: Pick<AiPayload, 'date' | 'goal' | 'preferences' | 'data'>): Promise<DailyReviewResponse> {
+  return post<DailyReviewResponse>('/api/planning/daily-review', payload, 45000);
+}
+
+export async function fetchDailyReview(date: string): Promise<DailyReviewResponse> {
+  const params = new URLSearchParams({ date });
+  return request<DailyReviewResponse>(`/api/planning/daily-review?${params.toString()}`);
+}
+
+export async function applyReplanTasks(payload: ReplanApplyPayload): Promise<AppliedPlan[]> {
+  const plans = await post<BackendPlan[]>('/api/planning/replan/apply', payload, 45000);
+  return plans.map(fromAppliedBackendPlan);
 }
 
 function fallbackTasks(payload: AiPayload): PlannerTask[] {
