@@ -141,7 +141,7 @@ class MonthNoteOut(MonthNotePut):
 class AiSettingsUpdate(BaseModel):
     provider: AiProvider = "deepseek"
     base_url: str = Field(default="https://api.deepseek.com", alias="baseUrl")
-    model: str = "deepseek-chat"
+    model: str = "deepseek-v4-flash"
     api_key: str | None = Field(default=None, alias="apiKey")
     temperature: float = Field(default=0.3, ge=0, le=2)
     timeout_seconds: int = Field(default=40, alias="timeoutSeconds", ge=5, le=120)

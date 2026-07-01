@@ -56,7 +56,7 @@ interface AIWorkspaceProps {
 const defaultSettings: AiSettings = {
   provider: 'deepseek',
   baseUrl: 'https://api.deepseek.com',
-  model: 'deepseek-chat',
+  model: 'deepseek-v4-flash',
   hasApiKey: false,
   temperature: 0.3,
   timeoutSeconds: 40,
@@ -433,7 +433,11 @@ function ModelSettings(props: {
         </label>
         <label>
           <span>{t('model')}</span>
-          <input value={settings.model} onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))} />
+          <select value={settings.model} onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}>
+            <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+            <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+          </select>
         </label>
         <label>
           <span><KeyRound size={13} />{t('apiKey')}</span>

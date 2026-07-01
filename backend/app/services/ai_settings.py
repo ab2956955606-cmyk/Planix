@@ -33,7 +33,7 @@ def _env_base_url() -> str:
 
 
 def _env_model() -> str:
-    return os.getenv("AI_MODEL", "deepseek-chat").strip() or "deepseek-chat"
+    return os.getenv("AI_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
 
 
 def _env_api_key() -> str:
@@ -110,7 +110,7 @@ def save_ai_settings(payload: AiSettingsUpdate) -> AiSettingsOut:
                 SETTINGS_ID,
                 payload.provider,
                 payload.base_url.strip().rstrip("/") or "https://api.deepseek.com",
-                payload.model.strip() or "deepseek-chat",
+                payload.model.strip() or "deepseek-v4-flash",
                 api_key,
                 payload.temperature,
                 payload.timeout_seconds,
