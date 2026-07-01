@@ -20,6 +20,7 @@ from ..schemas import (
 from .llm import LlmClient
 from .planner import _json_object
 from .plans import create_plan, list_plans
+from .rag import RagService
 
 
 def _parse_date(value: str) -> date_type:
@@ -73,7 +74,7 @@ def _normalize_planner_tasks(items: object) -> list[PlannerTask]:
             PlannerTask(
                 time=str(item.get("time") or "09:00")[:5],
                 title=title,
-                reason=str(item.get("reason") or "支持当前目标的可执行任务。"),
+                reason=str(item.get("reason") or "支撑当前目标的可执行任务。"),
             )
         )
     return tasks
@@ -100,7 +101,7 @@ def _normalize_replan_tasks(items: object, target_date: str) -> list[ReplanTask]
                 targetDate=str(item.get("targetDate") or item.get("target_date") or target_date),
                 time=str(item.get("time") or "09:00")[:5],
                 title=title,
-                reason=str(item.get("reason") or "根据未完成任务自动重排。"),
+                reason=str(item.get("reason") or "根据未完成任务生成的重排建议。"),
                 sourcePlanId=item.get("sourcePlanId") or item.get("source_plan_id"),
             )
         )
@@ -112,15 +113,21 @@ def _plan_to_dict(plan: PlanOut) -> dict[str, object]:
 
 
 class PlanningService:
+    def __init__(self):
+        self.rag = RagService()
+
     def create_goal_plan(self, payload: GoalPlanRequest) -> GoalPlanOut:
         _parse_date(payload.date)
         preferences = payload.preferences or load_memory()
+        sources = self.rag.retrieve(" ".join([payload.goal, payload.materials]), limit=4)
+        retrieved_sources = [source.model_dump(by_alias=True) for source in sources]
         llm_result = LlmClient().complete(
             "planning_goal_plan",
             (
                 "You are an AI planning agent. Return strict JSON only with keys "
                 "summary, phases and tasks. phases is [{title, detail}], "
-                "tasks is [{time, title, reason}] for the given date."
+                "tasks is [{time, title, reason}] for the given date. "
+                "Use retrievedSources when available and make the plan grounded in those materials."
             ),
             _dump(
                 {
@@ -128,6 +135,7 @@ class PlanningService:
                     "deadline": payload.deadline,
                     "dailyHours": payload.daily_hours,
                     "materials": payload.materials[:3000],
+                    "retrievedSources": retrieved_sources,
                     "preferences": preferences,
                     "date": payload.date,
                 }
@@ -146,10 +154,10 @@ class PlanningService:
             phases = _normalize_phase_items(parsed.get("phases"))
             tasks = _normalize_planner_tasks(parsed.get("tasks"))
         else:
-            summary, phases, tasks = self._mock_goal_plan(payload)
+            summary, phases, tasks = self._mock_goal_plan(payload, len(sources))
 
         if not phases or not tasks:
-            fallback_summary, fallback_phases, fallback_tasks = self._mock_goal_plan(payload)
+            fallback_summary, fallback_phases, fallback_tasks = self._mock_goal_plan(payload, len(sources))
             summary = summary or fallback_summary
             phases = phases or fallback_phases
             tasks = tasks or fallback_tasks
@@ -177,7 +185,16 @@ class PlanningService:
                 ),
             )
 
-        return GoalPlanOut(id=plan_id, mode=mode, summary=summary, phases=phases, tasks=tasks, provider=provider, model=model)
+        return GoalPlanOut(
+            id=plan_id,
+            mode=mode,
+            summary=summary,
+            phases=phases,
+            tasks=tasks,
+            sources=sources,
+            provider=provider,
+            model=model,
+        )
 
     def create_daily_review(self, payload: DailyReviewRequest) -> DailyReviewOut:
         review_date = _parse_date(payload.date).isoformat()
@@ -311,10 +328,11 @@ class PlanningService:
             updatedAt=row["updated_at"],
         )
 
-    def _mock_goal_plan(self, payload: GoalPlanRequest) -> tuple[str, list[PhaseItem], list[PlannerTask]]:
-        goal = payload.goal or "AI 应用开发实习"
+    def _mock_goal_plan(self, payload: GoalPlanRequest, source_count: int = 0) -> tuple[str, list[PhaseItem], list[PlannerTask]]:
+        goal = payload.goal or "北京 AI 应用开发实习"
+        source_note = f"已参考资料库命中的 {source_count} 条片段，" if source_count else ""
         return (
-            f"已围绕“{goal}”生成阶段计划，每天投入 {payload.daily_hours:g} 小时。",
+            f"{source_note}围绕“{goal}”生成阶段计划，每天投入 {payload.daily_hours:g} 小时。",
             [
                 PhaseItem(title="阶段 1：岗位能力对齐", detail="拆解目标岗位 JD 高频技能，建立学习清单和刷题节奏。"),
                 PhaseItem(title="阶段 2：AI 应用项目冲刺", detail="完成规划闭环、RAG、评测和部署能力，沉淀可展示证据。"),
@@ -323,7 +341,7 @@ class PlanningService:
             [
                 PlannerTask(time="09:00", title="阅读目标岗位 JD 并提取 5 个关键词", reason="让当天任务和真实岗位要求对齐。"),
                 PlannerTask(time="14:30", title="实现或优化一个 AI 应用功能", reason="每天保留可展示的工程产出。"),
-                PlannerTask(time="20:30", title="记录完成情况并生成明日调整", reason="形成计划、执行、复盘、重排闭环。"),
+                PlannerTask(time="20:30", title="记录完成情况并生成明日调整", reason="形成计划、执行、复盘、重排的闭环。"),
             ],
         )
 

@@ -35,12 +35,36 @@ export interface ReplanTask extends PlannerTask {
   sourcePlanId?: string;
 }
 
+export interface RagSource {
+  documentId: string;
+  title: string;
+  chunk: string;
+  score: number;
+  chunkIndex: number;
+}
+
+export interface RagDocument {
+  id: string;
+  title: string;
+  sourceType: string;
+  summary: string;
+  chunks: number;
+  createdAt: string;
+}
+
+export interface RagDocumentInput {
+  title: string;
+  content: string;
+  sourceType?: string;
+}
+
 export interface GoalPlanResponse {
   id: string;
   mode: 'mock' | 'llm';
   summary: string;
   phases: PhaseItem[];
   tasks: PlannerTask[];
+  sources?: RagSource[];
   provider?: string;
   model?: string;
 }
@@ -71,7 +95,7 @@ export interface PlannerResponse {
   tasks?: PlannerTask[];
   suggestions?: string[];
   answer?: string;
-  sources?: Array<{ title: string; quote: string }>;
+  sources?: RagSource[];
   keywords?: string[];
   score?: number;
   provider?: string;

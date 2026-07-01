@@ -96,6 +96,8 @@ def init_db(conn: sqlite3.Connection) -> None:
           id TEXT PRIMARY KEY,
           title TEXT NOT NULL,
           source TEXT NOT NULL DEFAULT 'manual',
+          source_type TEXT NOT NULL DEFAULT 'paste',
+          summary TEXT NOT NULL DEFAULT '',
           content_hash TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -112,6 +114,15 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_document_chunks_document_id
           ON document_chunks(document_id);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts
+          USING fts5(
+            chunk_id UNINDEXED,
+            document_id UNINDEXED,
+            title,
+            content,
+            tokenize = 'unicode61'
+          );
 
         CREATE TABLE IF NOT EXISTS ai_runs (
           id TEXT PRIMARY KEY,
@@ -133,6 +144,19 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "daily_reviews", "suggestions_json", "TEXT NOT NULL DEFAULT '[]'")
     ensure_column(conn, "daily_reviews", "replan_tasks_json", "TEXT NOT NULL DEFAULT '[]'")
     ensure_column(conn, "daily_reviews", "target_date", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "documents", "source_type", "TEXT NOT NULL DEFAULT 'paste'")
+    ensure_column(conn, "documents", "summary", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        INSERT INTO document_chunks_fts(chunk_id, document_id, title, content)
+        SELECT c.id, c.document_id, d.title, c.content
+        FROM document_chunks c
+        JOIN documents d ON d.id = c.document_id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM document_chunks_fts f WHERE f.chunk_id = c.id
+        )
+        """
+    )
 
 
 def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -195,7 +219,14 @@ def save_chunk(title: str, chunk: str) -> None:
             INSERT INTO document_chunks(id, document_id, chunk_index, content, token_count)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (str(uuid4()), document_id, chunk_index, chunk, len(chunk.split())),
+            (chunk_id := str(uuid4()), document_id, chunk_index, chunk, len(chunk.split())),
+        )
+        conn.execute(
+            """
+            INSERT INTO document_chunks_fts(chunk_id, document_id, title, content)
+            VALUES (?, ?, ?, ?)
+            """,
+            (chunk_id, document_id, title, chunk),
         )
 
 

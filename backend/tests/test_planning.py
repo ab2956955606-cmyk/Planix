@@ -19,6 +19,32 @@ def test_goal_plan_returns_and_persists_mock_result(client):
     assert len(body["tasks"]) >= 1
 
 
+def test_goal_plan_returns_rag_sources_when_documents_match(client):
+    document = client.post(
+        "/api/rag/documents",
+        json={
+            "title": "AI internship JD",
+            "content": "AI application internships value RAG, FastAPI, React, Agent tools, and evaluation.",
+        },
+    ).json()
+
+    response = client.post(
+        "/api/planning/goal-plan",
+        json={
+            "goal": "Build a strong AI application internship portfolio",
+            "deadline": "2026-09-30",
+            "dailyHours": 3,
+            "materials": "RAG FastAPI Agent evaluation",
+            "preferences": "Deep work in the morning",
+            "date": "2026-07-01",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sources"]
+    assert body["sources"][0]["documentId"] == document["id"]
+
+
 def test_daily_review_creates_replan_preview_without_writing_plans(client):
     created = client.post(
         "/api/plans",

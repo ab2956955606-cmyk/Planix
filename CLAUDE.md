@@ -8,8 +8,8 @@ Current stack:
 
 - React + TypeScript + Vite frontend in `apps/web`
 - FastAPI backend in `backend/app`
-- SQLite primary data layer
-- DeepSeek-first OpenAI-compatible LLM client with mock fallback
+- SQLite primary data layer with FTS5/BM25 local RAG
+- DeepSeek-first OpenAI-compatible LLM client with mock fallback and source citations
 
 ## Run
 

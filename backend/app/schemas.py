@@ -32,6 +32,44 @@ class RagIngestPayload(BaseModel):
     content: str
 
 
+class RagDocumentCreate(BaseModel):
+    title: str = "Untitled material"
+    content: str
+    source_type: str = Field(default="paste", alias="sourceType")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class RagDocumentOut(BaseModel):
+    id: str
+    title: str
+    source_type: str = Field(alias="sourceType")
+    summary: str
+    chunks: int
+    created_at: str = Field(alias="createdAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class RagSource(BaseModel):
+    document_id: str = Field(alias="documentId")
+    title: str
+    chunk: str
+    score: float
+    chunk_index: int = Field(alias="chunkIndex")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class RagQueryOut(BaseModel):
+    mode: Literal["mock", "llm"]
+    answer: str
+    sources: list[RagSource]
+    keywords: list[str]
+    provider: str | None = None
+    model: str | None = None
+
+
 class ToolSpec(BaseModel):
     name: str
     description: str
@@ -170,6 +208,7 @@ class GoalPlanOut(BaseModel):
     summary: str
     phases: list[PhaseItem]
     tasks: list[PlannerTask]
+    sources: list[RagSource] = Field(default_factory=list)
     provider: str | None = None
     model: str | None = None
 

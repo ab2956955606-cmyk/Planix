@@ -5,21 +5,36 @@ import {
   DatabaseZap,
   FileSearch,
   KeyRound,
+  Library,
   PlugZap,
   RotateCcw,
   Save,
   Settings,
-  Sparkles
+  Sparkles,
+  Trash2
 } from 'lucide-react';
-import type { AiSettings, AppliedPlan, AppData, DailyReviewResponse, GoalPlanResponse, PlannerResponse, PlannerTask } from '../types';
+import type {
+  AiSettings,
+  AppliedPlan,
+  AppData,
+  DailyReviewResponse,
+  GoalPlanResponse,
+  PlannerResponse,
+  PlannerTask,
+  RagDocument,
+  RagSource
+} from '../types';
 import {
   applyReplanTasks,
   askMaterials,
   createDailyReview,
   createGoalPlan,
+  createRagDocument,
+  deleteRagDocument,
   evaluatePlanner,
   fetchAiSettings,
   fetchDailyReview,
+  fetchRagDocuments,
   saveAiSettings,
   saveMemory,
   testAiSettings
@@ -55,6 +70,10 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   });
   const [dailyHours, setDailyHours] = useState(3);
   const [materials, setMaterials] = useState('');
+  const [docTitle, setDocTitle] = useState('');
+  const [docContent, setDocContent] = useState('');
+  const [documents, setDocuments] = useState<RagDocument[]>([]);
+  const [documentStatus, setDocumentStatus] = useState('');
   const [goalPlan, setGoalPlan] = useState<GoalPlanResponse | null>(null);
   const [dailyReview, setDailyReview] = useState<DailyReviewResponse | null>(null);
   const [utilityResult, setUtilityResult] = useState<PlannerResponse | null>(null);
@@ -73,10 +92,47 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   }, []);
 
   useEffect(() => {
+    fetchRagDocuments()
+      .then(setDocuments)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     fetchDailyReview(date)
       .then(setDailyReview)
       .catch(() => setDailyReview(null));
   }, [date]);
+
+  async function saveMaterial() {
+    const content = docContent.trim();
+    if (!content) return;
+    setLoading('material');
+    setDocumentStatus('');
+    try {
+      const saved = await createRagDocument({
+        title: docTitle.trim() || t('materialTitle'),
+        content,
+        sourceType: 'paste'
+      });
+      setDocuments((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setDocContent('');
+      setDocTitle('');
+      setDocumentStatus(t('materialSaved'));
+    } catch {
+      setDocumentStatus(t('materialSaveError'));
+    } finally {
+      setLoading('');
+    }
+  }
+
+  async function removeMaterial(id: string) {
+    try {
+      await deleteRagDocument(id);
+      setDocuments((current) => current.filter((item) => item.id !== id));
+    } catch {
+      setDocumentStatus(t('materialSaveError'));
+    }
+  }
 
   async function runGoalPlan() {
     setLoading('goal');
@@ -173,6 +229,45 @@ export function AIWorkspace(props: AIWorkspaceProps) {
         testModel={testModel}
         t={t}
       />
+
+      <div className="workflow-card">
+        <div className="workflow-head">
+          <div>
+            <span>{t('materialLibrary')}</span>
+            <strong>{t('materialLibraryHint')}</strong>
+          </div>
+          <button onClick={saveMaterial} disabled={loading === 'material' || !docContent.trim()}>
+            <Library size={16} />{t('saveMaterial')}
+          </button>
+        </div>
+        <div className="ai-grid material-grid">
+          <label>
+            <span>{t('materialTitle')}</span>
+            <input value={docTitle} onChange={(event) => setDocTitle(event.target.value)} placeholder={t('materialTitlePlaceholder')} />
+          </label>
+          <label className="wide">
+            <span>{t('materialContent')}</span>
+            <textarea value={docContent} onChange={(event) => setDocContent(event.target.value)} placeholder={t('materialContentPlaceholder')} />
+          </label>
+        </div>
+        {documentStatus && <p className="inline-status">{documentStatus}</p>}
+        <div className="material-list">
+          <span className="eyebrow">{t('recentMaterials')}</span>
+          {!documents.length && <div className="empty-state">{t('noMaterials')}</div>}
+          {documents.slice(0, 5).map((document) => (
+            <article className="material-item" key={document.id}>
+              <div>
+                <strong>{document.title}</strong>
+                <p>{document.summary}</p>
+                <small>{document.chunks} chunks · {document.sourceType}</small>
+              </div>
+              <button className="icon-button danger" onClick={() => removeMaterial(document.id)} aria-label={t('delete')}>
+                <Trash2 size={15} />
+              </button>
+            </article>
+          ))}
+        </div>
+      </div>
 
       <div className="workflow-card">
         <div className="workflow-head">
@@ -301,6 +396,7 @@ function GoalPlanView({ plan, t }: { plan: GoalPlanResponse; t: (key: string) =>
       <h3>{plan.summary}</h3>
       {plan.provider && <p><strong>{plan.provider}</strong> / {plan.model}</p>}
       {plan.phases.map((phase) => <p key={phase.title}><strong>{phase.title}</strong>: {phase.detail}</p>)}
+      <SourceList sources={plan.sources ?? []} title={t('referencedSources')} t={t} />
       <h3>{t('todayTasks')}</h3>
       {plan.tasks.map((task) => <TaskPreview key={`${task.time}-${task.title}`} time={task.time} title={task.title} reason={task.reason} />)}
     </div>
@@ -330,6 +426,24 @@ function TaskPreview({ time, title, reason }: PlannerTask) {
   );
 }
 
+function SourceList({ sources, title, t }: { sources: RagSource[]; title: string; t: (key: string) => string }) {
+  if (!sources.length) return null;
+  return (
+    <div className="source-list">
+      <h3>{title}</h3>
+      {sources.map((source) => (
+        <article className="source-item" key={`${source.documentId}-${source.chunkIndex}-${source.title}`}>
+          <div className="source-meta">
+            <strong>{source.title}</strong>
+            <span>{t('relevance')}: {source.score.toFixed(3)}</span>
+          </div>
+          <p>{source.chunk}</p>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function ResultView({ result, t }: { result: PlannerResponse; t: (key: string) => string }) {
   const heading = result.score ? `${t('score')}: ${result.score}/5` : result.summary ?? result.answer ?? t('aiWorkspace');
   return (
@@ -338,7 +452,7 @@ function ResultView({ result, t }: { result: PlannerResponse; t: (key: string) =
       {result.provider && <p><strong>{result.provider}</strong> / {result.model}</p>}
       {result.suggestions && <ul>{result.suggestions.map((item) => <li key={item}>{item}</li>)}</ul>}
       {result.answer && result.answer !== heading && <p>{result.answer}</p>}
-      {result.sources && <ul>{result.sources.map((item) => <li key={item.title}><strong>{item.title}</strong>: {item.quote}</li>)}</ul>}
+      <SourceList sources={result.sources ?? []} title={t('sources')} t={t} />
       {result.keywords && <p>{result.keywords.join(' / ')}</p>}
       {result.results && <ul>{result.results.map((item) => <li key={item.case}><strong>{item.score}/5</strong> {item.case} - {item.reason}</li>)}</ul>}
     </div>

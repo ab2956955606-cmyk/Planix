@@ -8,8 +8,8 @@ The project is being rebuilt in stages:
 
 - Frontend: React + TypeScript + Vite in `apps/web`
 - Backend: FastAPI in `backend/app`
-- Database: SQLite as the primary backend data store
-- AI: DeepSeek-first OpenAI-compatible client with mock fallback
+- Database: SQLite as the primary backend data store, including FTS5/BM25 for local RAG
+- AI: DeepSeek-first OpenAI-compatible client with mock fallback and source-grounded RAG
 - Desktop roadmap: Tauri shell + PyInstaller sidecar + GitHub Release
 
 ## Current Entry Points

@@ -502,6 +502,63 @@ h1 {
   opacity: 0.58;
 }
 
+.material-grid {
+  grid-template-columns: 1fr;
+}
+
+.material-list,
+.source-list {
+  display: grid;
+  gap: 10px;
+}
+
+.material-item,
+.source-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(60, 60, 67, 0.08);
+}
+
+.material-item p,
+.source-item p {
+  display: -webkit-box;
+  margin-top: 4px;
+  overflow: hidden;
+  color: #6e6e73;
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.material-item small {
+  display: block;
+  margin-top: 6px;
+  color: #8e8e93;
+}
+
+.source-item {
+  grid-template-columns: 1fr;
+  background: rgba(10, 132, 255, 0.06);
+}
+
+.source-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #1d1d1f;
+  font-size: 13px;
+}
+
+.source-meta span {
+  color: #0a84ff;
+  white-space: nowrap;
+}
+
 .settings-actions span {
   color: #6e6e73;
   font-size: 12px;

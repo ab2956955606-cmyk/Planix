@@ -12,7 +12,7 @@ flowchart LR
   ROUTERS --> LOOP["Planning Loop"]
   ROUTERS --> SETTINGS["AI Settings"]
   ROUTERS --> AGENT["Planner Agent"]
-  ROUTERS --> RAG["RAG Prototype"]
+  ROUTERS --> RAG["RAG Service"]
   ROUTERS --> MEM["Preference Memory"]
   ROUTERS --> EVAL["Planner Eval"]
 
@@ -24,7 +24,9 @@ flowchart LR
   RAG --> LLM
   LLM --> PROVIDER["DeepSeek / OpenAI / Custom"]
   AGENT --> DB
-  RAG --> DB
+  RAG --> DOC["documents / chunks"]
+  DOC --> FTS["document_chunks_fts"]
+  DOC --> DB
   MEM --> DB
   EVAL --> DB
 ```
@@ -35,10 +37,19 @@ The frontend is API-first for plans, month notes, and AI settings. When the back
 
 ## Planning Loop
 
-1. `POST /api/planning/goal-plan` turns a long-term goal into phases and today tasks, then stores the result in `planning_goals`.
+1. `POST /api/planning/goal-plan` retrieves matching knowledge-base chunks, turns a long-term goal into phases and today tasks, then stores the result in `planning_goals`.
 2. The frontend can apply generated tasks into the current day's `plans`.
 3. `POST /api/planning/daily-review` reads today's task state, stores a review in `daily_reviews`, and returns a replan preview for the next day.
 4. Replan previews never modify calendar data until `POST /api/planning/replan/apply` is called.
+
+## RAG Flow
+
+1. `POST /api/rag/documents` saves pasted material metadata into `documents`.
+2. The backend splits the content into overlapping chunks and stores them in `document_chunks`.
+3. Each chunk is mirrored into `document_chunks_fts`, a SQLite FTS5 virtual table.
+4. `POST /api/rag/query` builds an FTS query, ranks matches with `bm25(document_chunks_fts)`, and returns stable source objects.
+5. Source objects include `documentId`, `title`, `chunk`, `score`, and `chunkIndex`.
+6. The legacy `POST /api/rag/ingest` endpoint remains available and writes through the new document path.
 
 ## LLM Flow
 
@@ -89,8 +100,9 @@ backend/app/
 | `daily_reviews` | Daily review records, suggestions, and replan previews |
 | `ai_settings` | Provider, model, key state, temperature, and timeout |
 | `user_preferences` | Preference memory |
-| `documents` | Uploaded or pasted material metadata |
-| `document_chunks` | Retrieval chunks |
+| `documents` | Pasted material metadata, source type, summary, content hash |
+| `document_chunks` | Retrieval chunks with chunk index and token count |
+| `document_chunks_fts` | SQLite FTS5 virtual table used for BM25 retrieval |
 | `ai_runs` | AI call logs, mock fallback records, and error records |
 
 ## Interview Talking Points
@@ -99,5 +111,7 @@ backend/app/
 - AI provider settings are persisted locally but API keys are not returned to the browser after save.
 - The LLM client is OpenAI-compatible, so DeepSeek, OpenAI, or a custom compatible endpoint can be swapped.
 - Planner and RAG services read the latest model settings on each request.
+- RAG is local-first: no vector database is required, but results still include ranked citations.
+- Goal planning is grounded with retrieved chunks when matching materials exist.
 - The planning loop separates AI preview from data mutation, so users confirm replan tasks before they touch the calendar.
 - Mock fallback keeps the project demoable without paid credentials.

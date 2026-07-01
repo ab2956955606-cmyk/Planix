@@ -9,6 +9,9 @@ import type {
   Plan,
   PlannerResponse,
   PlannerTask,
+  RagDocument,
+  RagDocumentInput,
+  RagSource,
   ReplanApplyPayload
 } from '../types';
 
@@ -53,7 +56,7 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 1800
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       ...init,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
       signal: controller.signal
     });
     if (!res.ok) throw new Error(`API ${res.status}`);
@@ -153,6 +156,18 @@ export async function testAiSettings(prompt = 'Say OK in one short sentence.'): 
   return post<AiSettingsTestResult>('/api/ai/test', { prompt }, 45000);
 }
 
+export async function fetchRagDocuments(): Promise<RagDocument[]> {
+  return request<RagDocument[]>('/api/rag/documents', {}, 45000);
+}
+
+export async function createRagDocument(payload: RagDocumentInput): Promise<RagDocument> {
+  return post<RagDocument>('/api/rag/documents', payload, 45000);
+}
+
+export async function deleteRagDocument(id: string): Promise<void> {
+  await request<void>(`/api/rag/documents/${id}`, { method: 'DELETE' }, 45000);
+}
+
 export async function createGoalPlan(payload: Omit<AiPayload, 'data'>): Promise<GoalPlanResponse> {
   return post<GoalPlanResponse>('/api/planning/goal-plan', payload, 45000);
 }
@@ -211,15 +226,28 @@ export async function reviewToday(payload: AiPayload): Promise<PlannerResponse> 
   }
 }
 
+function fallbackSources(materials: string): RagSource[] {
+  return materials
+    .split(/\s+|，|。|,|\./)
+    .filter(Boolean)
+    .slice(0, 4)
+    .map((chunk, index) => ({
+      documentId: 'local-input',
+      title: `Material ${index + 1}`,
+      chunk,
+      score: 0,
+      chunkIndex: index
+    }));
+}
+
 export async function askMaterials(payload: AiPayload): Promise<PlannerResponse> {
   try {
     return await post<PlannerResponse>('/api/rag/query', payload, 45000);
   } catch {
-    const snippets = payload.materials.split(/\s+|，|。|,|\./).filter(Boolean).slice(0, 4);
     return {
       mode: 'mock',
-      answer: '资料里最应该转化为计划的是高频技能词、项目要求和可验证产出。',
-      sources: snippets.map((quote, index) => ({ title: `Material ${index + 1}`, quote }))
+      answer: '资料库服务暂不可用。你仍可以先根据当前粘贴内容提炼高频技能、项目要求和可验证产出。',
+      sources: fallbackSources(payload.materials)
     };
   }
 }
