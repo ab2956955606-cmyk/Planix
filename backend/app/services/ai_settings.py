@@ -37,7 +37,7 @@ def _env_model() -> str:
 
 
 def _env_api_key() -> str:
-    return os.getenv("AI_API_KEY", "").strip()
+    return (os.getenv("DEEPSEEK_API_KEY") or os.getenv("AI_API_KEY") or "").strip()
 
 
 def _row_to_effective(row) -> EffectiveAiSettings:

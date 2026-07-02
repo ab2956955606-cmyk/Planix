@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
-APP_VERSION = os.getenv("MYNOTES_API_VERSION", "2.1.0")
+APP_VERSION = os.getenv("MYNOTES_API_VERSION", "1.1.4")
 
 
 @router.get("/health")

@@ -34,6 +34,7 @@ Test-Step -Name "GET /api/health returns app=mynotes-api" -Block {
     if ($r.app -ne "mynotes-api") { throw "Expected app=mynotes-api, got $($r.app)" }
     if (-not $r.pid) { throw "Missing pid field" }
     if (-not $r.version) { throw "Missing version field" }
+    if ($r.version -ne "1.1.4") { throw "Expected version=1.1.4, got $($r.version)" }
     Write-Host "    app=$($r.app) pid=$($r.pid) version=$($r.version)" -ForegroundColor Gray
 }
 

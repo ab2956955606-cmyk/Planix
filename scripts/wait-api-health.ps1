@@ -9,6 +9,9 @@ $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 while ((Get-Date) -lt $Deadline) {
     try {
         $Response = Invoke-RestMethod -Uri $Url -Method Get -TimeoutSec 2
+        if ($Response.status -ne "ok" -or $Response.app -ne "mynotes-api") {
+            throw "Health endpoint is reachable but not a MyNotes API response."
+        }
         Write-Host "API health check passed at $Url"
         $Response | ConvertTo-Json -Depth 5
         exit 0

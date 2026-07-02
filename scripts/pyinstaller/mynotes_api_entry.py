@@ -24,6 +24,8 @@ def write_log(message: str) -> None:
 
 def main() -> None:
     os.environ.setdefault("MYNOTES_ENV", "desktop")
+    if os.getenv("MYNOTES_ENV") == "desktop":
+        os.environ.setdefault("USE_REAL_LLM", "1")
     port = int(os.getenv("MYNOTES_API_PORT", "8000"))
     write_log(f"Starting MyNotes API sidecar on 127.0.0.1:{port}")
     try:

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 from uuid import uuid4
 
 import httpx
@@ -39,12 +40,18 @@ def _chat_completions_url(base_url: str, provider: str) -> str:
     Custom:     whatever the user sets            → try /v1 first, avoid double-append
     """
     cleaned = base_url.rstrip("/")
+    # DeepSeek uses /chat/completions directly (no /v1 prefix)
+    if provider == "deepseek":
+        if cleaned.endswith("/v1/chat/completions"):
+            cleaned = cleaned.removesuffix("/v1/chat/completions")
+        elif cleaned.endswith("/chat/completions"):
+            return cleaned
+        elif cleaned.endswith("/v1"):
+            cleaned = cleaned.removesuffix("/v1")
+        return f"{cleaned}/chat/completions"
     # Already includes the full path — use as-is
     if cleaned.endswith("/chat/completions"):
         return cleaned
-    # DeepSeek uses /chat/completions directly (no /v1 prefix)
-    if provider == "deepseek":
-        return f"{cleaned}/chat/completions"
     # OpenAI-compatible default: append /v1/chat/completions
     if cleaned.endswith("/v1"):
         return f"{cleaned}/chat/completions"
@@ -102,11 +109,24 @@ class LlmClient:
     def __init__(self):
         self.settings = get_effective_ai_settings()
 
+    def real_llm_allowed(self) -> bool:
+        return os.getenv("USE_REAL_LLM", "").strip() == "1"
+
     def is_enabled(self) -> bool:
-        return self.settings.provider != "mock" and self.settings.has_api_key
+        return (
+            self.settings.provider != "mock"
+            and self.settings.has_api_key
+            and self.real_llm_allowed()
+        )
 
     def complete(
-        self, feature: str, system: str, user: str
+        self,
+        feature: str,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 800,
+        temperature: float | None = None,
     ) -> tuple[LlmResult | None, LlmError | None]:
         """Returns (result, error). On success error is None; on failure result is None."""
         if not self.is_enabled():
@@ -119,13 +139,16 @@ class LlmClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": self.settings.temperature,
+            "temperature": self.settings.temperature if temperature is None else temperature,
+            "max_tokens": max(1, min(max_tokens, 4000)),
+            "stream": False,
         }
         try:
             with httpx.Client(timeout=self.settings.timeout_seconds) as client:
                 response = client.post(
                     _chat_completions_url(self.settings.base_url, self.settings.provider),
-                    headers={"Authorization": f"Bearer {self.settings.api_key}"},
+                    headers={"Authorization": f"Bearer {self.settings.api_key}",
+                              "Accept-Encoding": "gzip, deflate"},
                     json=payload,
                 )
                 if response.status_code != 200:

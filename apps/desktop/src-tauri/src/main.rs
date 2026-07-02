@@ -1,4 +1,4 @@
-use std::fs::{create_dir_all, OpenOptions};
+use std::fs::{create_dir_all, metadata, rename, OpenOptions};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -6,7 +6,79 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use tauri::{path::BaseDirectory, Manager};
+
+const DESKTOP_LOG_MAX_BYTES: u64 = 1_000_000;
+const API_PORT: &str = "8000";
+
+// ═══════════════════════════════════════════════════════════════
+// Tauri IPC proxy command — routes frontend HTTP requests through
+// Rust, bypassing WebView2 mixed-content blocking entirely.
+// ═══════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProxyRequest {
+    method: String,
+    path: String,
+    #[serde(default)]
+    body: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProxyResponse {
+    status: u16,
+    body: String,
+}
+
+#[tauri::command]
+fn proxy_api(req: ProxyRequest) -> Result<ProxyResponse, String> {
+    let url = format!("http://127.0.0.1:{}{}", API_PORT, req.path);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|e| format!("failed to create HTTP client: {e}"))?;
+
+    let resp = match req.method.to_uppercase().as_str() {
+        "GET" => client.get(&url),
+        "POST" => {
+            let mut builder = client.post(&url);
+            if !req.body.is_empty() {
+                builder = builder.header("Content-Type", "application/json");
+                builder = builder.body(req.body);
+            }
+            builder
+        }
+        "PUT" => {
+            let mut builder = client.put(&url);
+            if !req.body.is_empty() {
+                builder = builder.header("Content-Type", "application/json");
+                builder = builder.body(req.body);
+            }
+            builder
+        }
+        "PATCH" => {
+            let mut builder = client.patch(&url);
+            if !req.body.is_empty() {
+                builder = builder.header("Content-Type", "application/json");
+                builder = builder.body(req.body);
+            }
+            builder
+        }
+        "DELETE" => client.delete(&url),
+        other => return Err(format!("unsupported method: {other}")),
+    };
+
+    let resp = resp.send().map_err(|e| format!("proxy request failed: {e}"))?;
+    let status = resp.status().as_u16();
+    let body = resp.text().map_err(|e| format!("reading response body: {e}"))?;
+
+    Ok(ProxyResponse { status, body })
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Sidecar management (unchanged logic, extracted here)
+// ═══════════════════════════════════════════════════════════════
 
 /// Wraps the optional sidecar child process.
 /// Drop kills the child only if WE spawned it.
@@ -23,21 +95,20 @@ impl Drop for ApiSidecar {
 }
 
 // ── Windows named mutex for single-instance  ────────────────────
+
 #[cfg(windows)]
 fn ensure_single_instance(log: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     use std::ffi::OsStr;
     use std::iter::once;
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::System::Threading::{
-        CreateMutexW, GetLastError, ERROR_ALREADY_EXISTS,
-    };
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
 
     let name: Vec<u16> = OsStr::new("MyNotesAI-Desktop-Instance")
         .encode_wide()
         .chain(once(0))
         .collect();
 
-    // SAFETY: Win32 API call with valid null-terminated wide string.
     let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
     if handle.is_null() {
         let msg = format!("CreateMutexW failed: last_error={}", unsafe { GetLastError() });
@@ -45,7 +116,6 @@ fn ensure_single_instance(log: &PathBuf) -> Result<(), Box<dyn std::error::Error
         return Err(msg.into());
     }
 
-    // ERROR_ALREADY_EXISTS means another instance holds the mutex.
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         write_log(log, "another instance detected via named mutex, exiting");
         return Err("Another instance is already running.".into());
@@ -69,7 +139,6 @@ fn log_path() -> PathBuf {
             .join("logs")
             .join("desktop.log");
     }
-
     std::env::temp_dir()
         .join("MyNotes AI")
         .join("logs")
@@ -87,7 +156,13 @@ fn write_log(path: &PathBuf, message: impl AsRef<str>) {
     if let Some(parent) = path.parent() {
         let _ = create_dir_all(parent);
     }
-
+    if metadata(path)
+        .map(|meta| meta.len() > DESKTOP_LOG_MAX_BYTES)
+        .unwrap_or(false)
+    {
+        let rotated = path.with_extension("log.old");
+        let _ = rename(path, rotated);
+    }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "[{}] {}", timestamp(), message.as_ref());
     }
@@ -126,15 +201,13 @@ fn show_error(title: &str, message: &str) {
 }
 
 // ── Raw TCP-based health check  ─────────────────────────────────
-//
-// We use raw TCP (not reqwest) to keep the Tauri binary lightweight.
-// The response body is parsed minimally via the JSON fields we need.
 
 #[derive(Debug)]
 struct HealthInfo {
     app: Option<String>,
     pid: Option<u32>,
     version: Option<String>,
+    body: String,
 }
 
 fn get_api_health(port: &str) -> Result<HealthInfo, String> {
@@ -158,28 +231,25 @@ fn get_api_health(port: &str) -> Result<HealthInfo, String> {
         .read_to_string(&mut response)
         .map_err(|err| err.to_string())?;
 
-    // Parse JSON body after headers (look for '{')
     let body = match response.find('{') {
-        Some(pos) => &response[pos..],
+        Some(pos) => response[pos..].to_string(),
         None => return Err("no JSON body in health response".to_string()),
     };
 
-    // Look for "app":"mynotes-api" or "app": "mynotes-api"
-    let is_mynotes = body.contains(r#""app":"mynotes-api""#)
-        || body.contains(r#""app": "mynotes-api""#);
-
+    let is_mynotes =
+        body.contains(r#""app":"mynotes-api""#) || body.contains(r#""app": "mynotes-api""#);
     if !is_mynotes || !(body.contains(r#""status":"ok""#) || body.contains(r#""status": "ok""#)) {
-        return Err(format!(
-            "port {port} is not serving MyNotes API: {body}"
-        ));
+        return Err(format!("port {port} is not serving MyNotes API: {body}"));
     }
 
-    // Extract pid and version by simple scan (no JSON parser dependency)
-    let pid = extract_json_u32(body, "pid");
-    let version = extract_json_str(body, "version");
-    let app = Some("mynotes-api".to_string());
-
-    Ok(HealthInfo { app, pid, version })
+    let pid = extract_json_u32(&body, "pid");
+    let version = extract_json_str(&body, "version");
+    Ok(HealthInfo {
+        app: Some("mynotes-api".to_string()),
+        pid,
+        version,
+        body,
+    })
 }
 
 fn extract_json_str(body: &str, key: &str) -> Option<String> {
@@ -222,8 +292,8 @@ fn poll_api_health(port: String, log_path: PathBuf) {
                         &log_path,
                         format!(
                             "/api/health check result: success on attempt {attempt}: \
-                             app={:?} pid={:?} version={:?}",
-                            info.app, info.pid, info.version
+                             app={:?} pid={:?} version={:?} body={}",
+                            info.app, info.pid, info.version, info.body
                         ),
                     );
                     return;
@@ -257,12 +327,31 @@ fn pipe_sidecar_output(
     if let Some(mut pipe) = pipe {
         std::thread::spawn(move || {
             let mut buffer = [0_u8; 1024];
+            let mut conflict_reported = false;
             loop {
                 match pipe.read(&mut buffer) {
                     Ok(0) => return,
                     Ok(size) => {
                         let text = String::from_utf8_lossy(&buffer[..size]);
                         write_log(&log_path, format!("mynotes-api {label}: {}", text.trim()));
+                        let lower = text.to_lowercase();
+                        let port_conflict = label == "stderr"
+                            && (lower.contains("10048")
+                                || lower.contains("winerror 10048")
+                                || lower.contains("address already in use")
+                                || lower.contains("only one usage")
+                                || lower.contains("通常每个套接字地址"));
+                        if port_conflict && !conflict_reported {
+                            conflict_reported = true;
+                            write_log(&log_path, "port 8000 is already in use");
+                            show_error(
+                                "MyNotes AI",
+                                &format!(
+                                    "MyNotes AI 后端启动失败：8000 端口已被占用。\n请关闭占用 8000 端口的程序后重试。\n\n日志：{}",
+                                    log_path.display()
+                                ),
+                            );
+                        }
                     }
                     Err(err) => {
                         write_log(&log_path, format!("mynotes-api {label} read error: {err}"));
@@ -274,24 +363,24 @@ fn pipe_sidecar_output(
     }
 }
 
-// ── Main  ───────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// Main entry point
+// ═══════════════════════════════════════════════════════════════
 
 fn main() {
     let startup_log_path = log_path();
     write_log(&startup_log_path, "app start time");
 
-    // Single-instance check (Windows named mutex)
     if let Err(e) = ensure_single_instance(&startup_log_path) {
         write_log(
             &startup_log_path,
             format!("single-instance check failed: {e}"),
         );
-        // Don't block — allow second window; the preflight health check
-        // will prevent a second sidecar.
     }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![proxy_api])
         .setup(|app| {
             let log_path = log_path();
             write_log(&log_path, "setup started");
@@ -341,31 +430,25 @@ fn main() {
             let port = std::env::var("MYNOTES_API_PORT").unwrap_or_else(|_| "8000".to_string());
             write_log(&log_path, format!("MYNOTES_API_PORT={port}"));
 
-            // ── Preflight: check if a MyNotes API is already running ──
             let already_running = match get_api_health(&port) {
                 Ok(info) => {
                     write_log(
                         &log_path,
                         format!(
                             "preflight /api/health result: success — \
-                             app={:?} pid={:?} version={:?}",
-                            info.app, info.pid, info.version
+                             app={:?} pid={:?} version={:?} body={}",
+                            info.app, info.pid, info.version, info.body
                         ),
                     );
                     true
                 }
                 Err(err) => {
-                    // Distinguish port-open-but-not-our-API vs port-closed.
-                    // get_api_health returns Err when:
-                    //   - TCP connect failed (port closed) → "Connection refused"
-                    //   - TCP connected but response isn't MyNotes API → body in err
-                    //   - TCP connected but no JSON body → "no JSON body"
                     let is_port_closed = err.contains("Connection refused")
+                        || err.contains("connection refused")
                         || err.contains("10061")
-                        || err.contains("actively refused");
-                    let is_other_service = !is_port_closed;
-
-                    if is_other_service {
+                        || err.contains("actively refused")
+                        || err.contains("No connection could be made");
+                    if !is_port_closed {
                         let msg = format!(
                             "MyNotes AI 后端启动失败：8000 端口已被其他程序占用。\
                              请关闭占用 8000 端口的程序后重试。\n\n诊断：{err}"
@@ -381,9 +464,7 @@ fn main() {
                     }
                     write_log(
                         &log_path,
-                        format!(
-                            "preflight /api/health result: not reachable ({err})"
-                        ),
+                        format!("preflight /api/health result: not reachable ({err})"),
                     );
                     false
                 }
@@ -392,14 +473,12 @@ fn main() {
             if already_running {
                 write_log(
                     &log_path,
-                    "existing MyNotes API detected on 127.0.0.1:8000, skip spawning sidecar",
+                    "existing MyNotes API detected, skip spawning sidecar",
                 );
-                // No sidecar child to manage.
                 app.manage(ApiSidecar(Mutex::new(None)));
                 return Ok(());
             }
 
-            // ── Ensure sidecar binary exists ──
             let sidecar_path = match app
                 .path()
                 .resolve("resources/binaries/mynotes-api.exe", BaseDirectory::Resource)
@@ -441,7 +520,6 @@ fn main() {
                 return Err(std::io::Error::new(std::io::ErrorKind::NotFound, message).into());
             }
 
-            // ── Spawn sidecar ──
             let mut sidecar = Command::new(&sidecar_path);
             sidecar
                 .env("MYNOTES_ENV", "desktop")
@@ -449,10 +527,27 @@ fn main() {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
+            if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
+                if !key.is_empty() {
+                    sidecar.env("DEEPSEEK_API_KEY", key);
+                    write_log(&log_path, "forwarded DEEPSEEK_API_KEY to sidecar");
+                }
+            }
+            if let Ok(key) = std::env::var("AI_API_KEY") {
+                if !key.is_empty() {
+                    sidecar.env("AI_API_KEY", key);
+                    write_log(&log_path, "forwarded AI_API_KEY to sidecar");
+                }
+            }
+            if let Ok(use_real) = std::env::var("USE_REAL_LLM") {
+                sidecar.env("USE_REAL_LLM", use_real);
+                write_log(&log_path, "forwarded USE_REAL_LLM to sidecar");
+            }
+
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
-                sidecar.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                sidecar.creation_flags(0x08000000);
             }
 
             let mut child = match sidecar.spawn() {
@@ -474,7 +569,6 @@ fn main() {
             pipe_sidecar_output(log_path.clone(), "stderr", child.stderr.take());
             app.manage(ApiSidecar(Mutex::new(Some(child))));
 
-            // ── Poll until healthy ──
             poll_api_health(port, log_path);
 
             Ok(())

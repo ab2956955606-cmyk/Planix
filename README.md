@@ -1,59 +1,60 @@
-﻿<p align="center">
+<p align="center">
   <br>
   <strong>MyNotes AI</strong>
   <br>
-  <span>AI learning planner, daily review, local RAG, and desktop-ready knowledge assistant.</span>
+  <span>AI learning planner, daily review loop, local RAG, and Windows desktop packaging.</span>
   <br><br>
   <img alt="React" src="https://img.shields.io/badge/React-TypeScript-0a84ff">
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-SQLite-30d158">
   <img alt="RAG" src="https://img.shields.io/badge/RAG-FTS5%20%2B%20BM25-ff9f0a">
-  <img alt="Desktop" src="https://img.shields.io/badge/Desktop-Tauri%20Ready-6e6e73">
+  <img alt="Desktop" src="https://img.shields.io/badge/Desktop-Tauri%20%2B%20Sidecar-6e6e73">
 </p>
 
 ![MyNotes AI Chinese Demo](assets/mynotes-demo.png)
 ![MyNotes AI English Demo](assets/mynotes-demo-en.png)
 
-## 涓枃浠嬬粛
+## 中文介绍
 
-**MyNotes AI** 鏄竴涓潰鍚戝涔犮€佹眰鑱屽拰闀挎湡鐩爣绠＄悊鐨?AI 瑙勫垝绯荤粺銆傚畠涓嶆槸绠€鍗曠殑鏃ュ巻鎴栬亰澶╂锛岃€屾槸鎶娾€滅洰鏍囪緭鍏ャ€佽祫鏂欐矇娣€銆丄I 瑙勫垝銆佹棩绋嬫墽琛屻€佹棩鎶ュ鐩樸€侀噸鎺掗瑙堛€佽祫鏂欓棶绛斺€濊繛鎴愪竴涓畬鏁撮棴鐜€?
-褰撳墠鐗堟湰宸茬粡鍗囩骇鍒板己浣滃搧闆嗘柟鍚戯細鍓嶇浣跨敤 React + TypeScript + Vite锛屽悗绔娇鐢?FastAPI锛屾暟鎹眰浣跨敤 SQLite锛孉I 鑳藉姏鏀寔 DeepSeek / OpenAI-compatible 璋冪敤锛屽苟淇濈暀绋冲畾 mock fallback锛屾墍浠ユ病鏈?API key 涔熻兘瀹屾暣婕旂ず銆傞」鐩敮鎸佺矘璐磋祫鏂欍€乀XT/MD 鏂囦欢涓婁紶銆丼QLite FTS5 鍏ㄦ枃绱㈠紩銆丅M25 妫€绱€佸紩鐢ㄦ潵婧愬睍绀恒€佺洰鏍囪鍒?grounding銆佸叚缁磋鍒掕川閲忚瘎娴嬶紝浠ュ強 Tauri + FastAPI sidecar 妗岄潰鍖栭鏋躲€?
+**MyNotes AI** 是一个面向学习、求职和长期目标管理的 AI 规划系统。它把目标输入、资料沉淀、AI 拆解、日程执行、每日复盘、重排预览和资料问答连接成一个完整闭环，而不是只停留在简单日历或聊天框。
+
+当前版本已经升级为作品集强展示方向：前端使用 React + TypeScript + Vite，后端使用 FastAPI，数据层使用 SQLite，并基于 SQLite FTS5/BM25 构建本地 RAG。AI 调用采用 DeepSeek-first 的 OpenAI-compatible client，默认保持 mock fallback；没有 API key 时也可以完整演示，真实调用需要用户显式开启。
+
 ## English
 
-**MyNotes AI** is an AI planning and review system for learning, job search, and long-term goal management. It connects goal planning, knowledge grounding, calendar execution, daily review, replan preview, material Q&A, and local evaluation into one portfolio-ready AI application.
+**MyNotes AI** is an AI planning and review system for learning, job search, and long-term goal management. It connects goal planning, knowledge grounding, calendar execution, daily review, replan preview, material Q&A, and planner evaluation into one practical workflow.
 
-The project uses React + TypeScript + Vite on the frontend, FastAPI on the backend, and SQLite as the local data layer. It supports DeepSeek/OpenAI-compatible LLM calls with deterministic mock fallback, so the full workflow remains demoable without an API key. It also prepares a Tauri desktop shell that can later bundle the web app and a FastAPI sidecar.
+The project uses React + TypeScript + Vite on the frontend, FastAPI on the backend, and SQLite as the local data layer. It supports DeepSeek/OpenAI-compatible LLM calls with deterministic mock fallback, SQLite FTS5/BM25 retrieval, source citations, TXT/MD material upload, and a Tauri Windows desktop shell with a packaged FastAPI sidecar.
 
 ## Current Stage
 
 | Stage | Status | Result |
 | --- | --- | --- |
-| Phase 0 | Done | Project audit in `docs/audit.md` |
+| Phase 0 | Done | Project audit and staged rebuild plan |
 | Phase 1 | Done | React + TypeScript + Vite frontend in `apps/web` |
 | Phase 2 | Done | FastAPI routers, SQLite schema, plans API, month-notes API, tests |
-| Phase 3 | Done | AI settings, DeepSeek-first OpenAI-compatible client, model test endpoint |
+| Phase 3 | Done | AI settings, DeepSeek-first client, model test endpoint |
 | Phase 4 | Done | Persistent goal planning, daily reviews, replan preview, apply-to-calendar flow |
 | Phase 5 | Done | SQLite FTS5/BM25 RAG, document library, source citations |
 | Phase 6 | Done | TXT/MD upload RAG and six-dimension planner evaluation |
-| Phase 7 | Done | Tauri desktop shell, FastAPI sidecar packaging entry, build scripts, desktop CI check |
-| Phase 8 | Done | Windows installer scripts, sidecar packaging checks, GitHub Release automation |
-| Phase 9 | Next | Desktop polish, auto-update, code signing, and portfolio presentation upgrades |
+| Phase 7 | Done | Tauri desktop shell, FastAPI sidecar strategy, build scripts |
+| Phase 8 | Done | Windows MSI pipeline, sidecar preflight, release asset generation |
+| Phase 9 | Next | Desktop polish, auto-update, signing, and portfolio presentation |
 
 ## Features
 
 | Module | What it does |
 | --- | --- |
-| Calendar planning | Manage daily tasks with time, status, completion notes, AI/manual source |
-| Daily review loop | Generate persisted daily reviews and preview tomorrow's replanning |
-| Replan apply | AI suggestions never mutate data until the user confirms |
-| Knowledge base | Save pasted JD, notes, interview materials, or project context |
-| File RAG upload | Upload `.txt` and `.md` materials into the same FTS5 knowledge base |
+| Calendar planning | Manage daily tasks with time, completion status, review notes, and AI/manual source |
+| Goal planning | Turn a long-term goal into phases and today tasks |
+| Daily review | Generate a persisted daily review from completed and unfinished plans |
+| Replan preview | AI suggestions do not mutate data until the user clicks apply |
+| Knowledge base | Save pasted JDs, notes, interview materials, or project context |
+| TXT/MD upload | Upload `.txt` and `.md` files into the same RAG knowledge base |
 | FTS5/BM25 RAG | Chunk local materials, search with SQLite FTS5, rank with BM25 |
-| Source citations | Return document title, chunk, score, and chunk index for every answer |
-| Goal grounding | Goal planning can retrieve relevant knowledge-base chunks before generation |
-| Model settings | Configure provider, base URL, model, API key, temperature, and timeout |
-| Mock fallback | All AI workflows remain demoable without a paid API key |
-| Evaluation | Score planning quality across six fixed dimensions |
-| Desktop scaffold | Prepare Tauri window, sidecar backend strategy, packaging scripts, and CI checks |
+| Source citations | Return document title, chunk, score, and chunk index for grounded answers |
+| Planner evaluation | Score planning quality across six fixed dimensions |
+| Model settings | Configure provider, base URL, model, key presence, temperature, and timeout safely |
+| Desktop package | Bundle Tauri window, built web assets, and FastAPI sidecar into a Windows MSI |
 
 ## Tech Stack
 
@@ -62,8 +63,9 @@ The project uses React + TypeScript + Vite on the frontend, FastAPI on the backe
 | Frontend | React 18, TypeScript, Vite, lucide-react |
 | Backend | Python, FastAPI, Pydantic, httpx |
 | Database | SQLite, FTS5 virtual table, BM25 ranking |
-| AI workflow | Planner Agent, Planning Loop, RAG, Memory, Eval, DeepSeek/OpenAI-compatible client |
-| Desktop | Tauri v2 scaffold, FastAPI sidecar strategy, PyInstaller spec |
+| AI workflow | Planner Agent, daily review loop, RAG, memory, evaluation, mock fallback |
+| LLM client | DeepSeek-first OpenAI-compatible client |
+| Desktop | Tauri v2, PyInstaller FastAPI sidecar, Windows MSI |
 | Quality | Pytest, Vitest, ESLint, TypeScript build, GitHub Actions |
 
 ## Architecture
@@ -98,7 +100,7 @@ More details:
 
 ## Run Locally
 
-Start the backend:
+Backend:
 
 ```bash
 python -m venv .venv
@@ -107,7 +109,7 @@ pip install -r requirements.txt
 uvicorn backend.app.main:app --reload
 ```
 
-Start the frontend:
+Frontend:
 
 ```bash
 cd apps/web
@@ -121,19 +123,16 @@ Open:
 http://127.0.0.1:5173
 ```
 
-## Desktop Preparation
+## Desktop MSI
 
-Phase 8 provides the Windows MSI release pipeline. Normal users only need to download the `.msi` installer, double-click it, and open `MyNotes AI` from the Windows Start menu.
-
-Normal users do not need Node.js, Python, Rust, Cargo, npm, pip, a command line, `mynotes-api.exe`, or `$env:MYNOTES_SKIP_SIDECAR="1"`. The FastAPI backend is bundled as a Tauri sidecar and starts automatically.
-
-Do not download `Source code.zip` as the installer. Download the MSI asset:
+The expected release assets for version `1.1.4` are:
 
 ```text
-release/MyNotes-AI-v1.1.2-windows-x64.msi
+release/MyNotes-AI-v1.1.4-windows-x64.msi
+release/MyNotes-AI-v1.1.4-windows-x64.sha256
 ```
 
-After installation, the app should have this shape:
+Installed layout:
 
 ```text
 H:\mynotes\
@@ -145,69 +144,53 @@ H:\mynotes\
       mynotes-api.exe
 ```
 
-If the desktop app shows `asset not found: index.html`, the installer was built incorrectly or the frontend assets are missing. Download the latest MSI again and reinstall.
+Normal users only need the MSI. They should not run `mynotes-api.exe` manually, install Node/Python/Rust, or set `MYNOTES_SKIP_SIDECAR`. The Tauri app starts the FastAPI sidecar automatically, checks `/api/health`, and reuses an existing MyNotes API process when one is already running.
 
-AI features require the user to enter their own DeepSeek API key inside the app. Calendar, planning records, local notes, local RAG materials, and basic offline mock AI behavior remain available locally without a developer environment.
-
-For developers, a machine with Node.js, Python, PyInstaller, Rust/Cargo, and the Tauri CLI can build the installer locally, while GitHub Actions can publish release assets from a `v*` tag.
+Build locally:
 
 ```powershell
 .\scripts\check-packaging-toolchain.ps1
-.\scripts\build-web.ps1
-.\scripts\build-backend.ps1
-cd apps\desktop
-npm install
-npm run build
+.\scripts\build-release.ps1 -Version 1.1.4
 ```
 
-Build the full release package:
-
-```powershell
-.\scripts\build-release.ps1 -Version 1.1.2
-```
-
-The expected release assets are:
+If desktop startup fails, check:
 
 ```text
-release/MyNotes-AI-v1.1.2-windows-x64.msi
-release/MyNotes-AI-v1.1.2-windows-x64.sha256
+%APPDATA%\MyNotes AI\logs\desktop.log
 ```
-
-The release design is:
-
-```text
-Tauri window -> index.html -> mynotes-api sidecar -> FastAPI -> SQLite user data directory
-```
-
-Desktop environment variables:
-
-| Variable | Purpose |
-| --- | --- |
-| `MYNOTES_ENV=desktop` | Makes the backend resolve SQLite data under the user data directory |
-| `MYNOTES_DB_PATH` | Optional database path override |
-| `MYNOTES_API_PORT` | Optional API port, default `8000` |
 
 ## AI Configuration
 
-Configure the model inside the AI workspace:
+Recommended DeepSeek settings:
 
 ```text
 Provider: DeepSeek
 Base URL: https://api.deepseek.com
-Model: deepseek-chat
-API Key: your key
+Chat endpoint: /chat/completions
+Default model: deepseek-v4-flash
+Optional model: deepseek-v4-pro
 ```
 
-API keys are accepted by the backend but never returned by `GET /api/ai/settings`. Without a key, the backend returns stable mock results.
+The final DeepSeek request URL is:
 
-Environment variables are also supported:
+```text
+https://api.deepseek.com/chat/completions
+```
 
-```bash
-AI_PROVIDER=deepseek
-AI_API_KEY=
-AI_API_BASE=https://api.deepseek.com
-AI_MODEL=deepseek-chat
-DATABASE_URL=sqlite:///./data/mynotes.db
+It should not become:
+
+```text
+https://api.deepseek.com/v1/chat/completions
+```
+
+API keys are accepted by `PUT /api/ai/settings`, but `GET /api/ai/settings` only returns `hasApiKey`; it never returns the full key. Logs only record provider, model, sanitized base URL, key presence, and a masked key when needed.
+
+Real LLM calls are disabled by default. Manual real DeepSeek testing requires:
+
+```powershell
+$env:DEEPSEEK_API_KEY="your-key"
+$env:USE_REAL_LLM="1"
+.\scripts\test-deepseek-real.ps1
 ```
 
 ## RAG Workflow
@@ -216,7 +199,7 @@ DATABASE_URL=sqlite:///./data/mynotes.db
 2. `POST /api/rag/documents` and `POST /api/rag/documents/upload` save metadata into `documents` and chunks into `document_chunks`.
 3. Each chunk is inserted into `document_chunks_fts`.
 4. `POST /api/rag/query` searches with FTS5, ranks with `bm25()`, and returns `answer`, `sources`, and `keywords`.
-5. `POST /api/planning/goal-plan` also retrieves matching sources and shows them as planning references.
+5. `POST /api/planning/goal-plan` can retrieve matching sources and show them as planning references.
 
 ## Verify
 
@@ -231,31 +214,26 @@ Frontend:
 
 ```bash
 cd apps/web
-npx.cmd tsc -b
-npm.cmd run lint
-npm.cmd run test
+npm.cmd install
 npm.cmd run build
 ```
 
-Desktop scaffold:
+Desktop:
 
 ```powershell
-.\scripts\check-desktop-config.ps1
+cd apps\desktop
+npm.cmd install
+cargo fmt
+npm.cmd run build
 ```
 
-Packaging toolchain:
+Full release package:
 
 ```powershell
-.\scripts\check-packaging-toolchain.ps1
+.\scripts\build-release.ps1 -Version 1.1.4
 ```
 
-Sidecar health check:
-
-```powershell
-.\scripts\wait-api-health.ps1 -Url http://127.0.0.1:8000/api/health
-```
-
-Installed MSI smoke test for developers:
+Installed MSI smoke test:
 
 ```powershell
 .\scripts\smoke-test-installed.ps1
@@ -265,7 +243,7 @@ Installed MSI smoke test for developers:
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/health` | Health check |
+| `GET /api/health` | Health check with `status`, `app`, `pid`, and `version` |
 | `GET /api/plans?date=YYYY-MM-DD` | List plans for one day |
 | `POST /api/plans` | Create a plan |
 | `PATCH /api/plans/{id}` | Update a plan |
@@ -274,7 +252,7 @@ Installed MSI smoke test for developers:
 | `PUT /api/month-notes` | Save a monthly note |
 | `GET /api/ai/settings` | Read public model settings without exposing the key |
 | `PUT /api/ai/settings` | Save provider, model, base URL, key, temperature, and timeout |
-| `POST /api/ai/test` | Test the configured model or mock fallback |
+| `POST /api/ai/test` | Test mock mode or the configured model when real calls are enabled |
 | `POST /api/planning/goal-plan` | Generate and persist a goal plan with optional RAG sources |
 | `POST /api/planning/daily-review` | Generate and persist a daily review plus replan preview |
 | `GET /api/planning/daily-review?date=YYYY-MM-DD` | Read a saved daily review |
@@ -292,8 +270,8 @@ Installed MSI smoke test for developers:
 
 ## Resume Pitch
 
-鐙珛寮€鍙?**MyNotes AI** 瀛︿範瑙勫垝绯荤粺锛屽熀浜?React + TypeScript + Vite 鏋勫缓鍓嶇锛屼娇鐢?FastAPI + SQLite 瀹炵幇鏈湴鏁版嵁灞傦紝鏀寔鏃ョ▼绠＄悊銆佺洰鏍囨媶瑙ｃ€佹棩鎶ュ鐩樸€侀噸鎺掗瑙堛€佽祫鏂欏簱闂瓟銆佹枃浠朵笂浼犮€佸亸濂借蹇嗐€佹ā鍨嬮厤缃拰瑙勫垝璐ㄩ噺璇勪及锛涘疄鐜?DeepSeek-first 鐨?OpenAI-compatible LLM client锛屽苟淇濈暀 mock fallback锛屼繚璇佹棤 API key 鏃朵篃鍙畬鏁存紨绀猴紱鍩轰簬 SQLite FTS5/BM25 鏋勫缓鏈湴 RAG 妫€绱㈣兘鍔涳紝瀵圭矘璐磋祫鏂欏拰 TXT/MD 鏂囦欢杩涜鍒囩墖銆佺储寮曘€乀op-K 鍙洖鍜屽紩鐢ㄦ潵婧愬睍绀猴紝骞跺皢妫€绱㈢粨鏋滄帴鍏ョ洰鏍囪鍒掓祦绋嬶紱琛ラ綈 Tauri 妗岄潰澹炽€丗astAPI sidecar 鎵撳寘鍏ュ彛銆佹瀯寤鸿剼鏈拰 CI 闈欐€佹鏌ワ紝涓哄悗缁?Windows 瀹夎鍖呭彂甯冨仛鍑嗗銆?
+独立开发 **MyNotes AI** 学习规划系统，基于 React + TypeScript + Vite 构建前端，使用 FastAPI + SQLite 实现本地数据层，支持日程管理、目标拆解、日报复盘、重排预览、资料库问答、TXT/MD 文件上传、偏好记忆、模型配置和规划质量评测。实现 DeepSeek-first 的 OpenAI-compatible LLM client，并保留 mock fallback，保证无 API key 时也可完整演示；基于 SQLite FTS5/BM25 构建本地 RAG 检索能力，对资料进行切片、索引、Top-K 召回和引用来源展示；补齐 Tauri 桌面壳、FastAPI sidecar、Windows MSI 构建脚本和启动健康检查，形成可展示的 AI 全栈作品。
+
 ## License
 
 MIT
-

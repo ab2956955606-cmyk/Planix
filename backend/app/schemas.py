@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 PlanPriority = Literal["low", "medium", "high"]
@@ -148,6 +148,22 @@ class AiSettingsUpdate(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        cleaned = value.strip().rstrip("/")
+        if not cleaned.startswith(("http://", "https://")):
+            raise ValueError("Base URL must start with http:// or https://")
+        return cleaned
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("model cannot be empty")
+        return cleaned
+
 
 class AiSettingsOut(BaseModel):
     provider: AiProvider
@@ -169,11 +185,11 @@ class AiSettingsTestOut(BaseModel):
     ok: bool
     mode: Literal["mock", "llm", "error"]
     message: str
-    provider: str
-    model: str
-    error_type: str = Field(default="", alias="errorType")
-    status_code: int = Field(default=0, alias="statusCode")
-    detail: str = ""
+    provider: str | None = None
+    model: str | None = None
+    error_type: str | None = Field(default=None, alias="errorType")
+    status_code: int | None = Field(default=None, alias="statusCode")
+    detail: str | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 

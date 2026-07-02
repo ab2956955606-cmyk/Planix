@@ -59,8 +59,10 @@ try {
 
     $env:RUST_BACKTRACE = "1"
     $BuildLog = Join-Path $Root "desktop-build-error.log"
-    npm.cmd run build 2>&1 | Tee-Object -FilePath $BuildLog
-    if ($LASTEXITCODE -ne 0) {
+    $BuildOutput = & npm.cmd run build 2>&1
+    $BuildExitCode = $LASTEXITCODE
+    $BuildOutput | Tee-Object -FilePath $BuildLog
+    if ($BuildExitCode -ne 0) {
         Write-Host "Tauri/Rust build failed. Full error log: $BuildLog" -ForegroundColor Red
         throw "npm run build failed for apps/desktop. See $BuildLog for details."
     }

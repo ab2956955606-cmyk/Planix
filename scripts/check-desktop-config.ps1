@@ -32,7 +32,7 @@ if ($Config.build.devUrl -ne "http://127.0.0.1:5173") {
     throw "Unexpected devUrl: $($Config.build.devUrl)"
 }
 
-if ($Config.build.frontendDist -ne "../../web/dist") {
+if ($Config.build.frontendDist -ne "resources") {
     throw "Unexpected frontendDist: $($Config.build.frontendDist)"
 }
 

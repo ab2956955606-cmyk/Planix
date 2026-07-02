@@ -64,6 +64,26 @@ const defaultSettings: AiSettings = {
   updatedAt: ''
 };
 
+function apiDetailToText(detail: unknown): string {
+  if (!detail) return '';
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && 'msg' in item) return String((item as { msg: unknown }).msg);
+        return '';
+      })
+      .filter(Boolean)
+      .join('; ');
+  }
+  if (typeof detail === 'object') {
+    const record = detail as Record<string, unknown>;
+    return apiDetailToText(record.detail ?? record.message);
+  }
+  return String(detail);
+}
+
 export function AIWorkspace(props: AIWorkspaceProps) {
   const { data, date, preferences, onPreferencesChange, onApplyTasks, onReplanApplied, t } = props;
   const [goal, setGoal] = useState('3 个月内拿到北京 AI 应用开发实习');
@@ -205,11 +225,39 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   }
 
   async function saveModelSettings() {
+    const baseUrl = settings.baseUrl.trim();
+    if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+      setSettingsStatus('Base URL 必须以 http:// 或 https:// 开头');
+      return;
+    }
+    try {
+      const parsed = new URL(baseUrl);
+      if (settings.provider === 'deepseek' && parsed.hostname === 'api.deepseek.com' && parsed.pathname !== '/') {
+        setSettingsStatus('DeepSeek Base URL 请填写 https://api.deepseek.com，不要包含 /v1 或 /chat/completions');
+        return;
+      }
+    } catch {
+      setSettingsStatus('Base URL 格式错误');
+      return;
+    }
+    if (!settings.model.trim()) {
+      setSettingsStatus('模型名称不能为空');
+      return;
+    }
+    if (settings.temperature < 0 || settings.temperature > 2) {
+      setSettingsStatus('温度范围必须在 0 到 2 之间');
+      return;
+    }
+    if (settings.timeoutSeconds < 5 || settings.timeoutSeconds > 120) {
+      setSettingsStatus('超时时间必须在 5 到 120 秒之间');
+      return;
+    }
+
     try {
       const saved = await saveAiSettings({
         provider: settings.provider,
-        baseUrl: settings.baseUrl,
-        model: settings.model,
+        baseUrl,
+        model: settings.model.trim(),
         apiKey: apiKey.trim() || undefined,
         temperature: settings.temperature,
         timeoutSeconds: settings.timeoutSeconds
@@ -221,9 +269,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       if (err instanceof ApiNetworkError) {
         setSettingsStatus('后端服务未启动');
       } else if (err instanceof ApiHttpError) {
-        const detail = err.detail as Record<string, unknown> | undefined;
-        // detail can be {detail: "..."} (FastAPI default) or {message: "..."}
-        const detailStr = detail?.detail ?? detail?.message ?? '';
+        const detailStr = apiDetailToText(err.detail);
         const detailDisplay = detailStr ? `: ${detailStr}` : '';
         if (err.status === 422) {
           setSettingsStatus(`设置字段格式错误${detailDisplay}`);
@@ -264,7 +310,8 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       if (err instanceof ApiNetworkError) {
         setSettingsStatus('后端服务未启动或连接失败，请确认后端已运行在 127.0.0.1:8000');
       } else if (err instanceof ApiHttpError) {
-        setSettingsStatus(`模型测试请求失败 (${err.status})`);
+        const detailText = apiDetailToText(err.detail);
+        setSettingsStatus(`模型测试请求失败 (${err.status})${detailText ? `: ${detailText}` : ''}`);
       } else {
         setSettingsStatus('请求后端失败，请重试');
       }
@@ -447,7 +494,8 @@ function ModelSettings(props: {
           <select value={settings.model} onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}>
             <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
             <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+            <option value="deepseek-chat">DeepSeek Chat (legacy)</option>
+            <option value="deepseek-reasoner">DeepSeek Reasoner (legacy)</option>
           </select>
         </label>
         <label>

@@ -127,8 +127,8 @@ export interface AiSettingsTestResult {
   ok: boolean;
   mode: 'mock' | 'llm' | 'error';
   message: string;
-  provider: string;
-  model: string;
+  provider?: string;
+  model?: string;
   errorType?: string;
   statusCode?: number;
   detail?: string;

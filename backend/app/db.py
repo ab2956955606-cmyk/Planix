@@ -79,7 +79,7 @@ def init_db(conn: sqlite3.Connection) -> None:
           id TEXT PRIMARY KEY,
           provider TEXT NOT NULL DEFAULT 'deepseek',
           base_url TEXT NOT NULL DEFAULT 'https://api.deepseek.com',
-          model TEXT NOT NULL DEFAULT 'deepseek-chat',
+          model TEXT NOT NULL DEFAULT 'deepseek-v4-flash',
           api_key_encrypted TEXT NOT NULL DEFAULT '',
           temperature REAL NOT NULL DEFAULT 0.3,
           timeout_seconds INTEGER NOT NULL DEFAULT 40,
