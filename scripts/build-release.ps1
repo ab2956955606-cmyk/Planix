@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.1.2",
+    [string]$Version = "1.1.4",
     [switch]$CreateGitHubRelease
 )
 
@@ -57,9 +57,12 @@ try {
 
     & (Join-Path $PSScriptRoot "check-packaging-toolchain.ps1")
 
-    npm.cmd run build
+    $env:RUST_BACKTRACE = "1"
+    $BuildLog = Join-Path $Root "desktop-build-error.log"
+    npm.cmd run build 2>&1 | Tee-Object -FilePath $BuildLog
     if ($LASTEXITCODE -ne 0) {
-        throw "npm run build failed for apps/desktop."
+        Write-Host "Tauri/Rust build failed. Full error log: $BuildLog" -ForegroundColor Red
+        throw "npm run build failed for apps/desktop. See $BuildLog for details."
     }
 }
 finally {
@@ -82,7 +85,10 @@ Write-Host "Release installer: $InstallerPath"
 Write-Host "SHA256 file: $HashPath"
 
 if ($CreateGitHubRelease) {
-    $NotesPath = Join-Path $Root "docs\release-v1.1.2.md"
+    $NotesPath = Join-Path $Root "docs\release-v$CleanVersion.md"
+    if (-not (Test-Path $NotesPath)) {
+        $NotesPath = Join-Path $Root "docs\release-v1.1.4.md"
+    }
     & (Join-Path $PSScriptRoot "check-packaging-toolchain.ps1") -RequireGitHubAuth
     $GhCommand = Get-Command "gh.exe" -ErrorAction SilentlyContinue
     if (-not $GhCommand) {

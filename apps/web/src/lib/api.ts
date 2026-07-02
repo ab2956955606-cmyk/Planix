@@ -25,6 +25,27 @@ const API_BASE =
   import.meta.env.VITE_API_BASE ??
   (import.meta.env.DEV ? '' : 'http://127.0.0.1:8000');
 
+/** Thrown when the fetch itself fails (network down, backend not running). */
+export class ApiNetworkError extends Error {
+  constructor() {
+    super('Network request failed — backend may be unreachable');
+    this.name = 'ApiNetworkError';
+  }
+}
+
+/** Thrown when the backend returns a non-2xx status. */
+export class ApiHttpError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(status: number, detail: unknown) {
+    super(`HTTP ${status}`);
+    this.name = 'ApiHttpError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 interface AiPayload {
   goal: string;
   deadline: string;
@@ -68,9 +89,17 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 5000
       headers: isFormData ? init.headers : { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
       signal: controller.signal
     });
-    if (!res.ok) throw new Error(`API ${res.status}`);
+    if (!res.ok) {
+      let detail: unknown = undefined;
+      try { detail = await res.json(); } catch { /* ignore parse errors */ }
+      throw new ApiHttpError(res.status, detail);
+    }
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
+  } catch (err) {
+    if (err instanceof ApiHttpError || err instanceof ApiNetworkError) throw err;
+    // AbortError / TypeError (e.g. Failed to fetch, ECONNREFUSED) → backend unreachable
+    throw new ApiNetworkError();
   } finally {
     window.clearTimeout(timer);
   }

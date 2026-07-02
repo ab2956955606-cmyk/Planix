@@ -131,4 +131,5 @@ export interface AiSettingsTestResult {
   model: string;
   errorType?: string;
   statusCode?: number;
+  detail?: string;
 }

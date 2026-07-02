@@ -173,6 +173,7 @@ class AiSettingsTestOut(BaseModel):
     model: str
     error_type: str = Field(default="", alias="errorType")
     status_code: int = Field(default=0, alias="statusCode")
+    detail: str = ""
 
     model_config = ConfigDict(populate_by_name=True)
 

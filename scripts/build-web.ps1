@@ -52,7 +52,11 @@ try {
     if (Test-Path $DesktopAssetsDir) {
         Remove-Item -LiteralPath $DesktopAssetsDir -Recurse -Force
     }
-    Copy-Item -LiteralPath (Join-Path $WebDir "dist\assets") -Destination $DesktopAssetsDir -Recurse -Force
+    # Copy built assets (may be a single dir or multiple)
+    $SourceAssetsDir = Join-Path $WebDir "dist\assets"
+    if (Test-Path $SourceAssetsDir) {
+        Copy-Item -LiteralPath $SourceAssetsDir -Destination $DesktopAssetsDir -Recurse -Force
+    }
 
     if (-not (Test-Path $DesktopIndexPath)) {
         throw "Desktop resource sync failed. Missing: $DesktopIndexPath"

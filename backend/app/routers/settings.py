@@ -1,20 +1,39 @@
-from fastapi import APIRouter
+import logging
+
+from fastapi import APIRouter, HTTPException
 
 from ..schemas import AiSettingsOut, AiSettingsTestOut, AiSettingsTestPayload, AiSettingsUpdate
 from ..services.ai_settings import get_public_ai_settings, save_ai_settings
 from ..services.llm import LlmClient
 
+logger = logging.getLogger("mynotes.api.settings")
 router = APIRouter(prefix="/api/ai", tags=["ai-settings"])
 
 
 @router.get("/settings", response_model=AiSettingsOut)
 def read_ai_settings() -> AiSettingsOut:
-    return get_public_ai_settings()
+    settings = get_public_ai_settings()
+    logger.info("GET /api/ai/settings -> provider=%s hasApiKey=%s", settings.provider, settings.has_api_key)
+    return settings
 
 
 @router.put("/settings", response_model=AiSettingsOut)
 def update_ai_settings(payload: AiSettingsUpdate) -> AiSettingsOut:
-    return save_ai_settings(payload)
+    has_key = bool(payload.api_key and payload.api_key.strip())
+    logger.info(
+        "PUT /api/ai/settings provider=%s base_url=%s model=%s hasApiKey=%s",
+        payload.provider,
+        payload.base_url,
+        payload.model,
+        has_key,
+    )
+    try:
+        result = save_ai_settings(payload)
+        logger.info("AI settings saved successfully")
+        return result
+    except Exception as exc:
+        logger.error("AI settings save failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"保存设置失败: {exc}") from exc
 
 
 @router.post("/test", response_model=AiSettingsTestOut)
@@ -59,4 +78,5 @@ def test_ai_settings(payload: AiSettingsTestPayload) -> AiSettingsTestOut:
         model=client.settings.model,
         error_type=err.error_type if err else "unknown",
         status_code=err.status_code if err else 0,
+        detail=err.detail if err else "",
     )

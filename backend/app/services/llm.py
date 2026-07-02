@@ -18,11 +18,34 @@ class LlmResult:
 class LlmError:
     message: str
     error_type: str  # auth_error | insufficient_balance | bad_model | bad_base_url | timeout | network_error | server_error | unknown
-    status_code: int
+    status_code: int = 0
+    detail: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "message": self.message,
+            "error_type": self.error_type,
+            "status_code": self.status_code,
+            "detail": self.detail,
+        }
 
 
-def _chat_completions_url(base_url: str) -> str:
+def _chat_completions_url(base_url: str, provider: str) -> str:
+    """Build the chat completions URL from base URL and provider.
+
+    DeepSeek:   https://api.deepseek.com        → /chat/completions
+    OpenAI:     https://api.openai.com/v1        → /chat/completions
+    OpenAI:     https://api.openai.com            → /v1/chat/completions
+    Custom:     whatever the user sets            → try /v1 first, avoid double-append
+    """
     cleaned = base_url.rstrip("/")
+    # Already includes the full path — use as-is
+    if cleaned.endswith("/chat/completions"):
+        return cleaned
+    # DeepSeek uses /chat/completions directly (no /v1 prefix)
+    if provider == "deepseek":
+        return f"{cleaned}/chat/completions"
+    # OpenAI-compatible default: append /v1/chat/completions
     if cleaned.endswith("/v1"):
         return f"{cleaned}/chat/completions"
     return f"{cleaned}/v1/chat/completions"
@@ -31,19 +54,19 @@ def _chat_completions_url(base_url: str) -> str:
 def _classify_http_error(status_code: int, body: str) -> LlmError:
     body_lower = body.lower() if body else ""
     if status_code == 401:
-        return LlmError("API Key 无效或已过期", "auth_error", status_code)
+        return LlmError("API Key 无效或已过期", "auth_error", status_code, detail=body[:200])
     if status_code == 402:
-        return LlmError("账户余额不足", "insufficient_balance", status_code)
+        return LlmError("账户余额不足", "insufficient_balance", status_code, detail=body[:200])
     if status_code in (400, 404, 422):
         if "model" in body_lower:
-            return LlmError("模型名不存在或不支持", "bad_model", status_code)
-        return LlmError("请求参数错误，请检查 Base URL 和模型名", "bad_request", status_code)
+            return LlmError("模型名不存在或不支持", "bad_model", status_code, detail=body[:200])
+        return LlmError("请求参数错误，请检查 Base URL 和模型名", "bad_request", status_code, detail=body[:200])
     if status_code == 429:
-        msg = body or "请求过于频繁，请稍后重试"
-        return LlmError(msg, "rate_limited", status_code)
+        msg = body[:200] or "请求过于频繁，请稍后重试"
+        return LlmError(msg, "rate_limited", status_code, detail=body[:200])
     if status_code >= 500:
-        return LlmError("模型服务端错误，请稍后重试", "server_error", status_code)
-    return LlmError(f"请求失败 (HTTP {status_code})", "unknown", status_code)
+        return LlmError("模型服务端错误，请稍后重试", "server_error", status_code, detail=body[:200])
+    return LlmError(f"请求失败 (HTTP {status_code})", "unknown", status_code, detail=body[:200])
 
 
 def record_ai_run(
@@ -101,7 +124,7 @@ class LlmClient:
         try:
             with httpx.Client(timeout=self.settings.timeout_seconds) as client:
                 response = client.post(
-                    _chat_completions_url(self.settings.base_url),
+                    _chat_completions_url(self.settings.base_url, self.settings.provider),
                     headers={"Authorization": f"Bearer {self.settings.api_key}"},
                     json=payload,
                 )

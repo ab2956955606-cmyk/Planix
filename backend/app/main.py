@@ -1,7 +1,12 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routers import agent, health, month_notes, planning, plans, preferences, rag, settings
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+logger = logging.getLogger("mynotes.api")
 
 
 def create_app() -> FastAPI:
@@ -33,6 +38,8 @@ def create_app() -> FastAPI:
     app.include_router(rag.router)
     app.include_router(preferences.router)
     app.include_router(settings.router)
+
+    logger.info("MyNotes AI API started")
     return app
 
 

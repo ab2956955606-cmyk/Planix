@@ -26,9 +26,10 @@ import type {
   RagSource
 } from '../types';
 import {
+  ApiHttpError,
+  ApiNetworkError,
   applyReplanTasks,
   askMaterials,
-  checkBackendHealth,
   createDailyReview,
   createGoalPlan,
   createRagDocument,
@@ -204,11 +205,6 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   }
 
   async function saveModelSettings() {
-    const backendUp = await checkBackendHealth();
-    if (!backendUp) {
-      setSettingsStatus('后端服务未启动，无法保存设置');
-      return;
-    }
     try {
       const saved = await saveAiSettings({
         provider: settings.provider,
@@ -221,19 +217,28 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       setSettings(saved);
       setApiKey('');
       setSettingsStatus(t('settingsSaved'));
-    } catch {
-      setSettingsStatus(t('settingsError'));
+    } catch (err) {
+      if (err instanceof ApiNetworkError) {
+        setSettingsStatus('后端服务未启动');
+      } else if (err instanceof ApiHttpError) {
+        const detail = err.detail as Record<string, unknown> | undefined;
+        // detail can be {detail: "..."} (FastAPI default) or {message: "..."}
+        const detailStr = detail?.detail ?? detail?.message ?? '';
+        const detailDisplay = detailStr ? `: ${detailStr}` : '';
+        if (err.status === 422) {
+          setSettingsStatus(`设置字段格式错误${detailDisplay}`);
+        } else if (err.status === 500) {
+          setSettingsStatus(`后端保存设置失败${detailDisplay}`);
+        } else {
+          setSettingsStatus(`保存设置失败 (${err.status})${detailDisplay}`);
+        }
+      } else {
+        setSettingsStatus(t('settingsError'));
+      }
     }
   }
 
   async function testModel() {
-    // First check if backend is reachable
-    const backendUp = await checkBackendHealth();
-    if (!backendUp) {
-      setSettingsStatus('后端服务未启动或连接失败，请确认后端已运行在 127.0.0.1:8000');
-      return;
-    }
-
     try {
       const test = await testAiSettings();
       if (test.ok) {
@@ -256,7 +261,13 @@ export function AIWorkspace(props: AIWorkspaceProps) {
         setSettingsStatus(errorMessages[errorType] || test.message || '模型测试失败，请检查设置');
       }
     } catch (err) {
-      setSettingsStatus('请求后端失败，请重试');
+      if (err instanceof ApiNetworkError) {
+        setSettingsStatus('后端服务未启动或连接失败，请确认后端已运行在 127.0.0.1:8000');
+      } else if (err instanceof ApiHttpError) {
+        setSettingsStatus(`模型测试请求失败 (${err.status})`);
+      } else {
+        setSettingsStatus('请求后端失败，请重试');
+      }
     }
   }
 

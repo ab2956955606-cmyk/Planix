@@ -1,6 +1,6 @@
 [package]
 name = "mynotes-ai-desktop"
-version = "1.1.2"
+version = "1.1.4"
 description = "MyNotes AI desktop shell"
 authors = ["MyNotes AI"]
 edition = "2021"
@@ -11,4 +11,4 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
