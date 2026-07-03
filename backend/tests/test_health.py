@@ -5,3 +5,35 @@ def test_health_endpoint(client):
         assert body["app"] == "mynotes-api"
         assert isinstance(body["pid"], int)
         assert body["version"] == "1.1.4"
+
+
+def test_cors_allows_local_frontend_origins(client):
+    allowed_origins = [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+    ]
+    for origin in allowed_origins:
+        response = client.options(
+            "/api/health",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_cors_rejects_untrusted_origins(client):
+    response = client.options(
+        "/api/health",
+        headers={
+            "Origin": "https://example.com",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers

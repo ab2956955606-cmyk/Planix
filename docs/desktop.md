@@ -163,7 +163,7 @@ The project also includes `.github/workflows/desktop-release.yml`. Pushing a `v*
 - Confirm the web UI loads.
 - Confirm the FastAPI sidecar responds on `/api/health`.
 - Try calendar, goal planning, RAG query, TXT/MD material flow, and planner evaluation.
-- Close the app and confirm the `mynotes-api` sidecar process exits.
+- Close the app and confirm every `mynotes-api` sidecar process exits, including the PyInstaller parent/child process tree.
 
 Run the installed-app smoke test:
 

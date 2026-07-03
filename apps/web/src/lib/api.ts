@@ -233,8 +233,49 @@ export async function createRagDocument(payload: RagDocumentInput): Promise<RagD
   return callApi<RagDocument>('POST', '/api/rag/documents', payload, 45000);
 }
 
+function validateUploadFile(file: File): void {
+  const lowerName = file.name.toLowerCase();
+  if (!lowerName.endsWith('.txt') && !lowerName.endsWith('.md')) {
+    throw new ApiHttpError(400, { detail: 'Only .txt and .md files are supported.' });
+  }
+  if (file.size <= 0) {
+    throw new ApiHttpError(400, { detail: 'File cannot be empty.' });
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    throw new ApiHttpError(400, { detail: 'File must be 5MB or smaller.' });
+  }
+}
+
+function fallbackTitleFromFile(file: File): string {
+  return file.name.replace(/\.[^/.]+$/, '') || 'Uploaded material';
+}
+
+async function readUploadText(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  for (const encoding of ['utf-8', 'gb18030']) {
+    try {
+      return new TextDecoder(encoding, { fatal: true }).decode(buffer);
+    } catch {
+      /* try the next text encoding */
+    }
+  }
+  throw new ApiHttpError(400, { detail: 'File must be valid UTF-8 or GB18030 text.' });
+}
+
 export async function uploadRagDocument(file: File, title?: string): Promise<RagDocument> {
-  // File uploads still use fetch() since they need FormData
+  validateUploadFile(file);
+  if (isTauri) {
+    const content = (await readUploadText(file)).trim();
+    if (!content) {
+      throw new ApiHttpError(400, { detail: 'File cannot be empty.' });
+    }
+    return createRagDocument({
+      title: title?.trim() || fallbackTitleFromFile(file),
+      content,
+      sourceType: 'upload',
+    });
+  }
+
   const form = new FormData();
   form.append('file', file);
   if (title?.trim()) form.append('title', title.trim());

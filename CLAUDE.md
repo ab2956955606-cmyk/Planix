@@ -47,6 +47,7 @@ The frontend uses Tauri IPC for desktop API calls so WebView2 does not block loc
 - `backend/app/services/llm.py`: OpenAI-compatible LLM client
 - `backend/app/services/rag.py`: FTS5/BM25 RAG service
 - `backend/app/services/planning.py`: goal plan, review, and replan apply logic
+- Missing `GET /api/planning/daily-review?date=...` results should return an empty `mode='saved'` object, not HTTP 404.
 
 ## Verify
 
@@ -83,6 +84,7 @@ Release:
 ```powershell
 .\scripts\build-release.ps1 -Version 1.1.4
 .\scripts\smoke-test-installed.ps1
+.\scripts\verify-msi-user-path.ps1 -InstalledDir "H:\mynotes"
 ```
 
 Note: in restricted sandbox environments, Vite/esbuild may fail to read `vite.config.ts` even when TypeScript and lint pass. Report that as an environment limitation, not as a code failure.
@@ -93,19 +95,26 @@ Note: in restricted sandbox environments, Vite/esbuild may fail to read `vite.co
 - Recommended DeepSeek base URL: `https://api.deepseek.com`.
 - DeepSeek chat endpoint must resolve to `/chat/completions`, not `/v1/chat/completions`.
 - `GET /api/ai/settings` returns `hasApiKey`, never the full key.
+- A blank API key in `PUT /api/ai/settings` clears the stored key; do not silently preserve stale cached keys.
+- Once a local AI settings row exists, blank or legacy cached keys must report `hasApiKey=false` and must not fall back to environment variables.
+- Only a freshly user-saved key should be marked as configured in local storage.
 - Do not commit real keys, `.env`, logs, DB files, MSI temp output, or caches.
 - Real DeepSeek testing belongs in `scripts/test-deepseek-real.ps1` and requires explicit local env vars.
 - Unit tests and CI must remain mock/stable.
+- DeepSeek v4/reasoning-style models require enough output budget for even small smoke tests; tiny `max_tokens` values can produce empty content.
+- Treat empty LLM message content as an error and fall back/report clearly instead of marking the call successful.
 
 ## Desktop Rules
 
 - Bundled frontend resource: `apps/desktop/src-tauri/resources/index.html`.
 - Bundled sidecar resource: `apps/desktop/src-tauri/resources/binaries/mynotes-api.exe`.
 - Tauri preflights `http://127.0.0.1:8000/api/health`.
+- Tauri IPC command `proxy_api` must read `MYNOTES_API_PORT`, not hard-code a divergent frontend API port.
+- Desktop TXT/MD upload must avoid direct `fetch()` to `127.0.0.1`; read file text and write through the JSON RAG API over `proxy_api`.
 - A valid health response includes `status`, `app`, `pid`, and `version`.
 - If MyNotes API is already running, skip spawning a new sidecar.
 - If another app owns port `8000`, show/log a clear conflict.
-- Only kill the sidecar process spawned by the current Tauri process.
+- Only kill the sidecar process spawned by the current Tauri process, but close/destroy events must kill its full Windows process tree so PyInstaller parent/child processes do not remain.
 
 ## Documentation Maintenance
 

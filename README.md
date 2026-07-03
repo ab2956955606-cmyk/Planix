@@ -134,6 +134,7 @@ scripts/
   build-backend.ps1
   build-release.ps1
   smoke-test-installed.ps1
+  verify-msi-user-path.ps1
   test-deepseek-real.ps1
 docs/
   architecture.md
@@ -191,6 +192,8 @@ H:\mynotes\
 
 Normal users only install the MSI and open `MyNotes AI`. They should not install Node/Python/Rust, run `mynotes-api.exe` manually, or set `MYNOTES_SKIP_SIDECAR`.
 
+In the MSI build, frontend API calls go through the Tauri `proxy_api` IPC command. This avoids WebView2 mixed-content blocking and keeps production access independent from browser CORS. TXT/MD uploads also use the JSON RAG API through this proxy in desktop mode.
+
 Build a release package:
 
 ```powershell
@@ -228,7 +231,9 @@ It must not produce:
 https://api.deepseek.com/v1/chat/completions
 ```
 
-API keys are saved locally but never returned by `GET /api/ai/settings`; the public response only exposes `hasApiKey`. Logs must never include a full key.
+API keys are saved locally but never returned by `GET /api/ai/settings`; the public response only exposes `hasApiKey`. Saving settings with a blank key clears the stored key. Empty or legacy cached keys never fall back to environment variables and do not count as configured; re-enter the key once after upgrading if you intentionally saved one before this fix. Logs must never include a full key.
+
+DeepSeek v4/reasoning-style models need enough output budget even for connection tests. Empty LLM message content is treated as an error, not a successful response, so the app can fall back or show a clear failure instead of silently saving a false success state.
 
 Manual real DeepSeek test:
 
@@ -273,6 +278,7 @@ Full release:
 ```powershell
 .\scripts\build-release.ps1 -Version 1.1.4
 .\scripts\smoke-test-installed.ps1
+.\scripts\verify-msi-user-path.ps1 -InstalledDir "H:\mynotes"
 ```
 
 In restricted sandbox environments, Vite/esbuild can fail to read `vite.config.ts` even when `lint` and `tsc -b` pass. Run the build from a normal PowerShell terminal if that happens.
@@ -294,7 +300,7 @@ In restricted sandbox environments, Vite/esbuild can fail to read `vite.config.t
 | `POST /api/ai/test` | Test mock or configured model |
 | `POST /api/planning/goal-plan` | Generate and persist goal plan |
 | `POST /api/planning/daily-review` | Generate and persist daily review |
-| `GET /api/planning/daily-review` | Read saved daily review |
+| `GET /api/planning/daily-review` | Read saved daily review or an empty saved state |
 | `POST /api/planning/replan/apply` | Apply replan preview tasks |
 | `POST /api/rag/documents` | Save pasted material |
 | `POST /api/rag/documents/upload` | Upload TXT/MD material |

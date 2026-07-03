@@ -49,11 +49,10 @@ class PlannerAgent:
         llm_result, _ = LlmClient().complete(
             "planner_plan",
             (
-                "You are an AI study and internship planning agent. "
-                "Return strict JSON only with keys: summary, phases, tasks. "
-                "phases is an array of {title, detail}. "
-                "tasks is an array of {time, title, reason}. "
-                "Use practical, specific, time-aware plans."
+                "You are an AI study and internship planning agent. Return only valid JSON, no markdown. "
+                'Required shape: {"summary":"...","phases":[{"title":"...","detail":"..."}],'
+                '"tasks":[{"time":"HH:MM","title":"...","reason":"..."}]}. '
+                "Use exactly 3 phases and exactly 3 tasks. Do not nest tasks inside phases."
             ),
             json.dumps(
                 {
@@ -66,6 +65,8 @@ class PlannerAgent:
                 },
                 ensure_ascii=False,
             ),
+            max_tokens=2400,
+            temperature=0.2,
         )
         if llm_result:
             parsed = _json_object(llm_result.content)
@@ -86,8 +87,9 @@ class PlannerAgent:
         llm_result, _ = LlmClient().complete(
             "planner_review",
             (
-                "You are an AI daily review assistant. Return strict JSON only "
-                "with keys: summary and suggestions. suggestions is an array of short strings."
+                "You are an AI daily review assistant. Return only valid JSON, no markdown. "
+                'Required shape: {"summary":"...","suggestions":["..."]}. '
+                "Use at most 4 short suggestions."
             ),
             json.dumps(
                 {
@@ -99,6 +101,8 @@ class PlannerAgent:
                 },
                 ensure_ascii=False,
             ),
+            max_tokens=1200,
+            temperature=0.2,
         )
         if llm_result:
             parsed = _json_object(llm_result.content)

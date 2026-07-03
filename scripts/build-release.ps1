@@ -59,7 +59,7 @@ try {
 
     $env:RUST_BACKTRACE = "1"
     $BuildLog = Join-Path $Root "desktop-build-error.log"
-    $BuildOutput = & npm.cmd run build 2>&1
+    $BuildOutput = & cmd.exe /d /s /c "npm.cmd run build 2>&1"
     $BuildExitCode = $LASTEXITCODE
     $BuildOutput | Tee-Object -FilePath $BuildLog
     if ($BuildExitCode -ne 0) {

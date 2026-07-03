@@ -91,6 +91,20 @@ def test_daily_review_creates_replan_preview_without_writing_plans(client):
     assert saved.json()["mode"] == "saved"
 
 
+def test_missing_daily_review_returns_empty_saved_state(client):
+    response = client.get("/api/planning/daily-review", params={"date": "2026-07-03"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "saved"
+    assert body["date"] == "2026-07-03"
+    assert body["summary"] == ""
+    assert body["suggestions"] == []
+    assert body["doneCount"] == 0
+    assert body["totalCount"] == 0
+    assert body["targetDate"] == "2026-07-04"
+    assert body["replanTasks"] == []
+
+
 def test_replan_apply_writes_ai_plans(client):
     response = client.post(
         "/api/planning/replan/apply",

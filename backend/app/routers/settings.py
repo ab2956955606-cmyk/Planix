@@ -97,7 +97,7 @@ def test_ai_settings(payload: AiSettingsTestPayload) -> AiSettingsTestOut:
         "settings_test",
         "You are a concise health-check assistant. Reply in one short sentence.",
         payload.prompt,
-        max_tokens=32,
+        max_tokens=512,
         temperature=0.1,
     )
     if result:

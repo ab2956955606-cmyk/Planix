@@ -225,6 +225,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   }
 
   async function saveModelSettings() {
+    setSettingsStatus('');
     const baseUrl = settings.baseUrl.trim();
     if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
       setSettingsStatus('Base URL 必须以 http:// 或 https:// 开头');
@@ -258,7 +259,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
         provider: settings.provider,
         baseUrl,
         model: settings.model.trim(),
-        apiKey: apiKey.trim() || undefined,
+        apiKey: apiKey.trim(),
         temperature: settings.temperature,
         timeoutSeconds: settings.timeoutSeconds
       });
@@ -336,6 +337,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
         settingsStatus={settingsStatus}
         setSettings={setSettings}
         setApiKey={setApiKey}
+        clearSettingsStatus={() => setSettingsStatus('')}
         saveModelSettings={saveModelSettings}
         testModel={testModel}
         t={t}
@@ -464,21 +466,32 @@ function ModelSettings(props: {
   settingsStatus: string;
   setSettings: (updater: (settings: AiSettings) => AiSettings) => void;
   setApiKey: (value: string) => void;
+  clearSettingsStatus: () => void;
   saveModelSettings: () => void;
   testModel: () => void;
   t: (key: string) => string;
 }) {
-  const { settings, apiKey, settingsStatus, setSettings, setApiKey, saveModelSettings, testModel, t } = props;
+  const { settings, apiKey, settingsStatus, setSettings, setApiKey, clearSettingsStatus, saveModelSettings, testModel, t } = props;
+  const hasConfiguredKey = settings.provider !== 'mock' && settings.hasApiKey;
+  const updateSettings = (updater: (settings: AiSettings) => AiSettings) => {
+    clearSettingsStatus();
+    setSettings(updater);
+  };
+  const updateApiKey = (value: string) => {
+    clearSettingsStatus();
+    setApiKey(value);
+  };
+
   return (
     <div className="model-settings">
       <div className="settings-title">
         <span><Settings size={15} />{t('aiSettings')}</span>
-        <strong>{settings.hasApiKey ? t('hasKey') : t('noKey')}</strong>
+        <strong>{hasConfiguredKey ? t('hasKey') : t('noKey')}</strong>
       </div>
       <div className="settings-grid">
         <label>
           <span>{t('provider')}</span>
-          <select value={settings.provider} onChange={(event) => setSettings((current) => ({ ...current, provider: event.target.value as AiSettings['provider'] }))}>
+          <select value={settings.provider} onChange={(event) => updateSettings((current) => ({ ...current, provider: event.target.value as AiSettings['provider'] }))}>
             <option value="deepseek">DeepSeek</option>
             <option value="openai">OpenAI</option>
             <option value="custom">Custom</option>
@@ -487,11 +500,11 @@ function ModelSettings(props: {
         </label>
         <label>
           <span>{t('baseUrl')}</span>
-          <input value={settings.baseUrl} onChange={(event) => setSettings((current) => ({ ...current, baseUrl: event.target.value }))} />
+          <input value={settings.baseUrl} onChange={(event) => updateSettings((current) => ({ ...current, baseUrl: event.target.value }))} />
         </label>
         <label>
           <span>{t('model')}</span>
-          <select value={settings.model} onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}>
+          <select value={settings.model} onChange={(event) => updateSettings((current) => ({ ...current, model: event.target.value }))}>
             <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
             <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
             <option value="deepseek-chat">DeepSeek Chat (legacy)</option>
@@ -500,15 +513,15 @@ function ModelSettings(props: {
         </label>
         <label>
           <span><KeyRound size={13} />{t('apiKey')}</span>
-          <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={t('apiKeyPlaceholder')} />
+          <input type="password" value={apiKey} onChange={(event) => updateApiKey(event.target.value)} placeholder={t('apiKeyPlaceholder')} />
         </label>
         <label>
           <span>{t('temperature')}</span>
-          <input type="number" min={0} max={2} step={0.1} value={settings.temperature} onChange={(event) => setSettings((current) => ({ ...current, temperature: Number(event.target.value) }))} />
+          <input type="number" min={0} max={2} step={0.1} value={settings.temperature} onChange={(event) => updateSettings((current) => ({ ...current, temperature: Number(event.target.value) }))} />
         </label>
         <label>
           <span>{t('timeout')}</span>
-          <input type="number" min={5} max={120} value={settings.timeoutSeconds} onChange={(event) => setSettings((current) => ({ ...current, timeoutSeconds: Number(event.target.value) }))} />
+          <input type="number" min={5} max={120} value={settings.timeoutSeconds} onChange={(event) => updateSettings((current) => ({ ...current, timeoutSeconds: Number(event.target.value) }))} />
         </label>
       </div>
       <div className="settings-actions">

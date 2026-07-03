@@ -11,6 +11,8 @@ This release focuses on desktop runtime stability and safe DeepSeek settings.
 - Standardized DeepSeek defaults to `https://api.deepseek.com` and `deepseek-v4-flash`.
 - Kept real LLM calls disabled unless `USE_REAL_LLM=1` is explicitly set.
 - Improved AI settings save/test errors without exposing API keys.
+- Treated empty LLM message content as an error and raised token budgets for DeepSeek v4/reasoning-style smoke tests and planning calls.
+- Ensured closing the Tauri window terminates the spawned `mynotes-api` Windows process tree.
 
 ## Assets
 

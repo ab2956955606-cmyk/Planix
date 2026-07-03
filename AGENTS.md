@@ -40,11 +40,12 @@ Current version baseline: `1.1.4`.
 - Month notes: save monthly notes locally and through the backend.
 - Goal planning: generate phases and today tasks from a long-term goal.
 - Daily review: summarize completed/unfinished tasks and preview replanning.
+- Daily review lookup: missing dates return an empty `mode='saved'` state, not HTTP 404.
 - Replan apply: AI suggestions are previews until the user confirms.
 - Knowledge base: paste or upload TXT/MD material into SQLite-backed RAG.
 - RAG query: retrieve FTS5/BM25-ranked chunks with citations.
 - Planner evaluation: deterministic six-dimension scoring without LLM calls.
-- AI settings: save provider, base URL, model, key, temperature, and timeout safely.
+- AI settings: save provider, base URL, model, key, temperature, and timeout safely. Blank API key input must clear the stored key instead of preserving stale cache.
 - Desktop MSI: normal users run `mynotes.exe`; they do not manually run `mynotes-api.exe`.
 
 ## Commands
@@ -86,6 +87,7 @@ Release:
 ```powershell
 .\scripts\build-release.ps1 -Version 1.1.4
 .\scripts\smoke-test-installed.ps1
+.\scripts\verify-msi-user-path.ps1 -InstalledDir "H:\mynotes"
 ```
 
 Manual real DeepSeek test, only when explicitly intended:
@@ -100,14 +102,21 @@ $env:USE_REAL_LLM="1"
 
 - Never commit `.env`, real API keys, database files, logs, build caches, `node_modules`, `.venv`, or generated temporary artifacts.
 - `GET /api/ai/settings` must never return a full API key.
+- `hasApiKey` must come from a real user-saved key or an explicit environment key before local settings exist; legacy cached keys must not count as configured.
+- Existing local AI settings rows with blank or legacy keys must not fall back to environment variables.
+- Saving AI settings with a blank key intentionally clears the stored key.
 - Logs may record provider, model, sanitized base URL, key presence, and masked key only.
 - Do not print `Authorization` headers or full key values.
 - Real LLM calls must never run in CI, unit tests, loops, or broad smoke tests.
+- DeepSeek v4/reasoning-style models need a practical token budget; connection tests and planning calls should not use tiny `max_tokens` values.
+- Empty LLM message content is a failure state, not a successful AI response. Fall back or report a clear error instead of showing a fake success.
 - Keep mock fallback demoable without paid credentials.
 
 ## Desktop Runtime Rules
 
 - Production frontend resources live under `apps/desktop/src-tauri/resources`.
+- Desktop API calls must go through `proxy_api`; direct browser fetch is only for Vite dev mode.
+- TXT/MD upload in desktop mode reads local text in the frontend and writes it through the JSON RAG API so WebView2 never has to fetch `http://127.0.0.1:8000` directly.
 - Installed layout is expected to include:
 
 ```text
@@ -122,6 +131,7 @@ resources/
 - Tauri must check `/api/health` before starting the sidecar.
 - If a MyNotes API is already running, reuse it and do not kill it on exit.
 - If port `8000` is used by a non-MyNotes process, show a clear local error and log the conflict.
+- When Tauri spawns the sidecar itself, closing or destroying the window must terminate the spawned `mynotes-api` process tree so no parent/child sidecar process remains.
 - Desktop logs belong under `%APPDATA%\MyNotes AI\logs\desktop.log`.
 - Desktop SQLite data belongs under `%APPDATA%\MyNotes AI\mynotes.db` unless `MYNOTES_DB_PATH` overrides it.
 

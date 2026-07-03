@@ -7,10 +7,14 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{path::BaseDirectory, Manager};
+use tauri::{path::BaseDirectory, Manager, WindowEvent};
 
 const DESKTOP_LOG_MAX_BYTES: u64 = 1_000_000;
 const API_PORT: &str = "8000";
+
+fn api_port() -> String {
+    std::env::var("MYNOTES_API_PORT").unwrap_or_else(|_| API_PORT.to_string())
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Tauri IPC proxy command — routes frontend HTTP requests through
@@ -33,7 +37,7 @@ struct ProxyResponse {
 
 #[tauri::command]
 fn proxy_api(req: ProxyRequest) -> Result<ProxyResponse, String> {
-    let url = format!("http://127.0.0.1:{}{}", API_PORT, req.path);
+    let url = format!("http://127.0.0.1:{}{}", api_port(), req.path);
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(45))
         .build()
@@ -69,9 +73,13 @@ fn proxy_api(req: ProxyRequest) -> Result<ProxyResponse, String> {
         other => return Err(format!("unsupported method: {other}")),
     };
 
-    let resp = resp.send().map_err(|e| format!("proxy request failed: {e}"))?;
+    let resp = resp
+        .send()
+        .map_err(|e| format!("proxy request failed: {e}"))?;
     let status = resp.status().as_u16();
-    let body = resp.text().map_err(|e| format!("reading response body: {e}"))?;
+    let body = resp
+        .text()
+        .map_err(|e| format!("reading response body: {e}"))?;
 
     Ok(ProxyResponse { status, body })
 }
@@ -84,13 +92,31 @@ fn proxy_api(req: ProxyRequest) -> Result<ProxyResponse, String> {
 /// Drop kills the child only if WE spawned it.
 struct ApiSidecar(Mutex<Option<Child>>);
 
-impl Drop for ApiSidecar {
-    fn drop(&mut self) {
+impl ApiSidecar {
+    fn kill(&self) {
         if let Ok(mut child) = self.0.lock() {
             if let Some(mut child) = child.take() {
+                let pid = child.id();
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", &pid.to_string(), "/T", "/F"])
+                        .creation_flags(0x08000000)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
                 let _ = child.kill();
+                let _ = child.wait();
             }
         }
+    }
+}
+
+impl Drop for ApiSidecar {
+    fn drop(&mut self) {
+        self.kill();
     }
 }
 
@@ -111,7 +137,9 @@ fn ensure_single_instance(log: &PathBuf) -> Result<(), Box<dyn std::error::Error
 
     let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
     if handle.is_null() {
-        let msg = format!("CreateMutexW failed: last_error={}", unsafe { GetLastError() });
+        let msg = format!("CreateMutexW failed: last_error={}", unsafe {
+            GetLastError()
+        });
         write_log(log, &msg);
         return Err(msg.into());
     }
@@ -381,6 +409,13 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![proxy_api])
+        .on_window_event(|window, event| {
+            if matches!(event, WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed) {
+                if let Some(sidecar) = window.try_state::<ApiSidecar>() {
+                    sidecar.kill();
+                }
+            }
+        })
         .setup(|app| {
             let log_path = log_path();
             write_log(&log_path, "setup started");
@@ -427,7 +462,7 @@ fn main() {
                 return Ok(());
             }
 
-            let port = std::env::var("MYNOTES_API_PORT").unwrap_or_else(|_| "8000".to_string());
+            let port = api_port();
             write_log(&log_path, format!("MYNOTES_API_PORT={port}"));
 
             let already_running = match get_api_health(&port) {

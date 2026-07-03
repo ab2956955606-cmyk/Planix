@@ -81,6 +81,7 @@ def init_db(conn: sqlite3.Connection) -> None:
           base_url TEXT NOT NULL DEFAULT 'https://api.deepseek.com',
           model TEXT NOT NULL DEFAULT 'deepseek-v4-flash',
           api_key_encrypted TEXT NOT NULL DEFAULT '',
+          api_key_source TEXT NOT NULL DEFAULT '',
           temperature REAL NOT NULL DEFAULT 0.3,
           timeout_seconds INTEGER NOT NULL DEFAULT 40,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -139,6 +140,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     ensure_column(conn, "ai_settings", "temperature", "REAL NOT NULL DEFAULT 0.3")
     ensure_column(conn, "ai_settings", "timeout_seconds", "INTEGER NOT NULL DEFAULT 40")
+    ensure_column(conn, "ai_settings", "api_key_source", "TEXT NOT NULL DEFAULT 'legacy'")
     ensure_column(conn, "daily_reviews", "done_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "daily_reviews", "total_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "daily_reviews", "suggestions_json", "TEXT NOT NULL DEFAULT '[]'")

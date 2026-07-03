@@ -42,11 +42,12 @@ def _env_api_key() -> str:
 
 def _row_to_effective(row) -> EffectiveAiSettings:
     if row:
+        api_key = row["api_key_encrypted"] if row["api_key_source"] == "user" else ""
         return EffectiveAiSettings(
             provider=row["provider"],
             base_url=row["base_url"],
             model=row["model"],
-            api_key=row["api_key_encrypted"] or _env_api_key(),
+            api_key=api_key,
             temperature=float(row["temperature"]),
             timeout_seconds=int(row["timeout_seconds"]),
             updated_at=row["updated_at"],
@@ -85,22 +86,23 @@ def get_public_ai_settings() -> AiSettingsOut:
 
 
 def save_ai_settings(payload: AiSettingsUpdate) -> AiSettingsOut:
-    current = get_effective_ai_settings()
-    api_key = current.api_key if payload.api_key is None else payload.api_key.strip()
+    api_key = "" if payload.provider == "mock" or payload.api_key is None else payload.api_key.strip()
+    api_key_source = "user" if api_key else ""
     with get_conn() as conn:
         row = conn.execute(
             """
             INSERT INTO ai_settings(
-              id, provider, base_url, model, api_key_encrypted,
+              id, provider, base_url, model, api_key_encrypted, api_key_source,
               temperature, timeout_seconds, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id)
             DO UPDATE SET
               provider = excluded.provider,
               base_url = excluded.base_url,
               model = excluded.model,
               api_key_encrypted = excluded.api_key_encrypted,
+              api_key_source = excluded.api_key_source,
               temperature = excluded.temperature,
               timeout_seconds = excluded.timeout_seconds,
               updated_at = CURRENT_TIMESTAMP
@@ -112,6 +114,7 @@ def save_ai_settings(payload: AiSettingsUpdate) -> AiSettingsOut:
                 payload.base_url.strip().rstrip("/") or "https://api.deepseek.com",
                 payload.model.strip() or "deepseek-v4-flash",
                 api_key,
+                api_key_source,
                 payload.temperature,
                 payload.timeout_seconds,
             ),

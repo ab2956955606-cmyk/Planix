@@ -22,6 +22,8 @@ coverage/
 
 # Backend
 .env
+.env.local
+.env.*.local
 .venv/
 venv/
 __pycache__/

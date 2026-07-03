@@ -15,19 +15,22 @@ logger = logging.getLogger("mynotes.api")
 def create_app() -> FastAPI:
     app = FastAPI(title="MyNotes AI API", version=APP_VERSION)
 
-    #
-    # CORS: desktop Tauri webview origin (https://tauri.localhost / tauri://localhost)
-    # and Vite dev-server origins. Binding to 127.0.0.1 means only local processes
-    # can reach the API, so allowing all origins is safe — no external access.
-    #
+    allowed_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+    ]
+
+    # Scope CORS to local Vite dev/preview and Tauri/WebView2 origins. Desktop
+    # production requests normally go through the Rust IPC proxy, but keeping
+    # these origins listed makes local diagnostics work without using "*".
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "https://tauri.localhost",
-            "tauri://localhost",
-        ],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

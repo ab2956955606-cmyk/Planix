@@ -118,7 +118,7 @@ export interface AiSettingsInput {
   provider: AiSettings['provider'];
   baseUrl: string;
   model: string;
-  apiKey?: string;
+  apiKey: string;
   temperature: number;
   timeoutSeconds: number;
 }

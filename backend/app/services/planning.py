@@ -4,7 +4,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from ..db import get_conn, load_memory
-from ..errors import bad_request, not_found
+from ..errors import bad_request
 from ..schemas import (
     DailyReviewOut,
     DailyReviewRequest,
@@ -124,10 +124,12 @@ class PlanningService:
         llm_result, _ = LlmClient().complete(
             "planning_goal_plan",
             (
-                "You are an AI planning agent. Return strict JSON only with keys "
-                "summary, phases and tasks. phases is [{title, detail}], "
-                "tasks is [{time, title, reason}] for the given date. "
-                "Use retrievedSources when available and make the plan grounded in those materials."
+                "You are an AI planning agent. Return only valid JSON, no markdown. "
+                'Required shape: {"summary":"...","phases":[{"title":"...","detail":"..."}],'
+                '"tasks":[{"time":"HH:MM","title":"...","reason":"..."}]}. '
+                "Use exactly 3 phases and exactly 3 tasks for the given date. "
+                "Do not nest tasks inside phases. Do not add keys outside summary, phases, tasks. "
+                "Use retrievedSources when available and keep each field concise."
             ),
             _dump(
                 {
@@ -140,6 +142,8 @@ class PlanningService:
                     "date": payload.date,
                 }
             ),
+            max_tokens=2400,
+            temperature=0.2,
         )
 
         mode = "mock"
@@ -206,9 +210,11 @@ class PlanningService:
         llm_result, _ = LlmClient().complete(
             "planning_daily_review",
             (
-                "You are an AI daily review and replanning assistant. Return strict JSON only "
-                "with keys summary, suggestions, replanTasks. replanTasks is "
-                "[{targetDate, time, title, reason, sourcePlanId}] and should not modify data directly."
+                "You are an AI daily review and replanning assistant. Return only valid JSON, no markdown. "
+                'Required shape: {"summary":"...","suggestions":["..."],'
+                '"replanTasks":[{"targetDate":"YYYY-MM-DD","time":"HH:MM","title":"...","reason":"...",'
+                '"sourcePlanId":"..."}]}. '
+                "Use at most 4 suggestions and at most 4 replanTasks. Do not modify data directly."
             ),
             _dump(
                 {
@@ -222,6 +228,8 @@ class PlanningService:
                     "preferences": payload.preferences or load_memory(),
                 }
             ),
+            max_tokens=1800,
+            temperature=0.2,
         )
 
         mode = "mock"
@@ -282,7 +290,18 @@ class PlanningService:
         with get_conn() as conn:
             row = conn.execute("SELECT * FROM daily_reviews WHERE date = ?", (normalized_date,)).fetchone()
         if not row:
-            raise not_found("daily review does not exist")
+            return DailyReviewOut(
+                id="",
+                mode="saved",
+                date=normalized_date,
+                summary="",
+                suggestions=[],
+                doneCount=0,
+                totalCount=0,
+                targetDate=_next_day(normalized_date),
+                replanTasks=[],
+                updatedAt="",
+            )
         return self._row_to_daily_review(row, mode="saved")
 
     def apply_replan(self, payload: ReplanApplyRequest) -> list[PlanOut]:
