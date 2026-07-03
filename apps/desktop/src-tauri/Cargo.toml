@@ -1,8 +1,8 @@
 [package]
-name = "mynotes-ai-desktop"
+name = "planix-desktop"
 version = "1.1.4"
-description = "MyNotes AI desktop shell"
-authors = ["MyNotes AI"]
+description = "Planix desktop shell"
+authors = ["Planix"]
 edition = "2021"
 
 [build-dependencies]

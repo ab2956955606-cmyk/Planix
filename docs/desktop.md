@@ -1,4 +1,4 @@
-﻿# MyNotes AI Desktop Packaging Notes
+# Planix Desktop Packaging Notes
 
 Phase 8 turns the desktop scaffold into a Windows installer that normal users can install and run without a developer toolchain.
 
@@ -8,39 +8,39 @@ Phase 8 turns the desktop scaffold into a Windows installer that normal users ca
 flowchart LR
   T["Tauri window"] --> W["apps/desktop/src-tauri/resources/index.html"]
   W --> A["http://127.0.0.1:8000/api"]
-  T --> S["mynotes-api sidecar"]
+  T --> S["planix-api sidecar"]
   S --> F["FastAPI backend"]
-  F --> D["%APPDATA%/MyNotes AI/mynotes.db"]
+  F --> D["%APPDATA%/Planix/planix.db"]
 ```
 
 The release app should bundle:
 
 - The built web frontend copied into `apps/desktop/src-tauri/resources`
-- The backend sidecar binary named `mynotes-api`
-- A Tauri window named `MyNotes AI`
+- The backend sidecar binary named `planix-api`
+- A Tauri window named `Planix`
 
 ## Normal User Install
 
 Normal users should download the MSI installer only:
 
 ```text
-MyNotes-AI-v1.1.4-windows-x64.msi
+Planix-v1.1.4-windows-x64.msi
 ```
 
-They should not download `Source code.zip` as the installer, run `mynotes-api.exe` directly, or set `$env:MYNOTES_SKIP_SIDECAR="1"`. After installation, open `MyNotes AI` from the Windows Start menu.
+They should not download `Source code.zip` as the installer, run `planix-api.exe` directly, or set `$env:PLANIX_SKIP_SIDECAR="1"`. After installation, open `Planix` from the Windows Start menu.
 
 The app bundles the frontend and the FastAPI sidecar. Users do not need Node.js, Python, Rust, Cargo, npm, pip, or a command line. Basic local features work immediately. AI features require the user to enter their own DeepSeek API key inside the app.
 
 The installed directory is expected to look like this:
 
 ```text
-H:\mynotes\
-  mynotes.exe
+H:\planix\
+  planix.exe
   resources\
     index.html
     assets\
     binaries\
-      mynotes-api.exe
+      planix-api.exe
 ```
 
 If a user sees `asset not found: index.html`, the MSI was built incorrectly or is missing frontend assets. Rebuild and reinstall the latest MSI.
@@ -49,17 +49,17 @@ If a user sees `asset not found: index.html`, the MSI was built incorrectly or i
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MYNOTES_ENV` | unset | Set to `desktop` for packaged desktop mode |
-| `MYNOTES_API_PORT` | `8000` | Port used by the FastAPI sidecar |
-| `MYNOTES_DB_PATH` | unset | Optional explicit SQLite path |
+| `PLANIX_ENV` | unset | Set to `desktop` for packaged desktop mode |
+| `PLANIX_API_PORT` | `8000` | Port used by the FastAPI sidecar |
+| `PLANIX_DB_PATH` | unset | Optional explicit SQLite path |
 
-When `MYNOTES_ENV=desktop`, the backend resolves SQLite to:
+When `PLANIX_ENV=desktop`, the backend resolves SQLite to:
 
 ```text
-%APPDATA%\MyNotes AI\mynotes.db
+%APPDATA%\Planix\planix.db
 ```
 
-If `MYNOTES_DB_PATH` is set, it wins over the desktop default.
+If `PLANIX_DB_PATH` is set, it wins over the desktop default.
 
 ## Required Toolchain
 
@@ -116,10 +116,10 @@ Build the backend sidecar:
 .\scripts\build-backend.ps1
 ```
 
-The backend script installs `requirements.txt` and `requirements-build.txt`, then packages `mynotes-api.exe` with PyInstaller. The sidecar copied into the MSI resources must be named:
+The backend script installs `requirements.txt` and `requirements-build.txt`, then packages `planix-api.exe` with PyInstaller. The sidecar copied into the MSI resources must be named:
 
 ```text
-apps/desktop/src-tauri/resources/binaries/mynotes-api.exe
+apps/desktop/src-tauri/resources/binaries/planix-api.exe
 ```
 
 Poll the sidecar health endpoint:
@@ -143,8 +143,8 @@ Run the static desktop check:
 Expected outputs:
 
 ```text
-release/MyNotes-AI-v1.1.4-windows-x64.msi
-release/MyNotes-AI-v1.1.4-windows-x64.sha256
+release/Planix-v1.1.4-windows-x64.msi
+release/Planix-v1.1.4-windows-x64.sha256
 ```
 
 Publish locally with the official GitHub CLI after the build succeeds:
@@ -158,12 +158,12 @@ The project also includes `.github/workflows/desktop-release.yml`. Pushing a `v*
 
 ## Manual Acceptance
 
-- Install `MyNotes-AI-v1.1.4-windows-x64.msi`.
-- Open `MyNotes AI`.
+- Install `Planix-v1.1.4-windows-x64.msi`.
+- Open `Planix`.
 - Confirm the web UI loads.
 - Confirm the FastAPI sidecar responds on `/api/health`.
 - Try calendar, goal planning, RAG query, TXT/MD material flow, and planner evaluation.
-- Close the app and confirm every `mynotes-api` sidecar process exits, including the PyInstaller parent/child process tree.
+- Close the app and confirm every `planix-api` sidecar process exits, including the PyInstaller parent/child process tree.
 
 Run the installed-app smoke test:
 
@@ -171,7 +171,7 @@ Run the installed-app smoke test:
 .\scripts\smoke-test-installed.ps1
 ```
 
-The smoke test starts the installed app and checks `http://127.0.0.1:8000/api/health`. If it fails, check `%APPDATA%\MyNotes AI\logs\desktop.log`.
+The smoke test starts the installed app and checks `http://127.0.0.1:8000/api/health`. If it fails, check `%APPDATA%\Planix\logs\desktop.log`.
 
 ## Common Failures
 
@@ -183,7 +183,7 @@ The smoke test starts the installed app and checks `http://127.0.0.1:8000/api/he
 | `gh.ps1` blocked | Use official `gh.exe`, or publish through GitHub Actions |
 | MSI missing | Check `apps/desktop/src-tauri/target/release/bundle/msi` and rerun `npm.cmd run build` |
 | `asset not found: index.html` | Rebuild with `.\scripts\build-release.ps1 -Version 1.1.4`; `apps/web/dist/index.html` must exist |
-| App opens but API is unavailable | Check port `8000`, sidecar file, and `%APPDATA%\MyNotes AI\logs\desktop.log` |
+| App opens but API is unavailable | Check port `8000`, sidecar file, and `%APPDATA%\Planix\logs\desktop.log` |
 
 ## Phase 9 Checklist
 

@@ -23,6 +23,10 @@ from .plans import create_plan, list_plans
 from .rag import RagService
 
 
+GOAL_PLAN_LLM_TIMEOUT_SECONDS = 30
+GOAL_PLAN_MAX_TOKENS = 1200
+
+
 def _parse_date(value: str) -> date_type:
     try:
         return date_type.fromisoformat(value)
@@ -74,7 +78,7 @@ def _normalize_planner_tasks(items: object) -> list[PlannerTask]:
             PlannerTask(
                 time=str(item.get("time") or "09:00")[:5],
                 title=title,
-                reason=str(item.get("reason") or "支撑当前目标的可执行任务。"),
+                reason=str(item.get("reason") or "This task supports the current goal."),
             )
         )
     return tasks
@@ -101,7 +105,7 @@ def _normalize_replan_tasks(items: object, target_date: str) -> list[ReplanTask]
                 targetDate=str(item.get("targetDate") or item.get("target_date") or target_date),
                 time=str(item.get("time") or "09:00")[:5],
                 title=title,
-                reason=str(item.get("reason") or "根据未完成任务生成的重排建议。"),
+                reason=str(item.get("reason") or "Replanned from unfinished work."),
                 sourcePlanId=item.get("sourcePlanId") or item.get("source_plan_id"),
             )
         )
@@ -142,8 +146,9 @@ class PlanningService:
                     "date": payload.date,
                 }
             ),
-            max_tokens=2400,
+            max_tokens=GOAL_PLAN_MAX_TOKENS,
             temperature=0.2,
+            timeout_seconds=GOAL_PLAN_LLM_TIMEOUT_SECONDS,
         )
 
         mode = "mock"
@@ -154,7 +159,7 @@ class PlanningService:
             mode = "llm"
             provider = llm_result.provider if llm_result else None
             model = llm_result.model if llm_result else None
-            summary = str(parsed.get("summary") or f"已为“{payload.goal}”生成目标规划。")
+            summary = str(parsed.get("summary") or f"Generated a goal plan for {payload.goal}.")
             phases = _normalize_phase_items(parsed.get("phases"))
             tasks = _normalize_planner_tasks(parsed.get("tasks"))
         else:
@@ -240,14 +245,14 @@ class PlanningService:
             mode = "llm"
             provider = llm_result.provider if llm_result else None
             model = llm_result.model if llm_result else None
-            summary = str(parsed.get("summary") or f"今天完成 {done_count}/{total_count} 项。")
+            summary = str(parsed.get("summary") or f"Today completed {done_count}/{total_count} tasks.")
             suggestions = _normalize_suggestions(parsed.get("suggestions"))
             replan_tasks = _normalize_replan_tasks(parsed.get("replanTasks") or parsed.get("replan_tasks"), target_date)
         else:
             summary, suggestions, replan_tasks = self._mock_daily_review(done_count, total_count, unfinished, target_date)
 
         if not suggestions:
-            suggestions = ["保留今日有效产出，把未完成任务拆成更小的下一步。"]
+            suggestions = ["Keep today's useful output and split unfinished work into smaller next steps."]
 
         review_id = str(uuid4())
         with get_conn() as conn:
@@ -348,19 +353,40 @@ class PlanningService:
         )
 
     def _mock_goal_plan(self, payload: GoalPlanRequest, source_count: int = 0) -> tuple[str, list[PhaseItem], list[PlannerTask]]:
-        goal = payload.goal or "北京 AI 应用开发实习"
-        source_note = f"已参考资料库命中的 {source_count} 条片段，" if source_count else ""
+        goal = payload.goal or "AI application internship"
+        source_note = f"Referenced {source_count} retrieved material chunks. " if source_count else ""
         return (
-            f"{source_note}围绕“{goal}”生成阶段计划，每天投入 {payload.daily_hours:g} 小时。",
+            f"{source_note}Generated a three-phase plan for {goal} with {payload.daily_hours:g} focused hours per day.",
             [
-                PhaseItem(title="阶段 1：岗位能力对齐", detail="拆解目标岗位 JD 高频技能，建立学习清单和刷题节奏。"),
-                PhaseItem(title="阶段 2：AI 应用项目冲刺", detail="完成规划闭环、RAG、评测和部署能力，沉淀可展示证据。"),
-                PhaseItem(title="阶段 3：投递与复盘", detail="优化简历 bullet、项目讲法和面试题库，持续根据反馈调整。"),
+                PhaseItem(
+                    title="Phase 1: Role alignment",
+                    detail="Extract the target role requirements, map required skills, and build a focused learning checklist.",
+                ),
+                PhaseItem(
+                    title="Phase 2: Portfolio sprint",
+                    detail="Ship demonstrable AI application features, including planning loop, RAG, evaluation, and deployment evidence.",
+                ),
+                PhaseItem(
+                    title="Phase 3: Application review",
+                    detail="Refine resume bullets, project narrative, interview notes, and weekly feedback loops.",
+                ),
             ],
             [
-                PlannerTask(time="09:00", title="阅读目标岗位 JD 并提取 5 个关键词", reason="让当天任务和真实岗位要求对齐。"),
-                PlannerTask(time="14:30", title="实现或优化一个 AI 应用功能", reason="每天保留可展示的工程产出。"),
-                PlannerTask(time="20:30", title="记录完成情况并生成明日调整", reason="形成计划、执行、复盘、重排的闭环。"),
+                PlannerTask(
+                    time="09:00",
+                    title="Extract five requirements from the target JD",
+                    reason="Align today's work with real internship expectations.",
+                ),
+                PlannerTask(
+                    time="14:30",
+                    title="Implement or improve one AI application feature",
+                    reason="Keep a visible engineering output every day.",
+                ),
+                PlannerTask(
+                    time="20:30",
+                    title="Review progress and update tomorrow's task list",
+                    reason="Close the loop between planning, execution, review, and replanning.",
+                ),
             ],
         )
 
@@ -372,18 +398,19 @@ class PlanningService:
         target_date: str,
     ) -> tuple[str, list[str], list[ReplanTask]]:
         suggestions = [
-            "保留今天已经完成的产出，作为周报和面试复盘素材。",
-            "把未完成任务拆成 30-45 分钟的小块，降低明天启动成本。",
-            "明天优先处理和长期目标最相关的一项任务。",
+            "Keep today's completed outputs as weekly review and interview evidence.",
+            "Split unfinished tasks into 30-45 minute blocks to reduce tomorrow's startup cost.",
+            "Prioritize the task most directly connected to the long-term goal.",
         ]
         replan_tasks = []
         for index, plan in enumerate(unfinished[:3]):
+            title = plan.get("title") or plan.get("content") or "unfinished task"
             replan_tasks.append(
                 ReplanTask(
                     targetDate=target_date,
                     time=str(plan.get("time") or f"{9 + index:02d}:00")[:5],
-                    title=f"继续推进：{plan.get('title') or plan.get('content') or '未完成任务'}",
-                    reason="来自今日未完成任务，已放入明日重排预览。",
+                    title=f"Continue: {title}",
+                    reason="Moved from today's unfinished work into tomorrow's replan preview.",
                     sourcePlanId=str(plan.get("id")) if plan.get("id") else None,
                 )
             )
@@ -392,8 +419,8 @@ class PlanningService:
                 ReplanTask(
                     targetDate=target_date,
                     time="09:00",
-                    title="整理今日完成证据并规划下一步",
-                    reason="今天没有遗留任务，明天从复盘沉淀开始。",
+                    title="Review today's evidence and choose the next step",
+                    reason="No unfinished task was found, so tomorrow starts from a lightweight review.",
                 )
             )
-        return f"今天完成 {done_count}/{total_count} 项。", suggestions, replan_tasks
+        return f"Today completed {done_count}/{total_count} tasks.", suggestions, replan_tasks

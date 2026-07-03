@@ -219,6 +219,13 @@ export const enUS: I18nNamespace = {
     modelTestFailed: 'Model test failed. Check settings',
     backendConnectionFailed: 'Backend is not running or connection failed. Confirm it is on 127.0.0.1:8000',
     modelTestRequestFailed: 'Model test request failed',
-    backendRequestFailed: 'Backend request failed. Try again'
+    backendRequestFailed: 'Backend request failed. Try again',
+    goalRequired: 'Enter a goal before generating a plan',
+    goalPlanGenerated: 'Goal plan generated',
+    goalPlanFallbackGenerated: 'Local fallback plan generated. The model may be unavailable or slow.',
+    goalPlanTimeout: 'Goal planning timed out. The previous plan is kept; try again or check the model connection.',
+    goalPlanBackendOffline: 'Backend connection failed. Start Planix API and try again.',
+    goalPlanInvalid: 'Goal planning request is invalid',
+    goalPlanFailed: 'Goal planning failed'
   }
 };

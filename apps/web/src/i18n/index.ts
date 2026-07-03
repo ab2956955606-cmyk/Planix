@@ -14,7 +14,7 @@ export type I18nNamespace = {
   legacy: Record<string, string>;
 };
 
-const LANGUAGE_KEY = 'my_notes_lang';
+const LANGUAGE_KEY = 'planix_lang';
 const DEFAULT_LANGUAGE: Language = 'zh-CN';
 const dictionaries: Record<Language, I18nNamespace> = {
   'zh-CN': zhCN,

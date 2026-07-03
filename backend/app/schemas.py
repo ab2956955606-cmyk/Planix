@@ -2,6 +2,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .api_key import INVALID_API_KEY_MESSAGE, validate_api_key_format
+
 
 PlanPriority = Literal["low", "medium", "high"]
 PlanSource = Literal["manual", "ai"]
@@ -162,6 +164,18 @@ class AiSettingsUpdate(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("model cannot be empty")
+        return cleaned
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return ""
+        if validate_api_key_format(cleaned):
+            raise ValueError(INVALID_API_KEY_MESSAGE)
         return cleaned
 
 

@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import httpx
 
+from ..api_key import INVALID_API_KEY_MESSAGE, validate_api_key_format
 from ..db import get_conn
 from .ai_settings import EffectiveAiSettings, get_effective_ai_settings
 
@@ -18,7 +19,7 @@ class LlmResult:
 @dataclass(frozen=True)
 class LlmError:
     message: str
-    error_type: str  # auth_error | insufficient_balance | bad_model | bad_base_url | timeout | network_error | server_error | unknown
+    error_type: str
     status_code: int = 0
     detail: str = ""
 
@@ -34,13 +35,13 @@ class LlmError:
 def _chat_completions_url(base_url: str, provider: str) -> str:
     """Build the chat completions URL from base URL and provider.
 
-    DeepSeek:   https://api.deepseek.com        → /chat/completions
-    OpenAI:     https://api.openai.com/v1        → /chat/completions
-    OpenAI:     https://api.openai.com            → /v1/chat/completions
-    Custom:     whatever the user sets            → try /v1 first, avoid double-append
+    DeepSeek: https://api.deepseek.com -> /chat/completions
+    OpenAI: https://api.openai.com/v1 -> /chat/completions
+    OpenAI: https://api.openai.com -> /v1/chat/completions
+    Custom: whatever the user sets -> try /v1 first, avoid double-append
     """
     cleaned = base_url.rstrip("/")
-    # DeepSeek uses /chat/completions directly (no /v1 prefix)
+    # DeepSeek uses /chat/completions directly, without a /v1 prefix.
     if provider == "deepseek":
         if cleaned.endswith("/v1/chat/completions"):
             cleaned = cleaned.removesuffix("/v1/chat/completions")
@@ -49,10 +50,10 @@ def _chat_completions_url(base_url: str, provider: str) -> str:
         elif cleaned.endswith("/v1"):
             cleaned = cleaned.removesuffix("/v1")
         return f"{cleaned}/chat/completions"
-    # Already includes the full path — use as-is
+    # Already includes the full path, so use as-is.
     if cleaned.endswith("/chat/completions"):
         return cleaned
-    # OpenAI-compatible default: append /v1/chat/completions
+    # OpenAI-compatible default: append /v1/chat/completions.
     if cleaned.endswith("/v1"):
         return f"{cleaned}/chat/completions"
     return f"{cleaned}/v1/chat/completions"
@@ -61,19 +62,19 @@ def _chat_completions_url(base_url: str, provider: str) -> str:
 def _classify_http_error(status_code: int, body: str) -> LlmError:
     body_lower = body.lower() if body else ""
     if status_code == 401:
-        return LlmError("API Key 无效或已过期", "auth_error", status_code, detail=body[:200])
+        return LlmError("API key is invalid or expired.", "auth_error", status_code, detail=body[:200])
     if status_code == 402:
-        return LlmError("账户余额不足", "insufficient_balance", status_code, detail=body[:200])
+        return LlmError("The model account has insufficient balance.", "insufficient_balance", status_code, detail=body[:200])
     if status_code in (400, 404, 422):
         if "model" in body_lower:
-            return LlmError("模型名不存在或不支持", "bad_model", status_code, detail=body[:200])
-        return LlmError("请求参数错误，请检查 Base URL 和模型名", "bad_request", status_code, detail=body[:200])
+            return LlmError("The model name does not exist or is not supported.", "bad_model", status_code, detail=body[:200])
+        return LlmError("The request is invalid. Check the Base URL and model name.", "bad_request", status_code, detail=body[:200])
     if status_code == 429:
-        msg = body[:200] or "请求过于频繁，请稍后重试"
+        msg = body[:200] or "Too many requests. Try again later."
         return LlmError(msg, "rate_limited", status_code, detail=body[:200])
     if status_code >= 500:
-        return LlmError("模型服务端错误，请稍后重试", "server_error", status_code, detail=body[:200])
-    return LlmError(f"请求失败 (HTTP {status_code})", "unknown", status_code, detail=body[:200])
+        return LlmError("The model service returned a server error. Try again later.", "server_error", status_code, detail=body[:200])
+    return LlmError(f"Request failed (HTTP {status_code}).", "unknown", status_code, detail=body[:200])
 
 
 def _needs_reasoning_budget(settings: EffectiveAiSettings) -> bool:
@@ -156,11 +157,18 @@ class LlmClient:
         *,
         max_tokens: int = 800,
         temperature: float | None = None,
+        timeout_seconds: int | None = None,
     ) -> tuple[LlmResult | None, LlmError | None]:
         """Returns (result, error). On success error is None; on failure result is None."""
         if not self.is_enabled():
             record_ai_run(feature, self.settings, user, success=True, output_summary="mock fallback")
             return (None, None)
+
+        api_key_error = validate_api_key_format(self.settings.api_key)
+        if api_key_error:
+            llm_err = LlmError(api_key_error, "invalid_key_format", 0)
+            record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
+            return (None, llm_err)
 
         payload = {
             "model": self.settings.model,
@@ -172,12 +180,15 @@ class LlmClient:
             "max_tokens": _effective_max_tokens(self.settings, max_tokens),
             "stream": False,
         }
+        request_timeout = timeout_seconds if timeout_seconds is not None else self.settings.timeout_seconds
         try:
-            with httpx.Client(timeout=self.settings.timeout_seconds) as client:
+            with httpx.Client(timeout=max(1, request_timeout), trust_env=False) as client:
                 response = client.post(
                     _chat_completions_url(self.settings.base_url, self.settings.provider),
-                    headers={"Authorization": f"Bearer {self.settings.api_key}",
-                              "Accept-Encoding": "gzip, deflate"},
+                    headers={
+                        "Authorization": f"Bearer {self.settings.api_key.strip()}",
+                        "Accept-Encoding": "gzip, deflate",
+                    },
                     json=payload,
                 )
                 if response.status_code != 200:
@@ -194,7 +205,7 @@ class LlmClient:
                     finish_reason = choice.get("finish_reason", "")
                     reasoning_len = len(str(message.get("reasoning_content") or ""))
                     llm_err = LlmError(
-                        "模型返回空内容，请增加输出长度或换用非推理模型",
+                        "The model returned empty content. Increase max tokens or use a non-reasoning model.",
                         "empty_content",
                         0,
                         detail=f"finish_reason={finish_reason}; reasoning_tokens={reasoning_len}",
@@ -202,23 +213,27 @@ class LlmClient:
                     record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
                     return (None, llm_err)
         except httpx.TimeoutException:
-            llm_err = LlmError("模型服务请求超时，请检查网络或增大超时时间", "timeout", 0)
+            llm_err = LlmError("The model request timed out. Check the network or increase timeout.", "timeout", 0)
             record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
             return (None, llm_err)
         except httpx.ConnectError:
-            llm_err = LlmError("Base URL 无法连接，请检查地址是否正确", "bad_base_url", 0)
+            llm_err = LlmError("The Base URL cannot be reached. Check whether the address is correct.", "bad_base_url", 0)
             record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
             return (None, llm_err)
         except httpx.RemoteProtocolError:
-            llm_err = LlmError("模型服务协议错误，请检查 Base URL", "network_error", 0)
+            llm_err = LlmError("The model service returned a protocol error. Check the Base URL.", "network_error", 0)
+            record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
+            return (None, llm_err)
+        except UnicodeEncodeError:
+            llm_err = LlmError(INVALID_API_KEY_MESSAGE, "invalid_key_format", 0)
             record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
             return (None, llm_err)
         except (KeyError, IndexError, ValueError) as exc:
-            llm_err = LlmError(f"模型返回格式异常: {exc}", "parse_error", 0)
+            llm_err = LlmError(f"The model response format is invalid: {exc}", "parse_error", 0)
             record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
             return (None, llm_err)
         except Exception as exc:
-            llm_err = LlmError(f"请求异常: {exc}", "unknown", 0)
+            llm_err = LlmError(f"Request failed: {exc}", "unknown", 0)
             record_ai_run(feature, self.settings, user, success=False, error=str(exc))
             return (None, llm_err)
 

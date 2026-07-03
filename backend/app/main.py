@@ -9,11 +9,11 @@ from .routers import agent, health, month_notes, planning, plans, preferences, r
 APP_VERSION = "1.1.4"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
-logger = logging.getLogger("mynotes.api")
+logger = logging.getLogger("planix.api")
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="MyNotes AI API", version=APP_VERSION)
+    app = FastAPI(title="Planix API", version=APP_VERSION)
 
     allowed_origins = [
         "http://localhost:5173",
@@ -45,7 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(preferences.router)
     app.include_router(settings.router)
 
-    logger.info("MyNotes AI API started version=%s db_path=%s", APP_VERSION, get_db_path())
+    logger.info("Planix API started version=%s db_path=%s", APP_VERSION, get_db_path())
     return app
 
 

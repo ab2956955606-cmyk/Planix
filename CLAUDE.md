@@ -2,9 +2,9 @@
 
 ## Positioning
 
-Planix is a `v1.1.4` AI application portfolio project. It presents a RIVA-style AI OS Shell on the frontend and keeps the existing planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
+Planix is a `v1.1.4` AI application portfolio project. It presents a RIVA-style AI OS Shell on the frontend and keeps planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
 
-Planix is a frontend display brand. Do not rename backend service names, API contracts, database paths, localStorage keys, sidecar names, MSI artifact names, or Tauri identifiers unless a future phase explicitly requires it.
+The project is fully named Planix across frontend, backend, desktop, sidecar, installer, database path, environment variables, and documentation.
 
 ## Stack
 
@@ -17,7 +17,7 @@ Planix is a frontend display brand. Do not rename backend service names, API con
 - SQLite: plans, month notes, planning goals, daily reviews, AI settings, local RAG documents, chunks, FTS5 index, AI run logs
 - AI client: DeepSeek-first OpenAI-compatible client
 - RAG: SQLite FTS5/BM25, not Chroma/FAISS
-- Sidecar: FastAPI packaged with PyInstaller as `mynotes-api.exe`
+- Sidecar: FastAPI packaged with PyInstaller as `planix-api.exe`
 
 ## Runtime Shape
 
@@ -34,6 +34,20 @@ Tauri window -> bundled resources/index.html -> proxy_api IPC -> 127.0.0.1:8000 
 ```
 
 The frontend uses Tauri IPC for desktop API calls so WebView2 does not block local HTTP requests as mixed content.
+
+## Naming Contract
+
+- Product name: `Planix`
+- Tauri main binary: `planix`
+- Sidecar binary: `planix-api.exe`
+- API health app: `planix-api`
+- MSI artifact: `Planix-v1.1.4-windows-x64.msi`
+- Environment namespace: `PLANIX_*`
+- User database path: `%APPDATA%\Planix\planix.db`
+- Local database path: `data/planix.db`
+- Frontend storage prefix: `planix_*`
+
+Do not use or restore old names, and do not add compatibility fallbacks for old environment variables.
 
 ## Main Files
 
@@ -55,7 +69,7 @@ The frontend uses Tauri IPC for desktop API calls so WebView2 does not block loc
 
 - Do not add `react-router`; keep lightweight hash routing.
 - `AppRoute` is the only active-page state.
-- Language is `zh-CN | en-US`, persisted with the existing `my_notes_lang` key.
+- Language is `zh-CN | en-US`, persisted with the `planix_lang` key.
 - All static UI text should use `t("namespace.key")`.
 - Keep Agent UI as a shell-level scaffold only.
 - Do not show trace, timeline, reasoning, or execution chain UI in the current phase.
@@ -74,6 +88,11 @@ npm.cmd run build
 ```powershell
 python -m compileall backend
 .\.venv\Scripts\python.exe -m pytest backend\tests
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check-desktop-config.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\check-packaging-toolchain.ps1
 ```
 
 ## Documentation Maintenance

@@ -9,15 +9,15 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $CleanVersion = $Version.TrimStart("v")
 $Tag = "v$CleanVersion"
 $ReleaseDir = Join-Path $Root "release"
-$InstallerName = "MyNotes-AI-$Tag-windows-x64.msi"
-$HashName = "MyNotes-AI-$Tag-windows-x64.sha256"
+$InstallerName = "Planix-$Tag-windows-x64.msi"
+$HashName = "Planix-$Tag-windows-x64.sha256"
 $InstallerPath = Join-Path $ReleaseDir $InstallerName
 $HashPath = Join-Path $ReleaseDir $HashName
 $DesktopDir = Join-Path $Root "apps\desktop"
 $TauriTargetDir = Join-Path $DesktopDir "src-tauri\target\release\bundle\msi"
 $WebIndexPath = Join-Path $Root "apps\web\dist\index.html"
 $DesktopResourceIndexPath = Join-Path $Root "apps\desktop\src-tauri\resources\index.html"
-$SidecarPath = Join-Path $Root "apps\desktop\src-tauri\resources\binaries\mynotes-api.exe"
+$SidecarPath = Join-Path $Root "apps\desktop\src-tauri\resources\binaries\planix-api.exe"
 
 New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
 
@@ -110,6 +110,6 @@ if ($CreateGitHubRelease) {
         & $GhCommand.Source release upload $Tag $InstallerPath $HashPath --clobber
     }
     else {
-        & $GhCommand.Source release create $Tag $InstallerPath $HashPath --title "MyNotes AI $Tag" --notes-file $NotesPath
+        & $GhCommand.Source release create $Tag $InstallerPath $HashPath --title "Planix $Tag" --notes-file $NotesPath
     }
 }

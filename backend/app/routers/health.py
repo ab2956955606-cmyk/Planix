@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
-APP_VERSION = os.getenv("MYNOTES_API_VERSION", "1.1.4")
+APP_VERSION = os.getenv("PLANIX_API_VERSION", "1.1.4")
 
 
 @router.get("/health")
@@ -12,7 +12,7 @@ APP_VERSION = os.getenv("MYNOTES_API_VERSION", "1.1.4")
 def health() -> dict[str, str | int]:
     return {
         "status": "ok",
-        "app": "mynotes-api",
+        "app": "planix-api",
         "pid": os.getpid(),
         "version": APP_VERSION,
     }

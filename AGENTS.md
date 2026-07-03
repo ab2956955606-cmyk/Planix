@@ -4,14 +4,7 @@
 
 Planix is a portfolio-grade AI planning application for learning, job search, and long-term execution. It combines a RIVA-style AI OS frontend shell, calendar planning, goal decomposition, daily review, local RAG material Q&A, deterministic planner evaluation, and Windows desktop packaging.
 
-Planix is the frontend product name. Internal compatibility names remain unchanged unless a future phase explicitly renames them:
-
-- `/api/*` routes
-- SQLite table names and database path logic
-- `my_notes_*` localStorage keys
-- `mynotes-api.exe` sidecar
-- Existing MSI artifact names
-- Tauri bundle identifier
+The project is now fully renamed to Planix. Do not reintroduce former product, storage, sidecar, or environment-variable names.
 
 Current baseline: `1.1.4`.
 
@@ -25,7 +18,7 @@ Current baseline: `1.1.4`.
 - Backend: FastAPI in `backend/app`.
 - Database: SQLite with FTS5/BM25 for local RAG.
 - AI: DeepSeek-first OpenAI-compatible LLM client with mock fallback.
-- Desktop runtime: Tauri window loads bundled web resources and starts a PyInstaller FastAPI sidecar.
+- Desktop runtime: Tauri window loads bundled web resources and starts the PyInstaller sidecar `planix-api.exe`.
 - Desktop API access: frontend routes desktop API calls through Tauri IPC command `proxy_api`.
 
 ## Entry Points
@@ -43,20 +36,34 @@ Current baseline: `1.1.4`.
 - Backend tests: `backend/tests`
 - Packaging scripts: `scripts`
 
+## Naming Rules
+
+- Product name: `Planix`
+- Backend health app: `planix-api`
+- Sidecar executable: `planix-api.exe`
+- Desktop executable: `planix.exe`
+- MSI artifact: `Planix-v1.1.4-windows-x64.msi`
+- Environment namespace: `PLANIX_*`
+- Desktop database: `%APPDATA%\Planix\planix.db`
+- Development database: `data/planix.db`
+- Frontend localStorage prefix: `planix_*`
+
+There is no compatibility fallback for old names or old environment variables.
+
 ## Frontend Rules
 
 - Do not introduce `react-router`; use the existing hash-route model.
 - `AppRoute` must remain the single source of truth for active pages.
 - `AppMenu` may store only UI expansion state, never active route state.
-- All frontend UI text must go through `t("namespace.key")`.
+- All static frontend UI text must go through `t("namespace.key")`.
 - Do not translate user input, AI output, or existing database content.
 - Keep Agent UI scaffolding UI-only unless a later phase adds runtime.
 - Do not render Agent trace, timeline, reasoning, or execution chain in this phase.
-- Keep old Calendar, Notes, Goals, and Settings functionality available through the menu.
+- Keep Calendar, Notes, Goals, and Settings functionality available through the menu.
 
 ## Backend Rules
 
-- Do not change API payloads, response schemas, or SQLite tables for frontend-only UI work.
+- Do not change business API payloads, response schemas, or SQLite tables for frontend-only UI work.
 - Keep AI features demoable without an API key.
 - Never expose full API keys in read endpoints, logs, screenshots, or docs.
 - Preserve mock fallback and source-grounded RAG behavior.
@@ -84,8 +91,8 @@ python -m compileall backend
 Desktop packaging:
 
 ```powershell
-.\scripts\check-packaging-toolchain.ps1
-.\scripts\build-release.ps1 -Version 1.1.4
+powershell -ExecutionPolicy Bypass -File .\scripts\check-packaging-toolchain.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.1.4
 ```
 
 ## Documentation Maintenance

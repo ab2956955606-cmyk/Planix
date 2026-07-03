@@ -87,6 +87,11 @@ function apiDetailToText(detail: unknown): string {
   return String(detail);
 }
 
+function isTimeoutLikeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /timeout|timed out|deadline|abort/i.test(message);
+}
+
 export function AIWorkspace(props: AIWorkspaceProps) {
   const { data, date, preferences, section = 'all', onPreferencesChange, onApplyTasks, onReplanApplied, t } = props;
   const [goal, setGoal] = useState(t('legacy.goalPlaceholder'));
@@ -104,6 +109,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   const [documents, setDocuments] = useState<RagDocument[]>([]);
   const [documentStatus, setDocumentStatus] = useState('');
   const [goalPlan, setGoalPlan] = useState<GoalPlanResponse | null>(null);
+  const [goalStatus, setGoalStatus] = useState('');
   const [dailyReview, setDailyReview] = useState<DailyReviewResponse | null>(null);
   const [utilityResult, setUtilityResult] = useState<PlannerResponse | null>(null);
   const [loading, setLoading] = useState('');
@@ -207,10 +213,32 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   }
 
   async function runGoalPlan() {
+    const trimmedGoal = goal.trim();
+    setGoalStatus('');
+    if (!trimmedGoal) {
+      setGoalStatus(t('legacy.goalRequired'));
+      return;
+    }
     setLoading('goal');
     setUtilityResult(null);
     try {
-      setGoalPlan(await createGoalPlan({ goal, deadline, dailyHours, materials, preferences, date }));
+      const plan = await createGoalPlan({ goal: trimmedGoal, deadline, dailyHours, materials, preferences, date });
+      setGoalPlan(plan);
+      setGoalStatus(plan.mode === 'llm' ? t('legacy.goalPlanGenerated') : t('legacy.goalPlanFallbackGenerated'));
+    } catch (err) {
+      if (err instanceof ApiNetworkError) {
+        setGoalStatus(isTimeoutLikeError(err) ? t('legacy.goalPlanTimeout') : t('legacy.goalPlanBackendOffline'));
+      } else if (err instanceof ApiHttpError) {
+        const detailText = apiDetailToText(err.detail);
+        const detailDisplay = detailText ? `: ${detailText}` : '';
+        if (err.status === 422) {
+          setGoalStatus(`${t('legacy.goalPlanInvalid')}${detailDisplay}`);
+        } else {
+          setGoalStatus(`${t('legacy.goalPlanFailed')} (${err.status})${detailDisplay}`);
+        }
+      } else {
+        setGoalStatus(t('legacy.goalPlanFailed'));
+      }
     } finally {
       setLoading('');
     }
@@ -412,6 +440,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
           preferences={preferences}
           materials={materials}
           loading={loading}
+          goalStatus={goalStatus}
           goalPlan={goalPlan}
           setGoal={setGoal}
           setDeadline={setDeadline}
@@ -580,6 +609,7 @@ function GoalPlanner(props: {
   preferences: string;
   materials: string;
   loading: string;
+  goalStatus: string;
   goalPlan: GoalPlanResponse | null;
   setGoal: (value: string) => void;
   setDeadline: (value: string) => void;
@@ -597,6 +627,7 @@ function GoalPlanner(props: {
     preferences,
     materials,
     loading,
+    goalStatus,
     goalPlan,
     setGoal,
     setDeadline,
@@ -640,6 +671,7 @@ function GoalPlanner(props: {
         </label>
       </div>
       {loading === 'goal' && <div className="empty-state">{t('legacy.loading')}</div>}
+      {goalStatus && <p className="inline-status">{goalStatus}</p>}
       {goalPlan && <GoalPlanView plan={goalPlan} t={t} />}
       <button className="apply-button" onClick={() => onApplyTasks(goalPlan?.tasks ?? [])} disabled={!goalPlan?.tasks.length}>
         {goalPlan?.tasks.length ? t('legacy.applyTasks') : t('legacy.noAiTasks')}

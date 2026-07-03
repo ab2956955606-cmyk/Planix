@@ -4,8 +4,8 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $ConfigPath = Join-Path $Root "apps\desktop\src-tauri\tauri.conf.json"
 $CargoPath = Join-Path $Root "apps\desktop\src-tauri\Cargo.toml"
 $MainPath = Join-Path $Root "apps\desktop\src-tauri\src\main.rs"
-$SpecPath = Join-Path $Root "scripts\pyinstaller\mynotes-api.spec"
-$EntryPath = Join-Path $Root "scripts\pyinstaller\mynotes_api_entry.py"
+$SpecPath = Join-Path $Root "scripts\pyinstaller\planix-api.spec"
+$EntryPath = Join-Path $Root "scripts\pyinstaller\planix_api_entry.py"
 $HealthScriptPath = Join-Path $Root "scripts\wait-api-health.ps1"
 
 foreach ($Path in @($ConfigPath, $CargoPath, $MainPath, $SpecPath, $EntryPath, $HealthScriptPath)) {
@@ -16,15 +16,15 @@ foreach ($Path in @($ConfigPath, $CargoPath, $MainPath, $SpecPath, $EntryPath, $
 
 $Config = Get-Content -Raw $ConfigPath | ConvertFrom-Json
 
-if ($Config.productName -ne "MyNotes AI") {
+if ($Config.productName -ne "Planix") {
     throw "Unexpected desktop productName: $($Config.productName)"
 }
 
-if ($Config.identifier -ne "com.mynotes.ai") {
+if ($Config.identifier -ne "com.planix.app") {
     throw "Unexpected bundle identifier: $($Config.identifier)"
 }
 
-if ($Config.mainBinaryName -ne "mynotes") {
+if ($Config.mainBinaryName -ne "planix") {
     throw "Unexpected mainBinaryName: $($Config.mainBinaryName)"
 }
 
@@ -47,8 +47,8 @@ if ($Resources.'resources/index.html' -ne "resources/index.html") {
 if ($Resources.'resources/assets' -ne "resources/assets") {
     throw "Desktop bundle must copy resources/assets."
 }
-if ($Resources.'resources/binaries/mynotes-api.exe' -ne "resources/binaries/mynotes-api.exe") {
-    throw "Desktop bundle must copy resources/binaries/mynotes-api.exe."
+if ($Resources.'resources/binaries/planix-api.exe' -ne "resources/binaries/planix-api.exe") {
+    throw "Desktop bundle must copy resources/binaries/planix-api.exe."
 }
 
 $WebEntryPath = Join-Path $Root "apps\web\index.html"

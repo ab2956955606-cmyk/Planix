@@ -1,5 +1,6 @@
 from backend.app.db import get_conn
 from backend.app.services.ai_settings import EffectiveAiSettings
+from backend.app.services import llm as llm_module
 from backend.app.services.llm import _chat_completions_url
 from backend.app.services.llm import _effective_max_tokens, _message_content
 
@@ -110,6 +111,23 @@ def test_missing_api_key_does_not_preserve_stale_key(client):
     assert saved.json()["hasApiKey"] is False
 
 
+def test_invalid_api_key_format_is_rejected(client):
+    saved = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "deepseek",
+            "baseUrl": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "apiKey": "saved DeepSeek key",
+            "temperature": 0.3,
+            "timeoutSeconds": 20,
+        },
+    )
+    assert saved.status_code == 422
+    detail = str(saved.json()["detail"])
+    assert "plain ASCII without spaces" in detail
+
+
 def test_saved_empty_key_does_not_fallback_to_env(client, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-local")
     saved = client.put(
@@ -191,3 +209,27 @@ def test_deepseek_key_stays_mock_without_real_llm_gate(client):
     body = tested.json()
     assert body["ok"] is True
     assert body["mode"] == "mock"
+
+
+def test_llm_rejects_invalid_key_format_before_request(monkeypatch):
+    monkeypatch.setenv("USE_REAL_LLM", "1")
+    monkeypatch.setattr(
+        llm_module,
+        "get_effective_ai_settings",
+        lambda: EffectiveAiSettings(
+            provider="deepseek",
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            api_key="已保存 DeepSeek",
+            temperature=0.1,
+            timeout_seconds=10,
+            updated_at="",
+        ),
+    )
+
+    result, error = llm_module.LlmClient().complete("settings_test", "system", "user")
+
+    assert result is None
+    assert error is not None
+    assert error.error_type == "invalid_key_format"
+    assert "plain ASCII without spaces" in error.message

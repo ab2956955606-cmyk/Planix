@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 
 ROOT = Path.cwd()
-entry = ROOT / "scripts" / "pyinstaller" / "mynotes_api_entry.py"
+entry = ROOT / "scripts" / "pyinstaller" / "planix_api_entry.py"
 
 hiddenimports = [
     "backend.app.main",
@@ -55,7 +55,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="mynotes-api",
+    name="planix-api",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

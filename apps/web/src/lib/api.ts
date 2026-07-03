@@ -44,13 +44,19 @@ interface AiPayload {
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 async function tauriProxy<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const result = await invoke<{ status: number; body: string }>('proxy_api', {
-    req: {
-      method,
-      path,
-      body: body ? JSON.stringify(body) : '',
-    },
-  });
+  let result: { status: number; body: string };
+  try {
+    result = await invoke<{ status: number; body: string }>('proxy_api', {
+      req: {
+        method,
+        path,
+        body: body ? JSON.stringify(body) : '',
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new ApiNetworkError(message);
+  }
 
   if (result.status >= 200 && result.status < 300) {
     if (result.status === 204) return undefined as T;

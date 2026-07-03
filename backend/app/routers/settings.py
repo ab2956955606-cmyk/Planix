@@ -7,7 +7,7 @@ from ..schemas import AiSettingsOut, AiSettingsTestOut, AiSettingsTestPayload, A
 from ..services.ai_settings import get_public_ai_settings, save_ai_settings
 from ..services.llm import LlmClient
 
-logger = logging.getLogger("mynotes.api.settings")
+logger = logging.getLogger("planix.api.settings")
 router = APIRouter(prefix="/api/ai", tags=["ai-settings"])
 
 
@@ -61,7 +61,7 @@ def update_ai_settings(payload: AiSettingsUpdate) -> AiSettingsOut:
         return result
     except Exception as exc:
         logger.error("AI settings save failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="后端保存设置失败") from exc
+        raise HTTPException(status_code=500, detail="Backend failed to save AI settings") from exc
 
 
 @router.post("/test", response_model=AiSettingsTestOut)
@@ -72,7 +72,7 @@ def test_ai_settings(payload: AiSettingsTestPayload) -> AiSettingsTestOut:
             return AiSettingsTestOut(
                 ok=True,
                 mode="mock",
-                message="当前是 Mock 模式，不需要 API Key。配置真实 Key 即可调用模型。",
+                message="Mock mode is active and does not require an API key. Save a real key to test a live model.",
                 provider=client.settings.provider,
                 model=client.settings.model,
             )
@@ -80,14 +80,14 @@ def test_ai_settings(payload: AiSettingsTestPayload) -> AiSettingsTestOut:
             return AiSettingsTestOut(
                 ok=True,
                 mode="mock",
-                message="设置已保存。当前未开启真实模型调用（USE_REAL_LLM=1），本次使用安全 mock，不消耗 API。",
+                message="Settings are saved. Live LLM calls are disabled, so this test used the safe mock path.",
                 provider=client.settings.provider,
                 model=client.settings.model,
             )
         return AiSettingsTestOut(
             ok=False,
             mode="error",
-            message="API Key 未保存，请在设置中填入 API Key",
+            message="API key is not saved. Enter an API key in settings first.",
             provider=client.settings.provider,
             model=client.settings.model,
             error_type="no_key",
@@ -111,7 +111,7 @@ def test_ai_settings(payload: AiSettingsTestPayload) -> AiSettingsTestOut:
     return AiSettingsTestOut(
         ok=False,
         mode="error",
-        message=err.message if err else "模型调用失败，请检查设置",
+        message=err.message if err else "Model call failed. Check the settings.",
         provider=client.settings.provider,
         model=client.settings.model,
         error_type=err.error_type if err else "unknown",

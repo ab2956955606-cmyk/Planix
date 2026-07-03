@@ -1,4 +1,4 @@
-# MyNotes AI Architecture
+# Planix Architecture
 
 ```mermaid
 flowchart LR
@@ -41,12 +41,12 @@ The frontend is API-first for plans, month notes, and AI settings. When the back
 flowchart LR
   T["Tauri window"] --> W["apps/web/dist/index.html"]
   W --> API["127.0.0.1:8000 /api"]
-  T --> S["mynotes-api sidecar"]
+  T --> S["planix-api sidecar"]
   S --> F["FastAPI app"]
   F --> DB["SQLite user data dir"]
 ```
 
-Phase 7 prepares the Tauri v2 scaffold in `apps/desktop`, the PyInstaller entry in `scripts/pyinstaller`, and PowerShell build scripts in `scripts`. The packaged desktop app is expected to start the `mynotes-api` sidecar with `MYNOTES_ENV=desktop`, so SQLite resolves to `%APPDATA%\MyNotes AI\mynotes.db` unless `MYNOTES_DB_PATH` overrides it.
+Phase 7 prepares the Tauri v2 scaffold in `apps/desktop`, the PyInstaller entry in `scripts/pyinstaller`, and PowerShell build scripts in `scripts`. The packaged desktop app is expected to start the `planix-api` sidecar with `PLANIX_ENV=desktop`, so SQLite resolves to `%APPDATA%\Planix\planix.db` unless `PLANIX_DB_PATH` overrides it.
 
 Development mode points the Tauri window to `http://127.0.0.1:5173`, while production loads `index.html` from `apps/web/dist`.
 

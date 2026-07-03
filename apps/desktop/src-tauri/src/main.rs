@@ -13,14 +13,11 @@ const DESKTOP_LOG_MAX_BYTES: u64 = 1_000_000;
 const API_PORT: &str = "8000";
 
 fn api_port() -> String {
-    std::env::var("MYNOTES_API_PORT").unwrap_or_else(|_| API_PORT.to_string())
+    std::env::var("PLANIX_API_PORT").unwrap_or_else(|_| API_PORT.to_string())
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Tauri IPC proxy command — routes frontend HTTP requests through
+// Tauri IPC proxy command routes frontend HTTP requests through
 // Rust, bypassing WebView2 mixed-content blocking entirely.
-// ═══════════════════════════════════════════════════════════════
-
 #[derive(Debug, Serialize, Deserialize)]
 struct ProxyRequest {
     method: String,
@@ -84,10 +81,7 @@ fn proxy_api(req: ProxyRequest) -> Result<ProxyResponse, String> {
     Ok(ProxyResponse { status, body })
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Sidecar management (unchanged logic, extracted here)
-// ═══════════════════════════════════════════════════════════════
-
+// Sidecar management.
 /// Wraps the optional sidecar child process.
 /// Drop kills the child only if WE spawned it.
 struct ApiSidecar(Mutex<Option<Child>>);
@@ -120,7 +114,7 @@ impl Drop for ApiSidecar {
     }
 }
 
-// ── Windows named mutex for single-instance  ────────────────────
+// Windows named mutex for single-instance.
 
 #[cfg(windows)]
 fn ensure_single_instance(log: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -130,7 +124,7 @@ fn ensure_single_instance(log: &PathBuf) -> Result<(), Box<dyn std::error::Error
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
 
-    let name: Vec<u16> = OsStr::new("MyNotesAI-Desktop-Instance")
+    let name: Vec<u16> = OsStr::new("Planix-Desktop-Instance")
         .encode_wide()
         .chain(once(0))
         .collect();
@@ -158,17 +152,17 @@ fn ensure_single_instance(_log: &PathBuf) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-// ── Logging helpers  ────────────────────────────────────────────
+// Logging helpers.
 
 fn log_path() -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         return PathBuf::from(appdata)
-            .join("MyNotes AI")
+            .join("Planix")
             .join("logs")
             .join("desktop.log");
     }
     std::env::temp_dir()
-        .join("MyNotes AI")
+        .join("Planix")
         .join("logs")
         .join("desktop.log")
 }
@@ -196,7 +190,7 @@ fn write_log(path: &PathBuf, message: impl AsRef<str>) {
     }
 }
 
-// ── Windows error dialog  ───────────────────────────────────────
+// Windows error dialog.
 
 #[cfg(windows)]
 fn show_error(title: &str, message: &str) {
@@ -228,7 +222,7 @@ fn show_error(title: &str, message: &str) {
     eprintln!("{title}: {message}");
 }
 
-// ── Raw TCP-based health check  ─────────────────────────────────
+// Raw TCP-based health check.
 
 #[derive(Debug)]
 struct HealthInfo {
@@ -264,16 +258,16 @@ fn get_api_health(port: &str) -> Result<HealthInfo, String> {
         None => return Err("no JSON body in health response".to_string()),
     };
 
-    let is_mynotes =
-        body.contains(r#""app":"mynotes-api""#) || body.contains(r#""app": "mynotes-api""#);
-    if !is_mynotes || !(body.contains(r#""status":"ok""#) || body.contains(r#""status": "ok""#)) {
-        return Err(format!("port {port} is not serving MyNotes API: {body}"));
+    let is_planix =
+        body.contains(r#""app":"planix-api""#) || body.contains(r#""app": "planix-api""#);
+    if !is_planix || !(body.contains(r#""status":"ok""#) || body.contains(r#""status": "ok""#)) {
+        return Err(format!("port {port} is not serving Planix API: {body}"));
     }
 
     let pid = extract_json_u32(&body, "pid");
     let version = extract_json_str(&body, "version");
     Ok(HealthInfo {
-        app: Some("mynotes-api".to_string()),
+        app: Some("planix-api".to_string()),
         pid,
         version,
         body,
@@ -309,7 +303,7 @@ fn extract_json_u32(body: &str, key: &str) -> Option<u32> {
     None
 }
 
-// ── Sidecar health polling  ─────────────────────────────────────
+// Sidecar health polling.
 
 fn poll_api_health(port: String, log_path: PathBuf) {
     std::thread::spawn(move || {
@@ -337,15 +331,15 @@ fn poll_api_health(port: String, log_path: PathBuf) {
         }
 
         let message = format!(
-            "MyNotes AI 后端启动失败。可能原因：8000 端口被占用，或安装包不完整。请重启电脑后重试，或查看日志：{}",
+            "Planix backend did not become ready within 30 seconds. Port 8000 may be busy or the installation may be incomplete.\n\nLog: {}",
             log_path.display()
         );
         write_log(&log_path, "sidecar health check failed after 30 seconds");
-        show_error("MyNotes AI", &message);
+        show_error("Planix", &message);
     });
 }
 
-// ── Sidecar output piping  ──────────────────────────────────────
+// Sidecar output piping.
 
 fn pipe_sidecar_output(
     log_path: PathBuf,
@@ -361,28 +355,28 @@ fn pipe_sidecar_output(
                     Ok(0) => return,
                     Ok(size) => {
                         let text = String::from_utf8_lossy(&buffer[..size]);
-                        write_log(&log_path, format!("mynotes-api {label}: {}", text.trim()));
+                        write_log(&log_path, format!("planix-api {label}: {}", text.trim()));
                         let lower = text.to_lowercase();
                         let port_conflict = label == "stderr"
                             && (lower.contains("10048")
                                 || lower.contains("winerror 10048")
                                 || lower.contains("address already in use")
                                 || lower.contains("only one usage")
-                                || lower.contains("通常每个套接字地址"));
+                                || lower.contains("normally permitted"));
                         if port_conflict && !conflict_reported {
                             conflict_reported = true;
                             write_log(&log_path, "port 8000 is already in use");
                             show_error(
-                                "MyNotes AI",
+                                "Planix",
                                 &format!(
-                                    "MyNotes AI 后端启动失败：8000 端口已被占用。\n请关闭占用 8000 端口的程序后重试。\n\n日志：{}",
+                                    "Planix backend failed to start because port 8000 is already in use.\nClose the program using port 8000 and try again.\n\nLog: {}",
                                     log_path.display()
                                 ),
                             );
                         }
                     }
                     Err(err) => {
-                        write_log(&log_path, format!("mynotes-api {label} read error: {err}"));
+                        write_log(&log_path, format!("planix-api {label} read error: {err}"));
                         return;
                     }
                 }
@@ -391,10 +385,7 @@ fn pipe_sidecar_output(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Main entry point
-// ═══════════════════════════════════════════════════════════════
-
+// Main entry point.
 fn main() {
     let startup_log_path = log_path();
     write_log(&startup_log_path, "app start time");
@@ -429,11 +420,11 @@ fn main() {
                 }
                 Err(err) => {
                     let message = format!(
-                        "MyNotes AI 前端资源加载失败。安装包可能不完整，缺少 index.html。请重新安装最新 MSI。\n\n日志：{}",
+                        "Planix frontend resources could not be loaded. The installation may be incomplete or missing index.html.\n\nLog: {}",
                         log_path.display()
                     );
                     write_log(&log_path, format!("frontendDist path error: {err}"));
-                    show_error("MyNotes AI", &message);
+                    show_error("Planix", &message);
                     return Err(Box::new(err));
                 }
             }
@@ -454,23 +445,23 @@ fn main() {
                 }
             }
 
-            if std::env::var("MYNOTES_SKIP_SIDECAR").is_ok() {
+            if std::env::var("PLANIX_SKIP_SIDECAR").is_ok() {
                 write_log(
                     &log_path,
-                    "MYNOTES_SKIP_SIDECAR is set; sidecar startup skipped for development",
+                    "PLANIX_SKIP_SIDECAR is set; sidecar startup skipped for development",
                 );
                 return Ok(());
             }
 
             let port = api_port();
-            write_log(&log_path, format!("MYNOTES_API_PORT={port}"));
+            write_log(&log_path, format!("PLANIX_API_PORT={port}"));
 
             let already_running = match get_api_health(&port) {
                 Ok(info) => {
                     write_log(
                         &log_path,
                         format!(
-                            "preflight /api/health result: success — \
+                            "preflight /api/health result: success: \
                              app={:?} pid={:?} version={:?} body={}",
                             info.app, info.pid, info.version, info.body
                         ),
@@ -485,14 +476,13 @@ fn main() {
                         || err.contains("No connection could be made");
                     if !is_port_closed {
                         let msg = format!(
-                            "MyNotes AI 后端启动失败：8000 端口已被其他程序占用。\
-                             请关闭占用 8000 端口的程序后重试。\n\n诊断：{err}"
+                            "Planix backend failed to start because port 8000 is being used by another program.\nClose the program using port 8000 and try again.\n\nDiagnostic: {err}"
                         );
                         write_log(
                             &log_path,
-                            format!("preflight health check: PORT CONFLICT — {err}"),
+                            format!("preflight health check: PORT CONFLICT: {err}"),
                         );
-                        show_error("MyNotes AI", &msg);
+                        show_error("Planix", &msg);
                         return Err(
                             std::io::Error::new(std::io::ErrorKind::AddrInUse, msg).into()
                         );
@@ -508,7 +498,7 @@ fn main() {
             if already_running {
                 write_log(
                     &log_path,
-                    "existing MyNotes API detected, skip spawning sidecar",
+                    "existing Planix API detected, skip spawning sidecar",
                 );
                 app.manage(ApiSidecar(Mutex::new(None)));
                 return Ok(());
@@ -516,7 +506,7 @@ fn main() {
 
             let sidecar_path = match app
                 .path()
-                .resolve("resources/binaries/mynotes-api.exe", BaseDirectory::Resource)
+                .resolve("resources/binaries/planix-api.exe", BaseDirectory::Resource)
             {
                 Ok(path) => {
                     write_log(
@@ -531,34 +521,32 @@ fn main() {
                 }
                 Err(err) => {
                     let message = format!(
-                        "MyNotes AI 后端启动失败。安装包不完整，缺少 resources\\binaries\\mynotes-api.exe。\
-                         请重新安装最新 MSI，或查看日志：{}",
+                        "Planix backend could not start because the installation is missing resources\\binaries\\planix-api.exe.\nReinstall the latest MSI or check the log.\n\nLog: {}",
                         log_path.display()
                     );
                     write_log(&log_path, format!("sidecar expected path resolve failed: {err}"));
-                    show_error("MyNotes AI", &message);
+                    show_error("Planix", &message);
                     return Err(Box::new(err));
                 }
             };
 
             if !sidecar_path.exists() {
                 let message = format!(
-                    "MyNotes AI 后端启动失败。安装包不完整，缺少 resources\\binaries\\mynotes-api.exe。\
-                     请重新安装最新 MSI，或查看日志：{}",
+                    "Planix backend could not start because the installation is missing resources\\binaries\\planix-api.exe.\nReinstall the latest MSI or check the log.\n\nLog: {}",
                     log_path.display()
                 );
                 write_log(
                     &log_path,
                     format!("sidecar missing at {}", sidecar_path.display()),
                 );
-                show_error("MyNotes AI", &message);
+                show_error("Planix", &message);
                 return Err(std::io::Error::new(std::io::ErrorKind::NotFound, message).into());
             }
 
             let mut sidecar = Command::new(&sidecar_path);
             sidecar
-                .env("MYNOTES_ENV", "desktop")
-                .env("MYNOTES_API_PORT", port.clone())
+                .env("PLANIX_ENV", "desktop")
+                .env("PLANIX_API_PORT", port.clone())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
@@ -589,12 +577,11 @@ fn main() {
                 Ok(result) => result,
                 Err(err) => {
                     let message = format!(
-                        "MyNotes AI 后端启动失败。可能原因：8000 端口被占用，或安装包不完整。\
-                         请重启电脑后重试，或查看日志：{}",
+                        "Planix backend failed to start. Port 8000 may be busy or the installation may be incomplete.\nRestart the computer and try again, or check the log.\n\nLog: {}",
                         log_path.display()
                     );
                     write_log(&log_path, format!("sidecar start failure: {err}"));
-                    show_error("MyNotes AI", &message);
+                    show_error("Planix", &message);
                     return Err(Box::new(err));
                 }
             };
@@ -611,11 +598,11 @@ fn main() {
         .run(tauri::generate_context!())
         .unwrap_or_else(|err| {
             let message = format!(
-                "MyNotes AI 启动失败。请查看日志：{}\n\n错误：{}",
+                "Planix failed to start. Check the log for details.\n\nLog: {}\n\nError: {}",
                 startup_log_path.display(),
                 err
             );
             write_log(&startup_log_path, format!("app runtime error: {err}"));
-            show_error("MyNotes AI", &message);
+            show_error("Planix", &message);
         });
 }

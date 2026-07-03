@@ -189,7 +189,7 @@ export const zhCN: I18nNamespace = {
     notesTitle: '资料与问答',
     notesHint: '保存资料、上传 TXT/MD，并向本地知识库提问',
     goalsTitle: '目标规划闭环',
-    goalsHint: '生成阶段计划、今日任务、日报复盘、重排预览和质量评估',
+    goalsHint: '生成阶段计划、今日任务、日报复盘、重排预览和质量评分',
     settingsTitle: '模型与偏好',
     settingsHint: '管理模型配置、API Key 状态和偏好记忆',
     askMaterials: '询问资料',
@@ -219,6 +219,13 @@ export const zhCN: I18nNamespace = {
     modelTestFailed: '模型测试失败，请检查设置',
     backendConnectionFailed: '后端服务未启动或连接失败，请确认后端运行在 127.0.0.1:8000',
     modelTestRequestFailed: '模型测试请求失败',
-    backendRequestFailed: '请求后端失败，请重试'
+    backendRequestFailed: '请求后端失败，请重试',
+    goalRequired: '生成规划前请先输入目标',
+    goalPlanGenerated: '目标规划已生成',
+    goalPlanFallbackGenerated: '已生成本地兜底规划，模型可能暂时不可用或响应较慢。',
+    goalPlanTimeout: '目标规划请求超时。已保留上一次规划，请稍后重试或检查模型连接。',
+    goalPlanBackendOffline: '后端连接失败，请启动 Planix API 后重试。',
+    goalPlanInvalid: '目标规划请求格式有误',
+    goalPlanFailed: '目标规划生成失败'
   }
 };

@@ -9,10 +9,10 @@ from backend.app.main import app
 
 
 def log_path() -> Path:
-    explicit = os.getenv("MYNOTES_API_LOG")
+    explicit = os.getenv("PLANIX_API_LOG")
     if explicit:
         return Path(explicit)
-    return Path(tempfile.gettempdir()) / "mynotes-api.log"
+    return Path(tempfile.gettempdir()) / "planix-api.log"
 
 
 def write_log(message: str) -> None:
@@ -23,11 +23,11 @@ def write_log(message: str) -> None:
 
 
 def main() -> None:
-    os.environ.setdefault("MYNOTES_ENV", "desktop")
-    if os.getenv("MYNOTES_ENV") == "desktop":
+    os.environ.setdefault("PLANIX_ENV", "desktop")
+    if os.getenv("PLANIX_ENV") == "desktop":
         os.environ.setdefault("USE_REAL_LLM", "1")
-    port = int(os.getenv("MYNOTES_API_PORT", "8000"))
-    write_log(f"Starting MyNotes API sidecar on 127.0.0.1:{port}")
+    port = int(os.getenv("PLANIX_API_PORT", "8000"))
+    write_log(f"Starting Planix API sidecar on 127.0.0.1:{port}")
     try:
         uvicorn.run(app, host="127.0.0.1", port=port, log_level="info", log_config=None)
     except Exception:

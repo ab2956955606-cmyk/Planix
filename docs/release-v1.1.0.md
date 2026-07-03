@@ -1,10 +1,10 @@
-# MyNotes AI v1.1.0
+# Planix v1.1.0
 
-This release turns MyNotes AI from a web-first AI planning app into a Windows desktop-ready portfolio project.
+This release turns Planix from a web-first AI planning app into a Windows desktop-ready portfolio project.
 
 ## Highlights
 
-- Added a Tauri v2 desktop shell for `MyNotes AI`.
+- Added a Tauri v2 desktop shell for `Planix`.
 - Added a FastAPI sidecar packaging path with PyInstaller.
 - Added Windows release scripts for web build, backend sidecar build, Tauri build, and SHA256 checksum generation.
 - Added GitHub Actions release automation for `v*` tags.
@@ -12,8 +12,8 @@ This release turns MyNotes AI from a web-first AI planning app into a Windows de
 
 ## Assets
 
-- `MyNotes-AI-v1.1.0-windows-x64.msi`
-- `MyNotes-AI-v1.1.0-windows-x64.sha256`
+- `Planix-v1.1.0-windows-x64.msi`
+- `Planix-v1.1.0-windows-x64.sha256`
 
 ## Notes
 

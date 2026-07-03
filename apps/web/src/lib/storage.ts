@@ -1,9 +1,9 @@
 import type { AppData, DayRecord, Language } from '../types';
 
-const DATA_KEY = 'my_notes_data_v2';
-const LEGACY_DATA_KEY = 'my_notes_data';
-const LANG_KEY = 'my_notes_lang';
-const PREFERENCE_KEY = 'my_notes_preferences';
+const DATA_KEY = 'planix_data_v2';
+const LEGACY_DATA_KEY = 'planix_data';
+const LANG_KEY = 'planix_lang';
+const PREFERENCE_KEY = 'planix_preferences';
 
 export function loadData(): AppData {
   try {

@@ -13,9 +13,9 @@ if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
     throw "npm.cmd was not found. Install Node.js 20+ before starting desktop development."
 }
 
-$env:MYNOTES_API_PORT = if ($env:MYNOTES_API_PORT) { $env:MYNOTES_API_PORT } else { "8000" }
+$env:PLANIX_API_PORT = if ($env:PLANIX_API_PORT) { $env:PLANIX_API_PORT } else { "8000" }
 
-Write-Host "Starting FastAPI backend on http://127.0.0.1:$env:MYNOTES_API_PORT"
+Write-Host "Starting FastAPI backend on http://127.0.0.1:$env:PLANIX_API_PORT"
 Start-Process -FilePath $Python -ArgumentList @(
     "-m",
     "uvicorn",
@@ -23,11 +23,11 @@ Start-Process -FilePath $Python -ArgumentList @(
     "--host",
     "127.0.0.1",
     "--port",
-    $env:MYNOTES_API_PORT,
+    $env:PLANIX_API_PORT,
     "--reload"
 ) -WorkingDirectory $Root -WindowStyle Hidden
 
-& (Join-Path $PSScriptRoot "wait-api-health.ps1") -Url "http://127.0.0.1:$env:MYNOTES_API_PORT/api/health" -TimeoutSeconds 30
+& (Join-Path $PSScriptRoot "wait-api-health.ps1") -Url "http://127.0.0.1:$env:PLANIX_API_PORT/api/health" -TimeoutSeconds 30
 
 Write-Host "Starting Vite frontend on http://127.0.0.1:5173"
 Start-Process -FilePath "npm.cmd" -ArgumentList @(
