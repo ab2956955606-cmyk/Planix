@@ -1,63 +1,161 @@
 # AGENTS.md - MyNotes AI
 
-## Project Overview
+## Project Identity
 
-MyNotes AI is an AI learning planner and daily review system. The long-term target is a polished Windows desktop application that demonstrates AI application engineering for internship applications.
+MyNotes AI is a portfolio-grade AI learning planner, daily review system, local knowledge base, and Windows desktop app. It is built to demonstrate practical AI application engineering for internship applications: full-stack product flow, local-first storage, LLM integration, RAG, evaluation, and desktop packaging.
 
-The project is being rebuilt in stages:
+Current version baseline: `1.1.4`.
 
-- Frontend: React + TypeScript + Vite in `apps/web`
-- Backend: FastAPI in `backend/app`
-- Database: SQLite as the primary backend data store, including FTS5/BM25 for local RAG
-- AI: DeepSeek-first OpenAI-compatible client with mock fallback and source-grounded RAG
-- Desktop roadmap: Tauri shell + PyInstaller sidecar + GitHub Release
+## Current Architecture
 
-## Current Entry Points
+- Frontend: React 18 + TypeScript + Vite in `apps/web`.
+- Desktop shell: Tauri v2 in `apps/desktop`.
+- Backend: FastAPI in `backend/app`.
+- Database: SQLite, including FTS5/BM25 for local RAG.
+- AI: DeepSeek-first OpenAI-compatible LLM client with mock fallback.
+- Desktop runtime: Tauri window loads bundled web resources and starts a PyInstaller FastAPI sidecar.
+- Desktop API access: the frontend routes API calls through the Tauri IPC command `proxy_api` to avoid WebView2 mixed-content blocking.
+- Release artifact: Windows MSI, currently `release/MyNotes-AI-v1.1.4-windows-x64.msi`.
 
-- Frontend entry: `apps/web/index.html`
-- Frontend app: `apps/web/src/App.tsx`
+## Important Entry Points
+
+- Web entry: `apps/web/index.html`
+- Web app: `apps/web/src/App.tsx`
+- Web API layer: `apps/web/src/lib/api.ts`
+- Desktop Rust entry: `apps/desktop/src-tauri/src/main.rs`
+- Desktop config: `apps/desktop/src-tauri/tauri.conf.json`
 - Backend app: `backend/app/main.py`
+- Backend schemas: `backend/app/schemas.py`
+- SQLite setup: `backend/app/db.py`
+- SQLite desktop path logic: `backend/app/desktop_paths.py`
 - API routers: `backend/app/routers`
-- Backend services: `backend/app/services`
-- SQLite layer: `backend/app/db.py`
-- Tests: `backend/tests`
+- Business services: `backend/app/services`
+- Backend tests: `backend/tests`
+- Packaging scripts: `scripts`
+- Desktop packaging guide: `docs/desktop.md`
+
+## Core User Flows
+
+- Calendar planning: create, edit, complete, and delete daily tasks.
+- Month notes: save monthly notes locally and through the backend.
+- Goal planning: generate phases and today tasks from a long-term goal.
+- Daily review: summarize completed/unfinished tasks and preview replanning.
+- Replan apply: AI suggestions are previews until the user confirms.
+- Knowledge base: paste or upload TXT/MD material into SQLite-backed RAG.
+- RAG query: retrieve FTS5/BM25-ranked chunks with citations.
+- Planner evaluation: deterministic six-dimension scoring without LLM calls.
+- AI settings: save provider, base URL, model, key, temperature, and timeout safely.
+- Desktop MSI: normal users run `mynotes.exe`; they do not manually run `mynotes-api.exe`.
 
 ## Commands
 
-Frontend:
-
-```bash
-cd apps/web
-npm install
-npm run dev
-npm run build
-npm run test
-npm run lint
-```
-
 Backend:
 
-```bash
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
+```powershell
+python -m compileall backend
+.\.venv\Scripts\python.exe -m pytest backend\tests
 uvicorn backend.app.main:app --reload
-pytest backend/tests
 ```
+
+Web:
+
+```powershell
+cd apps\web
+npm.cmd install
+npm.cmd run lint
+npx.cmd tsc -b
+npm.cmd run test
+npm.cmd run build
+```
+
+Desktop:
+
+```powershell
+.\scripts\check-packaging-toolchain.ps1
+.\scripts\build-web.ps1
+.\scripts\build-backend.ps1
+cd apps\desktop
+npm.cmd install
+cargo fmt
+cargo check
+npm.cmd run build
+```
+
+Release:
+
+```powershell
+.\scripts\build-release.ps1 -Version 1.1.4
+.\scripts\smoke-test-installed.ps1
+```
+
+Manual real DeepSeek test, only when explicitly intended:
+
+```powershell
+$env:DEEPSEEK_API_KEY="your-key"
+$env:USE_REAL_LLM="1"
+.\scripts\test-deepseek-real.ps1
+```
+
+## Security Rules
+
+- Never commit `.env`, real API keys, database files, logs, build caches, `node_modules`, `.venv`, or generated temporary artifacts.
+- `GET /api/ai/settings` must never return a full API key.
+- Logs may record provider, model, sanitized base URL, key presence, and masked key only.
+- Do not print `Authorization` headers or full key values.
+- Real LLM calls must never run in CI, unit tests, loops, or broad smoke tests.
+- Keep mock fallback demoable without paid credentials.
+
+## Desktop Runtime Rules
+
+- Production frontend resources live under `apps/desktop/src-tauri/resources`.
+- Installed layout is expected to include:
+
+```text
+mynotes.exe
+resources/
+  index.html
+  assets/
+  binaries/
+    mynotes-api.exe
+```
+
+- Tauri must check `/api/health` before starting the sidecar.
+- If a MyNotes API is already running, reuse it and do not kill it on exit.
+- If port `8000` is used by a non-MyNotes process, show a clear local error and log the conflict.
+- Desktop logs belong under `%APPDATA%\MyNotes AI\logs\desktop.log`.
+- Desktop SQLite data belongs under `%APPDATA%\MyNotes AI\mynotes.db` unless `MYNOTES_DB_PATH` overrides it.
 
 ## Code Conventions
 
-- Keep frontend features inside `apps/web/src/components`, `apps/web/src/lib`, or `apps/web/src/utils`.
-- Do not restore the old root-level HTML/CSS/JS structure.
-- Keep API schema definitions in `backend/app/schemas.py`.
-- Keep route definitions in `backend/app/routers`.
+- Keep frontend features inside `apps/web/src/components`, `apps/web/src/lib`, `apps/web/src/utils`, or `apps/web/src/types.ts`.
+- Do not restore the old root-level HTML/CSS/JS application.
+- Keep API schemas in `backend/app/schemas.py`.
+- Keep routers in `backend/app/routers`.
 - Keep business logic in `backend/app/services`.
-- Keep AI features demoable without an API key.
-- Do not expose API keys in read endpoints or logs.
-- Do not commit `.env`, `.venv`, `node_modules`, `dist`, `data`, cache files, or generated build output.
+- Prefer typed request/response contracts over ad hoc JSON shapes.
+- Keep changes focused; do not mix UI redesign, backend API changes, and packaging changes unless the task requires it.
+- Preserve localStorage fallback for frontend-only demos.
+- Preserve deterministic mock behavior for AI features.
+
+## Documentation Auto-Update Rule
+
+Whenever a change affects any of the following, update `AGENTS.md`, `CLAUDE.md`, and `README.md` in the same commit:
+
+- version number or release artifact name
+- project phase/status
+- startup, build, test, or packaging commands
+- frontend/backend/desktop architecture
+- public API endpoints or request/response fields
+- AI provider behavior, model defaults, key handling, or environment variables
+- database tables or storage paths
+- screenshots, demo flow, or resume positioning
+- known limitations or manual acceptance steps
+
+If a code change does not require doc updates, say that explicitly in the final report.
 
 ## User Preference
 
 - Reply in Chinese.
-- Favor clean, practical, portfolio-quality engineering.
-- Keep changes staged by project phase and verify before reporting completion.
+- Prefer practical, clean, portfolio-quality engineering.
+- Verify before reporting completion.
+- Do not create GitHub Releases or upload Release Assets unless explicitly requested.
