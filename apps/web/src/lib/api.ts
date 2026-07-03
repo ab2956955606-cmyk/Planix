@@ -8,6 +8,7 @@ import type {
   AppliedPlan,
   DailyReviewResponse,
   GoalPlanResponse,
+  Language,
   Plan,
   PlannerResponse,
   PlannerTask,
@@ -27,6 +28,7 @@ interface AiPayload {
   materials: string;
   preferences: string;
   date: string;
+  outputLanguage?: Language;
   data: AppData;
 }
 
@@ -456,7 +458,7 @@ export async function deleteRagDocument(id: string): Promise<void> {
 // ═══ AI Planning & Review ═══
 
 export async function createGoalPlan(payload: Omit<AiPayload, 'data'>): Promise<GoalPlanResponse> {
-  return callApi<GoalPlanResponse>('POST', '/api/planning/goal-plan', payload, 45000);
+  return callApi<GoalPlanResponse>('POST', '/api/planning/goal-plan', payload, 80000);
 }
 
 export async function createDailyReview(payload: Pick<AiPayload, 'date' | 'goal' | 'preferences' | 'data'>): Promise<DailyReviewResponse> {

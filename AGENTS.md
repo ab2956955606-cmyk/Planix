@@ -90,6 +90,7 @@ There is no compatibility fallback for old names or old environment variables.
 - Runtime success and fallback must not display old `plan_context_lookup`, `ui-mock`, or static UI mock wording.
 - Runtime output should answer the user's prompt directly; for a Python learning prompt, return a concrete Python learning plan summary.
 - Goals should display `structuredPlan` when present while keeping legacy task apply flows based on `tasks`.
+- Settings model input is free text. The only built-in recommendations are `deepseek-v4-flash` and `deepseek-v4-pro`; do not restore legacy model display names.
 - Keep Agent Trace visually secondary to the Workspace; it must not replace the prompt input or dominate the Dashboard.
 - Internal `reasoning` nodes must display as `Plan` / `执行计划`; do not expose hidden chain-of-thought.
 - Keep Calendar, Notes, Goals, and Settings functionality available through the menu.
@@ -97,10 +98,15 @@ There is no compatibility fallback for old names or old environment variables.
 ## Backend Rules
 
 - Keep AI features demoable without an API key.
+- A saved key enables live model calls automatically unless the provider is `mock`.
 - Never expose full API keys in read endpoints, logs, screenshots, or docs.
 - Preserve source-grounded RAG behavior.
 - LLM-generated planning output must be parsed, schema-validated, and completed with fallback defaults.
+- Goal planning asks the model only for `summary + structuredPlan`; legacy `phases` and `tasks` are derived from `structuredPlan`.
+- `PLANIX_GOAL_PLAN_MAX_TOKENS` controls Goals planning output budget. Default is `4096`; values above `8000` must clamp to `8000`.
+- OpenAI-compatible `finish_reason="length"` must map to `errorType="model_output_truncated"` rather than generic invalid JSON.
 - `GoalPlanOut` must keep `summary`, `phases`, `tasks`, and `sources` while adding `structuredPlan`.
+- Planning fallback must be transparent with safe diagnostics: `fallbackReason`, `errorType`, and host-only `baseUrlHost`.
 - `planning_goals` is planning result history/cache, not a confirmed execution table.
 - Runtime tools are restricted to read-only or preview-only behavior in this phase.
 - `search_materials`, `get_today_plans`, and `get_memory` are read-only.

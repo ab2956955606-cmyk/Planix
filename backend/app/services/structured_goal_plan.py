@@ -11,7 +11,7 @@ from ..schemas import GoalMilestone, GoalPlanTask, PhaseItem, PlannerTask, RagSo
 
 def is_python_goal(text: str) -> bool:
     normalized = text.lower()
-    return "python" in normalized or ("py" in normalized and "学习" in text)
+    return "python" in normalized or "py " in normalized or " py" in normalized
 
 
 def build_local_structured_plan(
@@ -144,7 +144,7 @@ def derive_planner_tasks(plan: StructuredGoalPlan) -> list[PlannerTask]:
                 PlannerTask(
                     time=times[len(tasks) % len(times)],
                     title=task.title,
-                    reason=f"{milestone.title}：{task.description}",
+                    reason=f"{milestone.title}: {task.description}",
                 )
             )
             if len(tasks) >= 3:
@@ -176,7 +176,7 @@ def render_goal_plan_markdown(
         if milestone.description:
             lines.append(milestone.description)
         for task in milestone.tasks:
-            due = f"｜截止 {task.due_date}" if task.due_date else ""
+            due = f"，截止 {task.due_date}" if task.due_date else ""
             lines.append(
                 f"- [{task.priority}] {task.title}（约 {task.estimated_minutes} 分钟{due}）：{task.description}"
             )
@@ -186,7 +186,8 @@ def render_goal_plan_markdown(
         lines.append(f"当前日程中已有 {today_plan_count} 条今日任务，建议写入前先确认负载。")
         lines.append("")
 
-    lines.append(f"复盘频率：{'每日' if plan.review_plan.frequency == 'daily' else '每周'}")
+    frequency = "每日" if plan.review_plan.frequency == "daily" else "每周"
+    lines.append(f"复盘频率：{frequency}")
     for question in plan.review_plan.questions:
         lines.append(f"- {question}")
 

@@ -2,6 +2,7 @@ from backend.app.db import get_conn
 from backend.app.services.ai_settings import EffectiveAiSettings
 from backend.app.services import llm as llm_module
 from backend.app.services.llm import _chat_completions_url
+from backend.app.services.llm import _classify_http_error
 from backend.app.services.llm import _effective_max_tokens, _message_content
 
 
@@ -182,6 +183,16 @@ def test_deepseek_url_does_not_add_v1():
     assert _chat_completions_url("https://api.deepseek.com/v1", "deepseek") == "https://api.deepseek.com/chat/completions"
 
 
+def test_http_errors_are_classified_for_safe_frontend_messages():
+    assert _classify_http_error(401, "").error_type == "auth_error"
+    assert _classify_http_error(403, "").error_type == "auth_error"
+    assert _classify_http_error(404, "model does not exist").error_type == "bad_model"
+    assert _classify_http_error(404, "model not found").error_type == "bad_model"
+    assert _classify_http_error(404, "endpoint not found").error_type == "bad_base_url"
+    assert _classify_http_error(429, "quota exceeded").error_type == "insufficient_balance"
+    assert _classify_http_error(402, "").error_type == "insufficient_balance"
+
+
 def test_deepseek_reasoning_models_get_minimum_token_budget():
     settings = EffectiveAiSettings(
         provider="deepseek",
@@ -195,12 +206,75 @@ def test_deepseek_reasoning_models_get_minimum_token_budget():
     assert _effective_max_tokens(settings, 32) == 512
 
 
+def test_llm_is_enabled_when_saved_key_exists_without_env_gate(monkeypatch):
+    monkeypatch.setenv("USE_REAL_LLM", "0")
+    monkeypatch.setattr(
+        llm_module,
+        "get_effective_ai_settings",
+        lambda: EffectiveAiSettings(
+            provider="deepseek",
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            api_key="sk-test-local",
+            temperature=0.1,
+            timeout_seconds=10,
+            updated_at="",
+        ),
+    )
+
+    assert llm_module.LlmClient().is_enabled() is True
+
+
+def test_llm_stays_disabled_for_mock_provider(monkeypatch):
+    monkeypatch.setattr(
+        llm_module,
+        "get_effective_ai_settings",
+        lambda: EffectiveAiSettings(
+            provider="mock",
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            api_key="sk-test-local",
+            temperature=0.1,
+            timeout_seconds=10,
+            updated_at="",
+        ),
+    )
+
+    assert llm_module.LlmClient().is_enabled() is False
+
+
 def test_message_content_rejects_empty_text():
     assert _message_content({"content": ""}) == ""
     assert _message_content({"content": [{"type": "text", "text": "OK"}]}) == "OK"
 
 
-def test_deepseek_key_stays_mock_without_real_llm_gate(client):
+def test_deepseek_key_enables_live_test_without_real_llm_gate(client, monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"choices":[{"message":{"content":"OK live"},"finish_reason":"stop"}]}'
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK live"}, "finish_reason": "stop"}]}
+
+    class FakeHttpClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, headers, json):
+            calls.append({"url": url, "headers": headers, "json": json})
+            return FakeResponse()
+
+    monkeypatch.setenv("USE_REAL_LLM", "0")
+    monkeypatch.setattr(llm_module.httpx, "Client", FakeHttpClient)
+
     saved = client.put(
         "/api/ai/settings",
         json={
@@ -218,7 +292,72 @@ def test_deepseek_key_stays_mock_without_real_llm_gate(client):
     assert tested.status_code == 200
     body = tested.json()
     assert body["ok"] is True
-    assert body["mode"] == "mock"
+    assert body["mode"] == "llm"
+    assert body["message"] == "OK live"
+    assert calls
+    assert calls[0]["json"]["model"] == "deepseek-v4-flash"
+
+
+def test_llm_finish_reason_length_is_reported_as_truncated(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        text = '{"choices":[{"message":{"content":"{\\"summary\\":\\"partial"},"finish_reason":"length"}]}'
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {"content": '{"summary":"partial'},
+                        "finish_reason": "length",
+                    }
+                ]
+            }
+
+    class FakeHttpClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, headers, json):
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        llm_module,
+        "get_effective_ai_settings",
+        lambda: EffectiveAiSettings(
+            provider="deepseek",
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            api_key="sk-test-local",
+            temperature=0.1,
+            timeout_seconds=10,
+            updated_at="",
+        ),
+    )
+    monkeypatch.setattr(llm_module.httpx, "Client", FakeHttpClient)
+
+    result, error = llm_module.LlmClient().complete("planning_goal_plan", "system", "user")
+
+    assert result is None
+    assert error is not None
+    assert error.error_type == "model_output_truncated"
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT error, output_summary FROM ai_runs
+            WHERE feature = 'planning_goal_plan'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert row is not None
+    assert row["error"] == "model output was truncated"
+    assert row["output_summary"] == ""
 
 
 def test_llm_rejects_invalid_key_format_before_request(monkeypatch):

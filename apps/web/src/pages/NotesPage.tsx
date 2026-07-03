@@ -1,5 +1,5 @@
 import { AIWorkspace } from '../components/AIWorkspace';
-import type { AppliedPlan, AppData, PlannerTask } from '../types';
+import type { AppliedPlan, AppData, Language, PlannerTask } from '../types';
 
 interface NotesPageProps {
   data: AppData;
@@ -8,6 +8,7 @@ interface NotesPageProps {
   onPreferencesChange: (value: string) => void;
   onApplyTasks: (tasks: PlannerTask[]) => void;
   onReplanApplied: (plans: AppliedPlan[]) => void;
+  language: Language;
   t: (key: string) => string;
 }
 

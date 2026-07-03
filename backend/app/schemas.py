@@ -276,6 +276,7 @@ class GoalPlanRequest(BaseModel):
     materials: str = ""
     preferences: str = ""
     date: str
+    output_language: Literal["zh-CN", "en-US"] | None = Field(default=None, alias="outputLanguage")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -290,6 +291,10 @@ class GoalPlanOut(BaseModel):
     structured_plan: StructuredGoalPlan | None = Field(default=None, alias="structuredPlan")
     provider: str | None = None
     model: str | None = None
+    fallback_reason: str | None = Field(default=None, alias="fallbackReason")
+    error_type: str | None = Field(default=None, alias="errorType")
+    error_message: str | None = Field(default=None, alias="errorMessage")
+    base_url_host: str | None = Field(default=None, alias="baseUrlHost")
 
     model_config = ConfigDict(populate_by_name=True)
 

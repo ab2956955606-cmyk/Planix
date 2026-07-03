@@ -230,6 +230,7 @@ export function App() {
     onApplyTasks: applyAiTasks,
     onReplanApplied: applyRemotePlans,
     onSettingsChange: setAiSettings,
+    language,
     t
   };
 

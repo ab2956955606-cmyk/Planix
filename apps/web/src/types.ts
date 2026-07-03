@@ -182,6 +182,10 @@ export interface GoalPlanResponse {
   structuredPlan?: StructuredGoalPlan;
   provider?: string;
   model?: string;
+  fallbackReason?: 'llm_error' | 'mock_provider' | 'missing_api_key';
+  errorType?: string;
+  errorMessage?: string;
+  baseUrlHost?: string;
 }
 
 export interface DailyReviewResponse {

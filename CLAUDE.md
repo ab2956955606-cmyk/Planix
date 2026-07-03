@@ -67,6 +67,11 @@ Rules:
 - `dueDate` is `string | null`.
 - `estimatedMinutes` is a number.
 - LLM output must be parsed, schema-validated, and repaired with local fallback defaults when incomplete.
+- Goals planning prompts the model for `summary + structuredPlan` only. `phases` and `tasks` are derived by the backend for legacy compatibility.
+- `PLANIX_GOAL_PLAN_MAX_TOKENS` controls the Goals planning token budget. It defaults to `4096` and clamps to `8000`.
+- If an OpenAI-compatible response ends with `finish_reason="length"`, report `errorType="model_output_truncated"` and use the local structured fallback.
+- A saved API key enables live model calls automatically unless the provider is `mock`.
+- Planning fallback must expose safe diagnostics with `fallbackReason`, `errorType`, and host-only `baseUrlHost`; never expose API keys, headers, path/query secrets, or raw request payloads.
 - `structuredPlan` is the fact source for Runtime preview and final output.
 - `planning_goals` stores generated planning history/cache only; it is not a confirmed Goals/Tasks execution table.
 
@@ -117,6 +122,7 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Runtime output should answer the user's goal directly, such as producing a readable Python learning plan for a Python learning prompt.
 - Internal `reasoning` nodes must display as `Plan` / `执行计划`; do not expose hidden chain-of-thought.
 - Goals should render `structuredPlan` when present and keep old task-apply behavior based on legacy `tasks`.
+- Settings model input is free text with built-in recommendations for `deepseek-v4-flash` and `deepseek-v4-pro` only.
 - Do not change existing request payloads or response schemas unless explicitly required by the phase plan.
 
 ## Runtime Constraints

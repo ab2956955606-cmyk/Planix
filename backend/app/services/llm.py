@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 import json
-import os
 from typing import Iterator
 from uuid import uuid4
 
@@ -63,19 +62,22 @@ def _chat_completions_url(base_url: str, provider: str) -> str:
 
 def _classify_http_error(status_code: int, body: str) -> LlmError:
     body_lower = body.lower() if body else ""
-    if status_code == 401:
+    if status_code in (401, 403):
         return LlmError("API key is invalid or expired.", "auth_error", status_code, detail=body[:200])
-    if status_code == 402:
+    if status_code == 402 or any(term in body_lower for term in ("insufficient", "quota", "balance", "credit")):
         return LlmError("The model account has insufficient balance.", "insufficient_balance", status_code, detail=body[:200])
-    if status_code in (400, 404, 422):
-        if "model" in body_lower:
+    if status_code in (400, 422):
+        if any(term in body_lower for term in ("model", "does not exist", "not found")):
             return LlmError("The model name does not exist or is not supported.", "bad_model", status_code, detail=body[:200])
-        return LlmError("The request is invalid. Check the Base URL and model name.", "bad_request", status_code, detail=body[:200])
+        return LlmError("The request is invalid. Check the Base URL and model name.", "unknown", status_code, detail=body[:200])
+    if status_code == 404:
+        if "model" in body_lower and any(term in body_lower for term in ("does not exist", "not found", "not supported")):
+            return LlmError("The model name does not exist or is not supported.", "bad_model", status_code, detail=body[:200])
+        return LlmError("The Base URL endpoint is unavailable. Check the API path.", "bad_base_url", status_code, detail=body[:200])
     if status_code == 429:
-        msg = body[:200] or "Too many requests. Try again later."
-        return LlmError(msg, "rate_limited", status_code, detail=body[:200])
+        return LlmError("The model account has insufficient balance or request quota.", "insufficient_balance", status_code, detail=body[:200])
     if status_code >= 500:
-        return LlmError("The model service returned a server error. Try again later.", "server_error", status_code, detail=body[:200])
+        return LlmError("The model service returned a server error. Try again later.", "unknown", status_code, detail=body[:200])
     return LlmError(f"Request failed (HTTP {status_code}).", "unknown", status_code, detail=body[:200])
 
 
@@ -84,8 +86,8 @@ def _needs_reasoning_budget(settings: EffectiveAiSettings) -> bool:
     return settings.provider == "deepseek" and ("v4" in model or "reasoner" in model)
 
 
-def _effective_max_tokens(settings: EffectiveAiSettings, max_tokens: int) -> int:
-    token_limit = max(1, min(max_tokens, 4000))
+def _effective_max_tokens(settings: EffectiveAiSettings, max_tokens: int, *, max_token_cap: int = 4000) -> int:
+    token_limit = max(1, min(max_tokens, max_token_cap))
     if _needs_reasoning_budget(settings):
         token_limit = max(token_limit, 512)
     return token_limit
@@ -141,14 +143,10 @@ class LlmClient:
     def __init__(self):
         self.settings = get_effective_ai_settings()
 
-    def real_llm_allowed(self) -> bool:
-        return os.getenv("USE_REAL_LLM", "").strip() == "1"
-
     def is_enabled(self) -> bool:
         return (
             self.settings.provider != "mock"
             and self.settings.has_api_key
-            and self.real_llm_allowed()
         )
 
     def complete(
@@ -160,6 +158,8 @@ class LlmClient:
         max_tokens: int = 800,
         temperature: float | None = None,
         timeout_seconds: int | None = None,
+        response_format_json: bool = False,
+        max_token_cap: int = 4000,
     ) -> tuple[LlmResult | None, LlmError | None]:
         """Returns (result, error). On success error is None; on failure result is None."""
         if not self.is_enabled():
@@ -179,9 +179,11 @@ class LlmClient:
                 {"role": "user", "content": user},
             ],
             "temperature": self.settings.temperature if temperature is None else temperature,
-            "max_tokens": _effective_max_tokens(self.settings, max_tokens),
+            "max_tokens": _effective_max_tokens(self.settings, max_tokens, max_token_cap=max_token_cap),
             "stream": False,
         }
+        if response_format_json:
+            payload["response_format"] = {"type": "json_object"}
         request_timeout = timeout_seconds if timeout_seconds is not None else self.settings.timeout_seconds
         try:
             with httpx.Client(timeout=max(1, request_timeout), trust_env=False) as client:
@@ -195,16 +197,42 @@ class LlmClient:
                 )
                 if response.status_code != 200:
                     body = response.text
-                    llm_err = _classify_http_error(response.status_code, body)
-                    record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
-                    return (None, llm_err)
+                    if response_format_json and response.status_code in (400, 422) and "response_format" in body.lower():
+                        payload.pop("response_format", None)
+                        response = client.post(
+                            _chat_completions_url(self.settings.base_url, self.settings.provider),
+                            headers={
+                                "Authorization": f"Bearer {self.settings.api_key.strip()}",
+                                "Accept-Encoding": "gzip, deflate",
+                            },
+                            json=payload,
+                        )
+                        if response.status_code == 200:
+                            body = ""
+                        else:
+                            body = response.text
+                    if response.status_code == 200:
+                        pass
+                    else:
+                        llm_err = _classify_http_error(response.status_code, body)
+                        record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
+                        return (None, llm_err)
 
                 data = response.json()
                 choice = data["choices"][0]
+                finish_reason = str(choice.get("finish_reason") or "")
+                if finish_reason == "length":
+                    llm_err = LlmError(
+                        "The model output was truncated before completion.",
+                        "model_output_truncated",
+                        0,
+                        detail="finish_reason=length",
+                    )
+                    record_ai_run(feature, self.settings, user, success=False, error="model output was truncated")
+                    return (None, llm_err)
                 message = choice["message"]
                 content = _message_content(message)
                 if not content:
-                    finish_reason = choice.get("finish_reason", "")
                     reasoning_len = len(str(message.get("reasoning_content") or ""))
                     llm_err = LlmError(
                         "The model returned empty content. Increase max tokens or use a non-reasoning model.",
@@ -218,8 +246,12 @@ class LlmClient:
             llm_err = LlmError("The model request timed out. Check the network or increase timeout.", "timeout", 0)
             record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
             return (None, llm_err)
+        except (httpx.InvalidURL, httpx.UnsupportedProtocol):
+            llm_err = LlmError("The Base URL is invalid. Check whether the address is correct.", "bad_base_url", 0)
+            record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
+            return (None, llm_err)
         except httpx.ConnectError:
-            llm_err = LlmError("The Base URL cannot be reached. Check whether the address is correct.", "bad_base_url", 0)
+            llm_err = LlmError("The model service cannot be reached. Check the network or service availability.", "network_error", 0)
             record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
             return (None, llm_err)
         except httpx.RemoteProtocolError:

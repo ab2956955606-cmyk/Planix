@@ -76,14 +76,6 @@ def test_ai_settings(payload: AiSettingsTestPayload) -> AiSettingsTestOut:
                 provider=client.settings.provider,
                 model=client.settings.model,
             )
-        if client.settings.has_api_key and not client.real_llm_allowed():
-            return AiSettingsTestOut(
-                ok=True,
-                mode="mock",
-                message="Settings are saved. Live LLM calls are disabled, so this test used the safe mock path.",
-                provider=client.settings.provider,
-                model=client.settings.model,
-            )
         return AiSettingsTestOut(
             ok=False,
             mode="error",

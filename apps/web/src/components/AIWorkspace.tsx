@@ -25,6 +25,7 @@ import type {
   PlannerTask,
   RagDocument,
   RagSource,
+  Language,
   StructuredGoalPlan
 } from '../types';
 import {
@@ -57,6 +58,7 @@ interface AIWorkspaceProps {
   onApplyTasks: (tasks: PlannerTask[]) => void;
   onReplanApplied: (plans: AppliedPlan[]) => void;
   onSettingsChange?: (settings: AiSettings) => void;
+  language: Language;
   t: (key: string) => string;
 }
 
@@ -105,6 +107,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     onApplyTasks,
     onReplanApplied,
     onSettingsChange,
+    language,
     t
   } = props;
   const [goal, setGoal] = useState(t('legacy.goalPlaceholder'));
@@ -244,9 +247,9 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     setLoading('goal');
     setUtilityResult(null);
     try {
-      const plan = await createGoalPlan({ goal: trimmedGoal, deadline, dailyHours, materials, preferences, date });
+      const plan = await createGoalPlan({ goal: trimmedGoal, deadline, dailyHours, materials, preferences, date, outputLanguage: language });
       setGoalPlan(plan);
-      setGoalStatus(plan.mode === 'llm' ? t('legacy.goalPlanGenerated') : t('legacy.goalPlanFallbackGenerated'));
+      setGoalStatus(goalPlanStatusText(plan, t));
     } catch (err) {
       if (err instanceof ApiNetworkError) {
         setGoalStatus(isTimeoutLikeError(err) ? t('legacy.goalPlanTimeout') : t('legacy.goalPlanBackendOffline'));
@@ -551,6 +554,33 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   );
 }
 
+function goalPlanStatusText(plan: GoalPlanResponse, t: (key: string) => string): string {
+  if (plan.mode === 'llm') return t('legacy.goalPlanGenerated');
+  if (plan.fallbackReason === 'mock_provider') return t('legacy.goalPlanFallbackMockProvider');
+  if (plan.fallbackReason === 'missing_api_key') return t('legacy.goalPlanFallbackMissingKey');
+  if (plan.fallbackReason === 'llm_error') {
+    return `${t('legacy.goalPlanFallbackLlmError')}${t('legacy.goalPlanReason')}: ${goalPlanErrorReason(plan.errorType, t)}`;
+  }
+  return t('legacy.goalPlanFallbackGenerated');
+}
+
+function goalPlanErrorReason(errorType: string | undefined, t: (key: string) => string): string {
+  const keyByType: Record<string, string> = {
+    auth_error: 'legacy.goalPlanErrorAuth',
+    invalid_key_format: 'legacy.goalPlanErrorInvalidKeyFormat',
+    bad_model: 'legacy.goalPlanErrorBadModel',
+    bad_base_url: 'legacy.goalPlanErrorBadBaseUrl',
+    network_error: 'legacy.goalPlanErrorNetwork',
+    timeout: 'legacy.goalPlanErrorTimeout',
+    insufficient_balance: 'legacy.goalPlanErrorBalance',
+    invalid_model_output: 'legacy.goalPlanErrorInvalidOutput',
+    model_output_truncated: 'legacy.goalPlanErrorModelOutputTruncated',
+    empty_content: 'legacy.goalPlanErrorEmptyContent',
+    unknown: 'legacy.goalPlanErrorUnknown'
+  };
+  return t(keyByType[errorType ?? ''] ?? 'legacy.goalPlanErrorUnknown');
+}
+
 function MaterialLibrary(props: {
   documents: RagDocument[];
   docTitle: string;
@@ -823,7 +853,9 @@ function ModelSettings(props: {
   t: (key: string) => string;
 }) {
   const { settings, apiKey, settingsStatus, setSettings, setApiKey, clearSettingsStatus, saveModelSettings, clearSavedApiKey, testModel, settingsBusy, t } = props;
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const hasConfiguredKey = settings.provider !== 'mock' && settings.hasApiKey;
+  const recommendedModels = ['deepseek-v4-flash', 'deepseek-v4-pro'];
   const updateSettings = (updater: (settings: AiSettings) => AiSettings) => {
     clearSettingsStatus();
     setSettings(updater);
@@ -855,12 +887,45 @@ function ModelSettings(props: {
         </label>
         <label>
           <span>{t('legacy.model')}</span>
-          <select value={settings.model} onChange={(event) => updateSettings((current) => ({ ...current, model: event.target.value }))}>
-            <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-            <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-            <option value="deepseek-chat">DeepSeek Chat (legacy)</option>
-            <option value="deepseek-reasoner">DeepSeek Reasoner (legacy)</option>
-          </select>
+          <div
+            className="model-picker"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) {
+                setModelMenuOpen(false);
+              }
+            }}
+          >
+            <input
+              value={settings.model}
+              onChange={(event) => updateSettings((current) => ({ ...current, model: event.target.value }))}
+              placeholder="deepseek-v4-flash"
+            />
+            <button
+              type="button"
+              className="model-picker-toggle"
+              aria-label={t('legacy.recommendedModel')}
+              aria-expanded={modelMenuOpen}
+              onClick={() => setModelMenuOpen((open) => !open)}
+            />
+            {modelMenuOpen && (
+              <div className="model-picker-menu" role="listbox">
+                {recommendedModels.map((model) => (
+                  <button
+                    key={model}
+                    type="button"
+                    role="option"
+                    aria-selected={settings.model === model}
+                    onClick={() => {
+                      updateSettings((current) => ({ ...current, model }));
+                      setModelMenuOpen(false);
+                    }}
+                  >
+                    {model}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </label>
         <label>
           <span><KeyRound size={13} />{t('legacy.apiKey')}</span>

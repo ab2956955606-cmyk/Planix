@@ -1,6 +1,8 @@
 import json
+import os
 from datetime import date as date_type
 from datetime import timedelta
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from ..db import get_conn, load_memory
@@ -30,8 +32,11 @@ from .structured_goal_plan import (
 )
 
 
-GOAL_PLAN_LLM_TIMEOUT_SECONDS = 30
-GOAL_PLAN_MAX_TOKENS = 1200
+GOAL_PLAN_MIN_LLM_TIMEOUT_SECONDS = 55
+GOAL_PLAN_MAX_LLM_TIMEOUT_SECONDS = 65
+GOAL_PLAN_DEFAULT_MAX_TOKENS = 4096
+GOAL_PLAN_MAX_TOKEN_LIMIT = 8000
+GOAL_PLAN_MAX_TOKENS_ENV = "PLANIX_GOAL_PLAN_MAX_TOKENS"
 
 
 def _parse_date(value: str) -> date_type:
@@ -131,6 +136,55 @@ def _structured_from_parsed(
     return normalize_structured_plan(raw, fallback)
 
 
+def _base_url_host(base_url: str) -> str:
+    try:
+        return urlparse(base_url).netloc or ""
+    except Exception:
+        return ""
+
+
+def _safe_goal_error_type(error_type: str | None) -> str | None:
+    if not error_type:
+        return None
+    allowed = {
+        "auth_error",
+        "bad_model",
+        "bad_base_url",
+        "network_error",
+        "timeout",
+        "insufficient_balance",
+        "invalid_key_format",
+        "invalid_model_output",
+        "model_output_truncated",
+        "empty_content",
+        "unknown",
+    }
+    return error_type if error_type in allowed else "unknown"
+
+
+def _detect_output_language(*values: str) -> str:
+    text = " ".join(value or "" for value in values)
+    cjk_count = sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
+    return "zh-CN" if cjk_count >= 2 else "en-US"
+
+
+def _goal_plan_timeout(settings_timeout_seconds: int) -> int:
+    return min(max(settings_timeout_seconds, GOAL_PLAN_MIN_LLM_TIMEOUT_SECONDS), GOAL_PLAN_MAX_LLM_TIMEOUT_SECONDS)
+
+
+def _goal_plan_max_tokens() -> int:
+    raw = os.getenv(GOAL_PLAN_MAX_TOKENS_ENV, "").strip()
+    if not raw:
+        return GOAL_PLAN_DEFAULT_MAX_TOKENS
+    try:
+        value = int(raw)
+    except ValueError:
+        return GOAL_PLAN_DEFAULT_MAX_TOKENS
+    if value <= 0:
+        return GOAL_PLAN_DEFAULT_MAX_TOKENS
+    return min(value, GOAL_PLAN_MAX_TOKEN_LIMIT)
+
+
 def _plan_to_dict(plan: PlanOut) -> dict[str, object]:
     return plan.model_dump(by_alias=True)
 
@@ -144,6 +198,7 @@ class PlanningService:
         preferences = payload.preferences or load_memory()
         sources = self.rag.retrieve(" ".join([payload.goal, payload.materials]), limit=4)
         retrieved_sources = [source.model_dump(by_alias=True) for source in sources]
+        output_language = payload.output_language or _detect_output_language(payload.goal, payload.materials, preferences)
         fallback_structured = build_local_structured_plan(
             payload.goal,
             date=payload.date,
@@ -151,23 +206,29 @@ class PlanningService:
             daily_hours=payload.daily_hours,
             source_count=len(sources),
         )
-        llm_result, _ = LlmClient().complete(
+        llm_client = LlmClient()
+        llm_result, llm_error = llm_client.complete(
             "planning_goal_plan",
             (
-                "You are an AI planning agent. Return only valid JSON, no markdown. "
-                'Required shape: {"summary":"...","structuredPlan":{"goalTitle":"...",'
-                '"goalDescription":"...","durationDays":14,"milestones":[{"title":"...",'
-                '"description":"...","tasks":[{"title":"...","description":"...",'
-                '"estimatedMinutes":60,"dueDate":"YYYY-MM-DD or null","priority":"low|medium|high"}]}],'
-                '"reviewPlan":{"frequency":"daily|weekly","questions":["..."]}},'
-                '"phases":[{"title":"...","detail":"..."}],'
-                '"tasks":[{"time":"HH:MM","title":"...","reason":"..."}]}. '
-                "Use retrievedSources when available. The structuredPlan is the source of truth. "
-                "Do not include write intents and do not claim that data was written."
+                "You are a planning agent. Return compact valid JSON only. "
+                "No markdown, no commentary, no extra keys. "
+                'Shape: {"summary":"one short sentence","structuredPlan":{"goalTitle":"...",'
+                '"goalDescription":"natural concise description","durationDays":14,'
+                '"milestones":[{"title":"...","description":"...","tasks":[{"title":"...",'
+                '"description":"...","estimatedMinutes":45,"dueDate":"YYYY-MM-DD or null",'
+                '"priority":"low|medium|high"}]}],"reviewPlan":{"frequency":"daily|weekly",'
+                '"questions":["..."]}}}. '
+                "Do not include phases, tasks, markdown, code fences, or explanatory text outside JSON. "
+                "Use at most 3 milestones, at most 2 tasks per milestone, and at most 3 review questions. "
+                "Keep field values natural and concise; avoid oversized JSON. Use retrievedSources when available. "
+                "The structuredPlan is the source of truth. Do not write user data. "
+                "All user-facing string values must use outputLanguage from the user payload. "
+                "If outputLanguage is zh-CN, write Simplified Chinese; keep technical terms like Python, FastAPI, RAG, API as-is."
             ),
             _dump(
                 {
                     "goal": payload.goal,
+                    "outputLanguage": output_language,
                     "deadline": payload.deadline,
                     "dailyHours": payload.daily_hours,
                     "materials": payload.materials[:3000],
@@ -176,14 +237,20 @@ class PlanningService:
                     "date": payload.date,
                 }
             ),
-            max_tokens=GOAL_PLAN_MAX_TOKENS,
+            max_tokens=_goal_plan_max_tokens(),
+            max_token_cap=GOAL_PLAN_MAX_TOKEN_LIMIT,
             temperature=0.2,
-            timeout_seconds=GOAL_PLAN_LLM_TIMEOUT_SECONDS,
+            timeout_seconds=_goal_plan_timeout(llm_client.settings.timeout_seconds),
+            response_format_json=True,
         )
 
         mode = "mock"
         provider = None
         model = None
+        fallback_reason = None
+        error_type = None
+        error_message = None
+        base_url_host = None
         parsed = _json_object(llm_result.content) if llm_result else None
         if parsed:
             mode = "llm"
@@ -191,13 +258,30 @@ class PlanningService:
             model = llm_result.model if llm_result else None
             structured_plan = _structured_from_parsed(parsed, fallback_structured)
             summary = str(parsed.get("summary") or structured_plan.goal_description)
-            phases = _normalize_phase_items(parsed.get("phases"))
-            tasks = _normalize_planner_tasks(parsed.get("tasks"))
+            phases = derive_phase_items(structured_plan)
+            tasks = derive_planner_tasks(structured_plan)
         else:
             structured_plan = fallback_structured
             summary = structured_plan.goal_description
             phases = []
             tasks = []
+            provider = llm_client.settings.provider
+            model = llm_client.settings.model
+            base_url_host = _base_url_host(llm_client.settings.base_url)
+            if llm_result and not parsed:
+                fallback_reason = "llm_error"
+                error_type = "invalid_model_output"
+                error_message = "The model returned content, but it was not valid structured JSON."
+            elif llm_client.settings.provider == "mock":
+                fallback_reason = "mock_provider"
+                error_message = "Mock provider is active."
+            elif not llm_client.settings.has_api_key:
+                fallback_reason = "missing_api_key"
+                error_message = "API key is not saved."
+            else:
+                fallback_reason = "llm_error"
+                error_type = _safe_goal_error_type(llm_error.error_type if llm_error else "unknown")
+                error_message = llm_error.message if llm_error else "The model response could not be used."
 
         if not phases or not tasks:
             phases = phases or derive_phase_items(structured_plan)
@@ -240,6 +324,10 @@ class PlanningService:
             structuredPlan=structured_plan,
             provider=provider,
             model=model,
+            fallbackReason=fallback_reason,
+            errorType=error_type,
+            errorMessage=error_message,
+            baseUrlHost=base_url_host,
         )
 
     def create_daily_review(self, payload: DailyReviewRequest) -> DailyReviewOut:
