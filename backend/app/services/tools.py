@@ -1,18 +1,23 @@
 AGENT_TOOLS = [
     {
-        "name": "create_task",
-        "description": "Create a calendar task with a time, title and planning reason.",
-        "parameters": {"time": "HH:mm", "title": "task title", "reason": "why this task exists"},
-    },
-    {
         "name": "search_materials",
-        "description": "Retrieve relevant snippets from uploaded or pasted materials.",
+        "description": "Read relevant snippets from uploaded or pasted materials.",
         "parameters": {"query": "search query", "top_k": "number of snippets"},
     },
     {
-        "name": "summarize_week",
-        "description": "Summarize weekly completion records and suggest next actions.",
-        "parameters": {"date": "week date", "plans": "weekly plan records"},
+        "name": "get_today_plans",
+        "description": "Read calendar plans for a specific day without modifying them.",
+        "parameters": {"date": "YYYY-MM-DD"},
+    },
+    {
+        "name": "get_memory",
+        "description": "Read saved preference memory and recent run summaries.",
+        "parameters": {"user_id": "local user id"},
+    },
+    {
+        "name": "propose_tasks",
+        "description": "Preview calendar tasks without writing them to the calendar.",
+        "parameters": {"goal": "target goal", "date": "YYYY-MM-DD", "preferences": "preference context"},
     },
 ]
 

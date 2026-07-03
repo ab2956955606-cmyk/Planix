@@ -22,6 +22,14 @@ class AiPayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class AgentRunRequest(BaseModel):
+    input: str
+    date: str
+    preferences: str = ""
+    materials: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
 class MemoryPayload(BaseModel):
     user_id: str = Field(default="local-user", alias="userId")
     preferences: str = ""
@@ -219,6 +227,41 @@ class PlannerTask(BaseModel):
     reason: str = ""
 
 
+GoalPriority = Literal["low", "medium", "high"]
+ReviewFrequency = Literal["daily", "weekly"]
+
+
+class GoalPlanTask(BaseModel):
+    title: str
+    description: str = ""
+    estimated_minutes: int = Field(default=45, alias="estimatedMinutes", ge=1, le=1440)
+    due_date: str | None = Field(default=None, alias="dueDate")
+    priority: GoalPriority = "medium"
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class GoalMilestone(BaseModel):
+    title: str
+    description: str = ""
+    tasks: list[GoalPlanTask] = Field(default_factory=list)
+
+
+class ReviewPlan(BaseModel):
+    frequency: ReviewFrequency = "daily"
+    questions: list[str] = Field(default_factory=list)
+
+
+class StructuredGoalPlan(BaseModel):
+    goal_title: str = Field(alias="goalTitle")
+    goal_description: str = Field(alias="goalDescription")
+    duration_days: int = Field(alias="durationDays", ge=1, le=3650)
+    milestones: list[GoalMilestone]
+    review_plan: ReviewPlan = Field(alias="reviewPlan")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class ReplanTask(PlannerTask):
     target_date: str = Field(alias="targetDate")
     source_plan_id: str | None = Field(default=None, alias="sourcePlanId")
@@ -244,8 +287,11 @@ class GoalPlanOut(BaseModel):
     phases: list[PhaseItem]
     tasks: list[PlannerTask]
     sources: list[RagSource] = Field(default_factory=list)
+    structured_plan: StructuredGoalPlan | None = Field(default=None, alias="structuredPlan")
     provider: str | None = None
     model: str | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class DailyReviewRequest(BaseModel):

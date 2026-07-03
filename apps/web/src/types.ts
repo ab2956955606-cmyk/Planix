@@ -3,11 +3,63 @@ export type Lang = Language;
 
 export type AppRoute = 'dashboard' | 'calendar' | 'notes' | 'goals' | 'settings';
 
+export type AgentFlowNodeType = 'input' | 'reasoning' | 'tool' | 'observation' | 'output';
+export type AgentFlowStatus = 'pending' | 'running' | 'done' | 'error';
+
+export interface AgentToolCall {
+  name: string;
+  input: string;
+  output: string;
+  latencyMs: number;
+  expanded: boolean;
+  writeMode?: 'readonly' | 'preview';
+}
+
+export interface AgentFlowDiff {
+  previous: string;
+  current: string;
+  changedAt: number;
+}
+
 export interface AgentFlowNode {
   id: string;
-  label: string;
-  kind: 'input' | 'plan' | 'tool' | 'output';
-  status: 'idle' | 'running' | 'done' | 'error';
+  type: AgentFlowNodeType;
+  title: string;
+  content: string;
+  status: AgentFlowStatus;
+  timestamp: number;
+  toolCall?: AgentToolCall;
+  diff?: AgentFlowDiff;
+}
+
+export interface AgentRunRequest {
+  input: string;
+  date: string;
+  preferences?: string;
+  materials?: string;
+  data?: Record<string, unknown>;
+}
+
+export interface AgentRuntimeToolCall {
+  name: string;
+  input: unknown;
+  output?: unknown;
+  latencyMs?: number;
+  writeMode: 'readonly' | 'preview';
+}
+
+export interface AgentRuntimeEvent {
+  runId: string;
+  sequence: number;
+  type: 'node' | 'delta' | 'tool' | 'status' | 'final' | 'error';
+  nodeId?: string;
+  nodeType?: AgentFlowNodeType;
+  status?: AgentFlowStatus;
+  title?: string;
+  content?: string;
+  delta?: string;
+  toolCall?: AgentRuntimeToolCall;
+  error?: string;
 }
 
 export interface InspectorLog {
@@ -58,6 +110,35 @@ export interface PlannerTask {
   reason: string;
 }
 
+export type GoalPriority = 'low' | 'medium' | 'high';
+
+export interface GoalPlanTask {
+  title: string;
+  description: string;
+  estimatedMinutes: number;
+  dueDate: string | null;
+  priority: GoalPriority;
+}
+
+export interface GoalMilestone {
+  title: string;
+  description: string;
+  tasks: GoalPlanTask[];
+}
+
+export interface ReviewPlan {
+  frequency: 'daily' | 'weekly';
+  questions: string[];
+}
+
+export interface StructuredGoalPlan {
+  goalTitle: string;
+  goalDescription: string;
+  durationDays: number;
+  milestones: GoalMilestone[];
+  reviewPlan: ReviewPlan;
+}
+
 export interface PhaseItem {
   title: string;
   detail: string;
@@ -98,6 +179,7 @@ export interface GoalPlanResponse {
   phases: PhaseItem[];
   tasks: PlannerTask[];
   sources?: RagSource[];
+  structuredPlan?: StructuredGoalPlan;
   provider?: string;
   model?: string;
 }
@@ -151,7 +233,7 @@ export interface AiSettingsInput {
   provider: AiSettings['provider'];
   baseUrl: string;
   model: string;
-  apiKey: string;
+  apiKey?: string;
   temperature: number;
   timeoutSeconds: number;
 }

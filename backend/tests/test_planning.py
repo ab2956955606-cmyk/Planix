@@ -1,5 +1,6 @@
+from app.db import get_conn
 from app.services import planning as planning_module
-from app.services.llm import LlmError
+from app.services.llm import LlmError, LlmResult
 
 
 def _goal_payload() -> dict:
@@ -13,11 +14,9 @@ def _goal_payload() -> dict:
     }
 
 
-def test_goal_plan_returns_and_persists_mock_result(client):
-    response = client.post(
-        "/api/planning/goal-plan",
-        json=_goal_payload(),
-    )
+def test_goal_plan_returns_and_persists_structured_mock_result(client):
+    response = client.post("/api/planning/goal-plan", json=_goal_payload())
+
     assert response.status_code == 200
     body = response.json()
     assert body["id"]
@@ -25,9 +24,45 @@ def test_goal_plan_returns_and_persists_mock_result(client):
     assert body["summary"]
     assert len(body["phases"]) >= 1
     assert len(body["tasks"]) >= 1
+    assert body["structuredPlan"]["goalTitle"]
+    assert body["structuredPlan"]["durationDays"] >= 1
+    assert body["structuredPlan"]["milestones"][0]["tasks"][0]["priority"] in {"low", "medium", "high"}
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT structured_plan_json, sources_json FROM planning_goals WHERE id = ?",
+            (body["id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert "goalTitle" in row["structured_plan_json"]
+    assert row["sources_json"].startswith("[")
 
 
-def test_goal_plan_llm_error_returns_readable_mock_result(client, monkeypatch):
+def test_goal_plan_python_goal_has_structured_milestones(client):
+    response = client.post(
+        "/api/planning/goal-plan",
+        json={
+            "goal": "帮我规划一个 Python 学习计划",
+            "deadline": "2026-07-29",
+            "dailyHours": 2,
+            "materials": "",
+            "preferences": "",
+            "date": "2026-07-01",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    structured = body["structuredPlan"]
+    assert "Python" in structured["goalTitle"]
+    assert structured["durationDays"] == 28
+    assert structured["milestones"]
+    assert structured["milestones"][0]["tasks"]
+    assert structured["reviewPlan"]["questions"]
+
+
+def test_goal_plan_llm_error_returns_readable_local_structured_result(client, monkeypatch):
     class TimeoutClient:
         def complete(self, *args, **kwargs):
             return None, LlmError("timeout", "timeout", 0)
@@ -39,10 +74,12 @@ def test_goal_plan_llm_error_returns_readable_mock_result(client, monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["mode"] == "mock"
-    assert "Generated a three-phase plan" in body["summary"]
+    assert body["structuredPlan"]["goalTitle"]
     combined = " ".join(
         [
             body["summary"],
+            body["structuredPlan"]["goalTitle"],
+            body["structuredPlan"]["goalDescription"],
             *[phase["title"] for phase in body["phases"]],
             *[phase["detail"] for phase in body["phases"]],
             *[task["title"] for task in body["tasks"]],
@@ -50,8 +87,36 @@ def test_goal_plan_llm_error_returns_readable_mock_result(client, monkeypatch):
         ]
     )
     assert "�" not in combined
-    assert "鈥" not in combined
-    assert "鏀" not in combined
+    assert "乱码" not in combined
+    assert "ui-mock" not in combined
+    assert "静态 UI 模拟" not in combined
+
+
+def test_goal_plan_invalid_llm_structured_plan_is_safely_completed(client, monkeypatch):
+    class InvalidStructuredClient:
+        def complete(self, *args, **kwargs):
+            return (
+                LlmResult(
+                    content='{"summary":"LLM partial","structuredPlan":{"goalTitle":"Broken","durationDays":"14","milestones":[{"title":"M","tasks":[{"title":"Task","priority":"urgent","estimatedMinutes":"bad"}]}],"reviewPlan":{"frequency":"sometimes"}}}',
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                ),
+                None,
+            )
+
+    monkeypatch.setattr(planning_module, "LlmClient", lambda: InvalidStructuredClient())
+
+    response = client.post("/api/planning/goal-plan", json=_goal_payload())
+
+    assert response.status_code == 200
+    body = response.json()
+    structured = body["structuredPlan"]
+    assert body["mode"] == "llm"
+    assert structured["goalTitle"] == "Broken"
+    assert structured["durationDays"] == 14
+    assert structured["milestones"][0]["tasks"][0]["priority"] in {"low", "medium", "high"}
+    assert isinstance(structured["milestones"][0]["tasks"][0]["estimatedMinutes"], int)
+    assert structured["reviewPlan"]["frequency"] in {"daily", "weekly"}
 
 
 def test_goal_plan_uses_short_llm_timeout(client, monkeypatch):
@@ -80,21 +145,13 @@ def test_goal_plan_returns_rag_sources_when_documents_match(client):
         },
     ).json()
 
-    response = client.post(
-        "/api/planning/goal-plan",
-        json={
-            "goal": "Build a strong AI application internship portfolio",
-            "deadline": "2026-09-30",
-            "dailyHours": 3,
-            "materials": "RAG FastAPI Agent evaluation",
-            "preferences": "Deep work in the morning",
-            "date": "2026-07-01",
-        },
-    )
+    response = client.post("/api/planning/goal-plan", json=_goal_payload())
+
     assert response.status_code == 200
     body = response.json()
     assert body["sources"]
     assert body["sources"][0]["documentId"] == document["id"]
+    assert body["structuredPlan"]["goalDescription"]
 
 
 def test_daily_review_creates_replan_preview_without_writing_plans(client):

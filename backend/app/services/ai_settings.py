@@ -86,9 +86,18 @@ def get_public_ai_settings() -> AiSettingsOut:
 
 
 def save_ai_settings(payload: AiSettingsUpdate) -> AiSettingsOut:
-    api_key = "" if payload.provider == "mock" or payload.api_key is None else payload.api_key.strip()
-    api_key_source = "user" if api_key else ""
     with get_conn() as conn:
+        existing = conn.execute("SELECT * FROM ai_settings WHERE id = ?", (SETTINGS_ID,)).fetchone()
+        if payload.provider == "mock":
+            api_key = ""
+            api_key_source = ""
+        elif payload.api_key is None:
+            api_key = existing["api_key_encrypted"] if existing and existing["api_key_source"] == "user" else ""
+            api_key_source = "user" if api_key else ""
+        else:
+            api_key = payload.api_key.strip()
+            api_key_source = "user" if api_key else ""
+
         row = conn.execute(
             """
             INSERT INTO ai_settings(

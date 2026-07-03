@@ -1,4 +1,6 @@
 import type {
+  AgentRunRequest,
+  AgentRuntimeEvent,
   AiSettings,
   AiSettingsInput,
   AiSettingsTestResult,
@@ -14,6 +16,7 @@ import type {
   ReplanApplyPayload
 } from '../types';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 // AiPayload is defined inline in other modules, but not exported from types.ts
 // Define it here for our use
@@ -37,11 +40,21 @@ interface AiPayload {
    `proxy_api`, which runs in the Rust process and is not subject
    to WebView2's mixed-content restrictions.
 
-   In DEV mode (Vite), we still use native fetch() through the Vite
-   dev server proxy.
+   In browser mode, use native fetch() against the local FastAPI backend
+   directly. This keeps Vite preview/static ports such as 5198 working even
+   when that frontend server does not proxy /api.
    ═══════════════════════════════════════════════════════════════════ */
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8000';
+const API_BASE_URL = (import.meta.env.VITE_PLANIX_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
+const API_NOT_CONNECTED_MESSAGE = '前端服务没有连接到 Planix API，请确认后端运行在 127.0.0.1:8000';
+
+type AgentRuntimeHandlers = {
+  onEvent: (event: AgentRuntimeEvent) => void;
+  onError?: (error: Error) => void;
+  onDone?: () => void;
+};
 
 async function tauriProxy<T>(method: string, path: string, body?: unknown): Promise<T> {
   let result: { status: number; body: string };
@@ -110,6 +123,26 @@ export { ApiHttpError };
 
 // ═══ Common request helper ═══
 
+function apiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+function isJsonResponse(res: Response): boolean {
+  return (res.headers.get('content-type') || '').toLowerCase().includes('application/json');
+}
+
+async function parseJsonResponse<T>(res: Response): Promise<T> {
+  if (!isJsonResponse(res)) {
+    throw new ApiNetworkError(API_NOT_CONNECTED_MESSAGE);
+  }
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new ApiNetworkError('Planix API 返回了无效 JSON，请确认后端运行正常');
+  }
+}
+
 async function callApi<T>(method: string, path: string, body?: unknown, timeoutMs = 45000): Promise<T> {
   if (isTauri) {
     return tauriProxy<T>(method, path, body);
@@ -124,14 +157,17 @@ async function callApi<T>(method: string, path: string, body?: unknown, timeoutM
       signal: controller.signal,
     };
     if (body) init.body = JSON.stringify(body);
-    const res = await fetch(path, init);
+    const res = await fetch(apiUrl(path), init);
     if (!res.ok) {
       let detail: unknown = undefined;
+      if (!isJsonResponse(res)) {
+        throw new ApiNetworkError(API_NOT_CONNECTED_MESSAGE);
+      }
       try { detail = await res.json(); } catch { /* ignore */ }
       throw new ApiHttpError(res.status, detail);
     }
     if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
+    return parseJsonResponse<T>(res);
   } catch (err) {
     if (err instanceof ApiError) throw err;
     const message = err instanceof Error ? err.message : String(err);
@@ -143,6 +179,121 @@ async function callApi<T>(method: string, path: string, body?: unknown, timeoutM
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+function parseRuntimeLine(line: string, handlers: AgentRuntimeHandlers) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  handlers.onEvent(JSON.parse(trimmed) as AgentRuntimeEvent);
+}
+
+function runtimeEventName(): string {
+  const suffix = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `agent-runtime-${suffix}`;
+}
+
+async function runTauriAgentRuntime(payload: AgentRunRequest, handlers: AgentRuntimeHandlers): Promise<void> {
+  const eventName = runtimeEventName();
+  const unlisteners: Array<() => void> = [];
+  let resolveDone: () => void = () => undefined;
+  let rejectDone: (error: Error) => void = () => undefined;
+  const completion = new Promise<void>((resolve, reject) => {
+    resolveDone = resolve;
+    rejectDone = reject;
+  });
+
+  const cleanup = () => {
+    while (unlisteners.length) {
+      unlisteners.pop()?.();
+    }
+  };
+
+  try {
+    unlisteners.push(await listen<string>(eventName, (event) => {
+      try {
+        parseRuntimeLine(event.payload, handlers);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        cleanup();
+        handlers.onError?.(error);
+        rejectDone(error);
+      }
+    }));
+    unlisteners.push(await listen<string>(`${eventName}:done`, () => {
+      cleanup();
+      handlers.onDone?.();
+      resolveDone();
+    }));
+    unlisteners.push(await listen<string>(`${eventName}:error`, (event) => {
+      cleanup();
+      const error = new ApiNetworkError(event.payload || 'Runtime stream failed');
+      handlers.onError?.(error);
+      rejectDone(error);
+    }));
+
+    await invoke<void>('stream_agent_runtime', {
+      req: {
+        method: 'POST',
+        path: '/api/runtime/run',
+        body: JSON.stringify(payload),
+      },
+      eventName,
+    });
+    await completion;
+  } catch (err) {
+    cleanup();
+    const error = err instanceof Error ? err : new ApiNetworkError(String(err));
+    handlers.onError?.(error);
+    throw error;
+  }
+}
+
+async function runFetchAgentRuntime(payload: AgentRunRequest, handlers: AgentRuntimeHandlers): Promise<void> {
+  const res = await fetch(apiUrl('/api/runtime/run'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail: unknown = undefined;
+    try { detail = await res.json(); } catch { /* ignore */ }
+    throw new ApiHttpError(res.status, detail);
+  }
+  if (!res.body) {
+    throw new ApiNetworkError('Runtime stream is not available');
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        parseRuntimeLine(line, handlers);
+      }
+    }
+    buffer += decoder.decode();
+    parseRuntimeLine(buffer, handlers);
+    handlers.onDone?.();
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    handlers.onError?.(error);
+    throw error;
+  }
+}
+
+export async function runAgentRuntime(payload: AgentRunRequest, handlers: AgentRuntimeHandlers): Promise<void> {
+  if (isTauri) {
+    return runTauriAgentRuntime(payload, handlers);
+  }
+  return runFetchAgentRuntime(payload, handlers);
 }
 
 // ═══ Health & Settings ═══
@@ -286,9 +437,16 @@ export async function uploadRagDocument(file: File, title?: string): Promise<Rag
   form.append('file', file);
   if (title?.trim()) form.append('title', title.trim());
   form.append('sourceType', 'upload');
-  const res = await fetch('/api/rag/documents/upload', { method: 'POST', body: form });
-  if (!res.ok) throw new ApiHttpError(res.status, undefined);
-  return res.json();
+  const res = await fetch(apiUrl('/api/rag/documents/upload'), { method: 'POST', body: form });
+  if (!res.ok) {
+    let detail: unknown = undefined;
+    if (!isJsonResponse(res)) {
+      throw new ApiNetworkError(API_NOT_CONNECTED_MESSAGE);
+    }
+    try { detail = await res.json(); } catch { /* ignore */ }
+    throw new ApiHttpError(res.status, detail);
+  }
+  return parseJsonResponse<RagDocument>(res);
 }
 
 export async function deleteRagDocument(id: string): Promise<void> {

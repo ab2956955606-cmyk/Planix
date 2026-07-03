@@ -71,6 +71,8 @@ def init_db(conn: sqlite3.Connection) -> None:
           summary TEXT NOT NULL DEFAULT '',
           phases_json TEXT NOT NULL DEFAULT '[]',
           tasks_json TEXT NOT NULL DEFAULT '[]',
+          structured_plan_json TEXT NOT NULL DEFAULT '{}',
+          sources_json TEXT NOT NULL DEFAULT '[]',
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -136,6 +138,30 @@ def init_db(conn: sqlite3.Connection) -> None:
           error TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS agent_runs (
+          id TEXT PRIMARY KEY,
+          input TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          output_summary TEXT NOT NULL DEFAULT '',
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_events (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          event_type TEXT NOT NULL,
+          node_id TEXT NOT NULL DEFAULT '',
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_events_run_sequence
+          ON agent_events(run_id, sequence);
         """
     )
     ensure_column(conn, "ai_settings", "temperature", "REAL NOT NULL DEFAULT 0.3")
@@ -148,6 +174,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "daily_reviews", "target_date", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "documents", "source_type", "TEXT NOT NULL DEFAULT 'paste'")
     ensure_column(conn, "documents", "summary", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "planning_goals", "structured_plan_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_goals", "sources_json", "TEXT NOT NULL DEFAULT '[]'")
     conn.execute(
         """
         INSERT INTO document_chunks_fts(chunk_id, document_id, title, content)

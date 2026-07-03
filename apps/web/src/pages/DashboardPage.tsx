@@ -1,8 +1,11 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { BrainCircuit, Boxes, CheckCircle2, Database, Send, Sparkles, Target } from 'lucide-react';
+import { AgentFlowTrace } from '../components/agent/flow/AgentFlowTrace';
+import { agentFlowActions } from '../store/agentFlowStore';
 import type { InspectorLog, InspectorSnapshot, Plan } from '../types';
 
 interface DashboardPageProps {
+  date: string;
   plans: Plan[];
   preferences: string;
   inspector: InspectorSnapshot;
@@ -12,25 +15,39 @@ interface DashboardPageProps {
 }
 
 export function DashboardPage(props: DashboardPageProps) {
-  const { plans, preferences, inspector, onAgentStatusChange, onLog, t } = props;
+  const { date, plans, preferences, inspector, onAgentStatusChange, onLog, t } = props;
   const [prompt, setPrompt] = useState('');
   const [output, setOutput] = useState(t('dashboard.outputReady'));
-  const timerRef = useRef<number | null>(null);
   const doneCount = plans.filter((plan) => plan.done).length;
   const pendingCount = plans.length - doneCount;
 
   function runAgent() {
     const value = prompt.trim();
     if (!value) return;
-    if (timerRef.current) window.clearTimeout(timerRef.current);
     onAgentStatusChange('running');
     onLog({ level: 'info', message: t('dashboard.outputRunning') });
     setOutput(t('dashboard.outputRunning'));
-    timerRef.current = window.setTimeout(() => {
-      onAgentStatusChange('done');
-      onLog({ level: 'success', message: t('dashboard.outputDone') });
-      setOutput(t('dashboard.outputDone'));
-    }, 520);
+    void agentFlowActions.runRuntimeFlow(
+      {
+        input: value,
+        date,
+        preferences,
+        data: {
+          [date]: { plans }
+        }
+      },
+      {
+        onFinal: (content) => setOutput(content || t('dashboard.outputDone')),
+        onError: () => {
+          onLog({ level: 'warning', message: t('dashboard.outputFallback') });
+          setOutput(t('dashboard.outputFallback'));
+        },
+        onDone: () => {
+          onAgentStatusChange('done');
+          onLog({ level: 'success', message: t('dashboard.outputDone') });
+        }
+      }
+    );
   }
 
   return (
@@ -79,6 +96,8 @@ export function DashboardPage(props: DashboardPageProps) {
             <span>{preferences || t('inspector.emptyMemory')}</span>
           </div>
         </article>
+
+        <AgentFlowTrace t={t} />
 
         <div className="ai-card-grid">
           <DashboardCard icon={Target} label={t('dashboard.activePlans')} value={plans.length} hint={t('dashboard.cardHintPlans')} />

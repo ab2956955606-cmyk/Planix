@@ -139,8 +139,8 @@ class PlannerAgent:
             "preferencesUsed": preferences,
             "toolCalls": [
                 {"name": "search_materials", "arguments": {"query": goal, "top_k": 3}},
-                {"name": "create_task", "arguments": {"time": "14:30", "title": "AI feature sprint"}},
-                {"name": "summarize_week", "arguments": {"date": payload.date}},
+                {"name": "get_today_plans", "arguments": {"date": payload.date}},
+                {"name": "propose_tasks", "arguments": {"goal": goal, "date": payload.date}},
             ],
             "tools": list_tools(),
         }

@@ -9,6 +9,7 @@ import { useAppRoute } from './shell/useAppRoute';
 import {
   createPlan as createRemotePlan,
   deletePlan as deleteRemotePlan,
+  fetchAiSettings,
   fetchMonthNote,
   fetchPlans,
   saveRemoteMonthNote,
@@ -16,7 +17,7 @@ import {
 } from './lib/api';
 import { loadLanguage, saveLanguage, useI18n } from './i18n';
 import { ensureDay, loadData, loadMonthNote, loadPreferences, saveData, saveMonthNote, savePreferences } from './lib/storage';
-import type { AppData, AppliedPlan, InspectorLog, InspectorSnapshot, Language, Plan, PlannerTask } from './types';
+import type { AiSettings, AppData, AppliedPlan, InspectorLog, InspectorSnapshot, Language, Plan, PlannerTask } from './types';
 import { monthKey, todayISO } from './utils/date';
 
 function createId(): string {
@@ -39,6 +40,7 @@ export function App() {
   const [preferences, setPreferences] = useState(() => loadPreferences());
   const [agentStatus, setAgentStatus] = useState<InspectorSnapshot['agentStatus']>('idle');
   const [inspectorLogs, setInspectorLogs] = useState<InspectorLog[]>([]);
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const t = useI18n(language);
 
   const selectedPlans = useMemo(() => ensureDay(data, selectedDate).plans, [data, selectedDate]);
@@ -107,6 +109,20 @@ export function App() {
   useEffect(() => {
     savePreferences(preferences);
   }, [preferences]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAiSettings()
+      .then((settings) => {
+        if (!cancelled) setAiSettings(settings);
+      })
+      .catch(() => {
+        if (!cancelled) setAiSettings(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function addInspectorLog(log: Omit<InspectorLog, 'id' | 'timestamp'>) {
     setInspectorLogs((current) => [
@@ -200,11 +216,11 @@ export function App() {
       planCount: selectedPlans.length
     },
     api: {
-      mode: 'unknown',
-      hasApiKey: false,
-      provider: 'DeepSeek'
+      mode: aiSettings ? 'backend' : 'unknown',
+      hasApiKey: aiSettings?.hasApiKey ?? false,
+      provider: aiSettings?.provider ?? 'unknown'
     }
-  }), [agentStatus, inspectorLogs, preferences, route, selectedPlans.length, t]);
+  }), [agentStatus, aiSettings, inspectorLogs, preferences, route, selectedPlans.length, t]);
 
   const aiPageProps = {
     data,
@@ -213,6 +229,7 @@ export function App() {
     onPreferencesChange: setPreferences,
     onApplyTasks: applyAiTasks,
     onReplanApplied: applyRemotePlans,
+    onSettingsChange: setAiSettings,
     t
   };
 
@@ -228,6 +245,7 @@ export function App() {
     >
       {route === 'dashboard' && (
         <DashboardPage
+          date={selectedDate}
           plans={selectedPlans}
           preferences={preferences}
           inspector={inspector}

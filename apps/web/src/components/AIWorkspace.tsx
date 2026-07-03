@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type {
   AiSettings,
+  AiSettingsInput,
   AppliedPlan,
   AppData,
   DailyReviewResponse,
@@ -23,7 +24,8 @@ import type {
   PlannerResponse,
   PlannerTask,
   RagDocument,
-  RagSource
+  RagSource,
+  StructuredGoalPlan
 } from '../types';
 import {
   ApiHttpError,
@@ -54,6 +56,7 @@ interface AIWorkspaceProps {
   onPreferencesChange: (value: string) => void;
   onApplyTasks: (tasks: PlannerTask[]) => void;
   onReplanApplied: (plans: AppliedPlan[]) => void;
+  onSettingsChange?: (settings: AiSettings) => void;
   t: (key: string) => string;
 }
 
@@ -93,7 +96,17 @@ function isTimeoutLikeError(error: unknown): boolean {
 }
 
 export function AIWorkspace(props: AIWorkspaceProps) {
-  const { data, date, preferences, section = 'all', onPreferencesChange, onApplyTasks, onReplanApplied, t } = props;
+  const {
+    data,
+    date,
+    preferences,
+    section = 'all',
+    onPreferencesChange,
+    onApplyTasks,
+    onReplanApplied,
+    onSettingsChange,
+    t
+  } = props;
   const [goal, setGoal] = useState(t('legacy.goalPlaceholder'));
   const [deadline, setDeadline] = useState(() => {
     const d = new Date();
@@ -116,6 +129,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   const [settings, setSettings] = useState<AiSettings>(defaultSettings);
   const [apiKey, setApiKey] = useState('');
   const [settingsStatus, setSettingsStatus] = useState('');
+  const [settingsBusy, setSettingsBusy] = useState<'save' | 'test' | 'clear' | ''>('');
   const [reviewStatus, setReviewStatus] = useState('');
 
   const payload = { goal, deadline, dailyHours, materials, preferences, date, data };
@@ -146,10 +160,18 @@ export function AIWorkspace(props: AIWorkspaceProps) {
           : t('legacy.backendTip');
 
   useEffect(() => {
+    let cancelled = false;
     fetchAiSettings()
-      .then(setSettings)
+      .then((loaded) => {
+        if (cancelled) return;
+        setSettings(loaded);
+        onSettingsChange?.(loaded);
+      })
       .catch(() => undefined);
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [onSettingsChange]);
 
   useEffect(() => {
     fetchRagDocuments()
@@ -280,75 +302,124 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     }
   }
 
-  async function saveModelSettings() {
-    setSettingsStatus('');
+  function validateModelSettings(): { baseUrl: string; model: string } | null {
     const baseUrl = settings.baseUrl.trim();
     if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
       setSettingsStatus(t('legacy.baseUrlInvalid'));
-      return;
+      return null;
     }
     try {
       const parsed = new URL(baseUrl);
       if (settings.provider === 'deepseek' && parsed.hostname === 'api.deepseek.com' && parsed.pathname !== '/') {
         setSettingsStatus(t('legacy.deepseekBaseUrlInvalid'));
-        return;
+        return null;
       }
     } catch {
       setSettingsStatus(t('legacy.baseUrlFormatInvalid'));
-      return;
+      return null;
     }
-    if (!settings.model.trim()) {
+    const model = settings.model.trim();
+    if (!model) {
       setSettingsStatus(t('legacy.modelRequired'));
-      return;
+      return null;
     }
     if (settings.temperature < 0 || settings.temperature > 2) {
       setSettingsStatus(t('legacy.temperatureInvalid'));
-      return;
+      return null;
     }
     if (settings.timeoutSeconds < 5 || settings.timeoutSeconds > 120) {
       setSettingsStatus(t('legacy.timeoutInvalid'));
-      return;
+      return null;
     }
+    return { baseUrl, model };
+  }
 
-    try {
-      const saved = await saveAiSettings({
-        provider: settings.provider,
-        baseUrl,
-        model: settings.model.trim(),
-        apiKey: apiKey.trim(),
-        temperature: settings.temperature,
-        timeoutSeconds: settings.timeoutSeconds
-      });
-      setSettings(saved);
-      setApiKey('');
-      setSettingsStatus(t('legacy.settingsSaved'));
-    } catch (err) {
-      if (err instanceof ApiNetworkError) {
-        setSettingsStatus(t('legacy.backendOffline'));
-      } else if (err instanceof ApiHttpError) {
-        const detailStr = apiDetailToText(err.detail);
-        const detailDisplay = detailStr ? `: ${detailStr}` : '';
-        if (err.status === 422) {
-          setSettingsStatus(`${t('legacy.settingsFieldInvalid')}${detailDisplay}`);
-        } else if (err.status === 500) {
-          setSettingsStatus(`${t('legacy.backendSaveFailed')}${detailDisplay}`);
-        } else {
-          setSettingsStatus(`${t('legacy.settingsSaveFailed')} (${err.status})${detailDisplay}`);
-        }
+  function buildSettingsPayload(validated: { baseUrl: string; model: string }, options: { clearKey?: boolean } = {}): AiSettingsInput {
+    const payload: AiSettingsInput = {
+      provider: settings.provider,
+      baseUrl: validated.baseUrl,
+      model: validated.model,
+      temperature: settings.temperature,
+      timeoutSeconds: settings.timeoutSeconds
+    };
+    const trimmedKey = apiKey.trim();
+    if (options.clearKey) {
+      payload.apiKey = '';
+    } else if (trimmedKey) {
+      payload.apiKey = trimmedKey;
+    }
+    return payload;
+  }
+
+  function handleSettingsSaveError(err: unknown) {
+    if (err instanceof ApiNetworkError) {
+      setSettingsStatus(err.message || t('legacy.backendOffline'));
+    } else if (err instanceof ApiHttpError) {
+      const detailStr = apiDetailToText(err.detail);
+      const detailDisplay = detailStr ? `: ${detailStr}` : '';
+      if (err.status === 422) {
+        setSettingsStatus(detailStr.includes('plain ASCII without spaces') ? t('legacy.invalidKeyFormat') : `${t('legacy.settingsFieldInvalid')}${detailDisplay}`);
+      } else if (err.status === 500) {
+        setSettingsStatus(`${t('legacy.backendSaveFailed')}${detailDisplay}`);
       } else {
-        setSettingsStatus(t('legacy.settingsError'));
+        setSettingsStatus(`${t('legacy.settingsSaveFailed')} (${err.status})${detailDisplay}`);
       }
+    } else {
+      setSettingsStatus(t('legacy.settingsError'));
+    }
+  }
+
+  async function saveSettingsToBackend(options: { clearKey?: boolean; showSuccess?: boolean } = {}): Promise<AiSettings | null> {
+    const validated = validateModelSettings();
+    if (!validated) return null;
+    try {
+      const saved = await saveAiSettings(buildSettingsPayload(validated, options));
+      setSettings(saved);
+      onSettingsChange?.(saved);
+      setApiKey('');
+      if (options.showSuccess) {
+        setSettingsStatus(options.clearKey ? t('legacy.keyCleared') : t('legacy.settingsSaved'));
+      }
+      return saved;
+    } catch (err) {
+      handleSettingsSaveError(err);
+      return null;
+    }
+  }
+
+  async function saveModelSettings() {
+    setSettingsStatus('');
+    setSettingsBusy('save');
+    try {
+      await saveSettingsToBackend({ showSuccess: true });
+    } finally {
+      setSettingsBusy('');
+    }
+  }
+
+  async function clearSavedApiKey() {
+    setSettingsStatus('');
+    setSettingsBusy('clear');
+    try {
+      await saveSettingsToBackend({ clearKey: true, showSuccess: true });
+    } finally {
+      setSettingsBusy('');
     }
   }
 
   async function testModel() {
+    setSettingsStatus('');
+    setSettingsBusy('test');
     try {
+      const saved = await saveSettingsToBackend();
+      if (!saved) return;
       const test = await testAiSettings();
       if (test.ok) {
         setSettingsStatus(test.message);
       } else {
         const errorMessages: Record<string, string> = {
           no_key: t('legacy.noApiKey'),
+          invalid_key_format: t('legacy.invalidKeyFormat'),
           auth_error: t('legacy.authError'),
           insufficient_balance: t('legacy.insufficientBalance'),
           bad_model: t('legacy.badModel'),
@@ -364,13 +435,15 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       }
     } catch (err) {
       if (err instanceof ApiNetworkError) {
-        setSettingsStatus(t('legacy.backendConnectionFailed'));
+        setSettingsStatus(err.message || t('legacy.backendConnectionFailed'));
       } else if (err instanceof ApiHttpError) {
         const detailText = apiDetailToText(err.detail);
         setSettingsStatus(`${t('legacy.modelTestRequestFailed')} (${err.status})${detailText ? `: ${detailText}` : ''}`);
       } else {
         setSettingsStatus(t('legacy.backendRequestFailed'));
       }
+    } finally {
+      setSettingsBusy('');
     }
   }
 
@@ -394,7 +467,9 @@ export function AIWorkspace(props: AIWorkspaceProps) {
             setApiKey={setApiKey}
             clearSettingsStatus={() => setSettingsStatus('')}
             saveModelSettings={saveModelSettings}
+            clearSavedApiKey={clearSavedApiKey}
             testModel={testModel}
+            settingsBusy={settingsBusy}
             t={t}
           />
           {section === 'settings' && (
@@ -742,10 +817,12 @@ function ModelSettings(props: {
   setApiKey: (value: string) => void;
   clearSettingsStatus: () => void;
   saveModelSettings: () => void;
+  clearSavedApiKey: () => void;
   testModel: () => void;
+  settingsBusy: 'save' | 'test' | 'clear' | '';
   t: (key: string) => string;
 }) {
-  const { settings, apiKey, settingsStatus, setSettings, setApiKey, clearSettingsStatus, saveModelSettings, testModel, t } = props;
+  const { settings, apiKey, settingsStatus, setSettings, setApiKey, clearSettingsStatus, saveModelSettings, clearSavedApiKey, testModel, settingsBusy, t } = props;
   const hasConfiguredKey = settings.provider !== 'mock' && settings.hasApiKey;
   const updateSettings = (updater: (settings: AiSettings) => AiSettings) => {
     clearSettingsStatus();
@@ -781,8 +858,8 @@ function ModelSettings(props: {
           <select value={settings.model} onChange={(event) => updateSettings((current) => ({ ...current, model: event.target.value }))}>
             <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
             <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-            <option value="deepseek-chat">DeepSeek Chat</option>
-            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+            <option value="deepseek-chat">DeepSeek Chat (legacy)</option>
+            <option value="deepseek-reasoner">DeepSeek Reasoner (legacy)</option>
           </select>
         </label>
         <label>
@@ -799,8 +876,9 @@ function ModelSettings(props: {
         </label>
       </div>
       <div className="settings-actions">
-        <button onClick={saveModelSettings}><Save size={16} />{t('legacy.saveSettings')}</button>
-        <button onClick={testModel}><PlugZap size={16} />{t('legacy.testModel')}</button>
+        <button onClick={saveModelSettings} disabled={Boolean(settingsBusy)}><Save size={16} />{settingsBusy === 'save' ? t('legacy.savingSettings') : t('legacy.saveSettings')}</button>
+        <button onClick={testModel} disabled={Boolean(settingsBusy)}><PlugZap size={16} />{settingsBusy === 'test' ? t('legacy.testingModel') : t('legacy.testModel')}</button>
+        <button onClick={clearSavedApiKey} disabled={Boolean(settingsBusy) || !hasConfiguredKey}><Trash2 size={16} />{settingsBusy === 'clear' ? t('legacy.clearingKey') : t('legacy.clearKey')}</button>
         {settingsStatus && <span>{settingsStatus}</span>}
       </div>
     </div>
@@ -812,12 +890,64 @@ function GoalPlanView({ plan, t }: { plan: GoalPlanResponse; t: (key: string) =>
     <div className="result-view">
       <h3>{plan.summary}</h3>
       {plan.provider && <p><strong>{plan.provider}</strong> / {plan.model}</p>}
-      {plan.phases.map((phase) => <p key={phase.title}><strong>{phase.title}</strong>: {phase.detail}</p>)}
+      {plan.structuredPlan ? <StructuredGoalPlanView plan={plan.structuredPlan} t={t} /> : null}
+      {!plan.structuredPlan && plan.phases.map((phase) => <p key={phase.title}><strong>{phase.title}</strong>: {phase.detail}</p>)}
       <SourceList sources={plan.sources ?? []} title={t('legacy.referencedSources')} t={t} />
       <h3>{t('legacy.todayTasks')}</h3>
       {plan.tasks.map((task) => <TaskPreview key={`${task.time}-${task.title}`} time={task.time} title={task.title} reason={task.reason} />)}
     </div>
   );
+}
+
+function StructuredGoalPlanView({ plan, t }: { plan: StructuredGoalPlan; t: (key: string) => string }) {
+  return (
+    <div className="structured-plan">
+      <div className="structured-plan-head">
+        <div>
+          <span>{t('legacy.structuredGoal')}</span>
+          <strong>{plan.goalTitle}</strong>
+        </div>
+        <em>{plan.durationDays} {t('legacy.days')}</em>
+      </div>
+      <p>{plan.goalDescription}</p>
+      <div className="milestone-list">
+        {plan.milestones.map((milestone, index) => (
+          <article className="milestone-card" key={`${milestone.title}-${index}`}>
+            <div className="milestone-title">
+              <span>{index + 1}</span>
+              <div>
+                <strong>{milestone.title}</strong>
+                <p>{milestone.description}</p>
+              </div>
+            </div>
+            <div className="milestone-tasks">
+              {milestone.tasks.map((task) => (
+                <div className="milestone-task" key={`${milestone.title}-${task.title}`}>
+                  <div>
+                    <strong>{task.title}</strong>
+                    <p>{task.description}</p>
+                  </div>
+                  <span>{task.estimatedMinutes}m</span>
+                  <em className={`priority ${task.priority}`}>{t(`legacy.priority${capitalize(task.priority)}`)}</em>
+                  {task.dueDate ? <time>{task.dueDate}</time> : null}
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className="review-plan">
+        <strong>{t('legacy.reviewPlan')} / {plan.reviewPlan.frequency === 'daily' ? t('legacy.daily') : t('legacy.weekly')}</strong>
+        <ul>
+          {plan.reviewPlan.questions.map((question) => <li key={question}>{question}</li>)}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function DailyReviewView({ review, t }: { review: DailyReviewResponse; t: (key: string) => string }) {

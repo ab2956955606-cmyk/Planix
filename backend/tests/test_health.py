@@ -9,8 +9,11 @@ def test_health_endpoint(client):
 
 def test_cors_allows_local_frontend_origins(client):
     allowed_origins = [
+        "http://127.0.0.1:5198",
+        "http://localhost:5198",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        "http://127.0.0.1:4173",
         "http://tauri.localhost",
         "https://tauri.localhost",
         "tauri://localhost",
@@ -28,12 +31,13 @@ def test_cors_allows_local_frontend_origins(client):
 
 
 def test_cors_rejects_untrusted_origins(client):
-    response = client.options(
-        "/api/health",
-        headers={
-            "Origin": "https://example.com",
-            "Access-Control-Request-Method": "GET",
-        },
-    )
-    assert response.status_code == 400
-    assert "access-control-allow-origin" not in response.headers
+    for origin in ("https://example.com", "http://192.168.1.8:5198"):
+        response = client.options(
+            "/api/health",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert response.status_code == 400
+        assert "access-control-allow-origin" not in response.headers

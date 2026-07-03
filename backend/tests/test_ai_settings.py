@@ -5,6 +5,15 @@ from backend.app.services.llm import _chat_completions_url
 from backend.app.services.llm import _effective_max_tokens, _message_content
 
 
+def test_ai_settings_endpoint_returns_json(client):
+    response = client.get("/api/ai/settings")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    body = response.json()
+    assert body["provider"] == "deepseek"
+    assert body["baseUrl"] == "https://api.deepseek.com"
+
+
 def test_ai_settings_are_saved_without_exposing_key(client):
     saved = client.put(
         "/api/ai/settings",
@@ -82,7 +91,7 @@ def test_blank_api_key_clears_saved_key(client):
     assert client.get("/api/ai/settings").json()["hasApiKey"] is False
 
 
-def test_missing_api_key_does_not_preserve_stale_key(client):
+def test_missing_api_key_preserves_saved_user_key(client):
     first = client.put(
         "/api/ai/settings",
         json={
@@ -108,7 +117,8 @@ def test_missing_api_key_does_not_preserve_stale_key(client):
         },
     )
     assert saved.status_code == 200
-    assert saved.json()["hasApiKey"] is False
+    assert saved.json()["hasApiKey"] is True
+    assert client.get("/api/ai/settings").json()["hasApiKey"] is True
 
 
 def test_invalid_api_key_format_is_rejected(client):

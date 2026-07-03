@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import get_db_path
-from .routers import agent, health, month_notes, planning, plans, preferences, rag, settings
+from .routers import agent, health, month_notes, planning, plans, preferences, rag, runtime, settings
 
 APP_VERSION = "1.1.4"
 
@@ -31,6 +31,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1):\d+$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
     app.include_router(month_notes.router)
     app.include_router(planning.router)
     app.include_router(agent.router)
+    app.include_router(runtime.router)
     app.include_router(rag.router)
     app.include_router(preferences.router)
     app.include_router(settings.router)

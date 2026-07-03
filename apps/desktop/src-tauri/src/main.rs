@@ -1,5 +1,5 @@
 use std::fs::{create_dir_all, metadata, rename, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{path::BaseDirectory, Manager, WindowEvent};
+use tauri::{path::BaseDirectory, Emitter, Manager, WindowEvent};
 
 const DESKTOP_LOG_MAX_BYTES: u64 = 1_000_000;
 const API_PORT: &str = "8000";
@@ -79,6 +79,89 @@ fn proxy_api(req: ProxyRequest) -> Result<ProxyResponse, String> {
         .map_err(|e| format!("reading response body: {e}"))?;
 
     Ok(ProxyResponse { status, body })
+}
+
+#[tauri::command]
+fn stream_agent_runtime(
+    window: tauri::Window,
+    req: ProxyRequest,
+    event_name: String,
+) -> Result<(), String> {
+    let port = api_port();
+    std::thread::spawn(move || {
+        let error_event = format!("{event_name}:error");
+        let done_event = format!("{event_name}:done");
+        let url = format!("http://127.0.0.1:{}{}", port, req.path);
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+        {
+            Ok(client) => client,
+            Err(err) => {
+                let _ = window.emit(&error_event, format!("failed to create HTTP client: {err}"));
+                return;
+            }
+        };
+
+        let mut builder = match req.method.to_uppercase().as_str() {
+            "POST" => client.post(&url),
+            other => {
+                let _ = window.emit(
+                    &error_event,
+                    format!("unsupported streaming method: {other}"),
+                );
+                return;
+            }
+        };
+        if !req.body.is_empty() {
+            builder = builder
+                .header("Content-Type", "application/json")
+                .body(req.body);
+        }
+
+        let response = match builder.send() {
+            Ok(response) => response,
+            Err(err) => {
+                let _ = window.emit(
+                    &error_event,
+                    format!("runtime stream request failed: {err}"),
+                );
+                return;
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            let _ = window.emit(
+                &error_event,
+                format!(
+                    "runtime stream failed: status={} body={}",
+                    status.as_u16(),
+                    body
+                ),
+            );
+            return;
+        }
+
+        let reader = BufReader::new(response);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    let payload = line.trim();
+                    if !payload.is_empty() {
+                        let _ = window.emit(&event_name, payload.to_string());
+                    }
+                }
+                Err(err) => {
+                    let _ = window.emit(&error_event, format!("runtime stream read failed: {err}"));
+                    return;
+                }
+            }
+        }
+        let _ = window.emit(&done_event, "done");
+    });
+    Ok(())
 }
 
 // Sidecar management.
@@ -399,7 +482,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![proxy_api])
+        .invoke_handler(tauri::generate_handler![proxy_api, stream_agent_runtime])
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed) {
                 if let Some(sidecar) = window.try_state::<ApiSidecar>() {

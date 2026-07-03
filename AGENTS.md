@@ -2,11 +2,30 @@
 
 ## Project Identity
 
-Planix is a portfolio-grade AI planning application for learning, job search, and long-term execution. It combines a RIVA-style AI OS frontend shell, calendar planning, goal decomposition, daily review, local RAG material Q&A, deterministic planner evaluation, and Windows desktop packaging.
+Planix is a portfolio-grade AI planning application for learning, job search, and long-term execution. It combines a RIVA-style AI OS frontend shell, calendar planning, structured goal decomposition, daily review, grounded local RAG, deterministic planner evaluation, a real Agent Runtime event stream, and Windows desktop packaging.
 
-The project is now fully renamed to Planix. Do not reintroduce former product, storage, sidecar, or environment-variable names.
+The project is fully renamed to Planix. Do not reintroduce former product, storage, sidecar, or environment-variable names.
 
 Current baseline: `1.1.4`.
+
+## Current Phase
+
+Phase 3.5 is **Planning Intelligence + Grounded RAG**.
+
+Allowed in this phase:
+
+- Retrieve local materials with SQLite FTS5/BM25.
+- Generate and validate `structuredPlan`.
+- Save generated planning results to `planning_goals` as history/cache.
+- Show structured previews in Goals and Runtime Trace.
+- Render Runtime final output from the same `structuredPlan`.
+
+Forbidden in this phase:
+
+- Auto-writing generated tasks to Calendar, Goals, Notes, or `plans`.
+- Adding Approval / WriteIntent.
+- Changing `/api/runtime/run` event protocol.
+- Changing Tauri/MSI sidecar mechanics.
 
 ## Architecture
 
@@ -14,24 +33,33 @@ Current baseline: `1.1.4`.
 - Frontend shell: hash-route Planix RIVA AI OS Shell in `apps/web/src/shell`.
 - Frontend pages: `apps/web/src/pages`.
 - i18n: `apps/web/src/i18n`, default `zh-CN`, supports `en-US`.
+- Agent observability: `apps/web/src/components/agent/flow` renders Runtime events as the Dashboard trace.
+- Agent flow state: `apps/web/src/store/agentFlowStore.ts`.
 - Desktop shell: Tauri v2 in `apps/desktop`.
 - Backend: FastAPI in `backend/app`.
 - Database: SQLite with FTS5/BM25 for local RAG.
-- AI: DeepSeek-first OpenAI-compatible LLM client with mock fallback.
+- AI: DeepSeek-first OpenAI-compatible LLM client with local structured fallback.
+- Planning: `StructuredGoalPlan` is the source of truth for AI-generated plans.
+- Runtime: `/api/runtime/run` returns NDJSON events from Planner, Memory, Tool Router, Stream Engine, and Runtime Orchestrator.
 - Desktop runtime: Tauri window loads bundled web resources and starts the PyInstaller sidecar `planix-api.exe`.
-- Desktop API access: frontend routes desktop API calls through Tauri IPC command `proxy_api`.
+- Desktop API access: normal JSON calls use Tauri IPC `proxy_api`; Runtime streaming uses `stream_agent_runtime`.
 
 ## Entry Points
 
 - Web entry: `apps/web/index.html`
 - Web app: `apps/web/src/App.tsx`
 - Web API layer: `apps/web/src/lib/api.ts`
+- Agent Trace: `apps/web/src/components/agent/flow/AgentFlowTrace.tsx`
+- Agent Runtime store: `apps/web/src/store/agentFlowStore.ts`
 - Shell: `apps/web/src/shell/RivaShell.tsx`
 - Route hook: `apps/web/src/shell/useAppRoute.ts`
 - i18n entry: `apps/web/src/i18n/index.ts`
 - Desktop Rust entry: `apps/desktop/src-tauri/src/main.rs`
 - Backend app: `backend/app/main.py`
 - Backend schemas: `backend/app/schemas.py`
+- Structured planning helper: `backend/app/services/structured_goal_plan.py`
+- Runtime route: `backend/app/routers/runtime.py`
+- Runtime service: `backend/app/services/runtime.py`
 - SQLite setup: `backend/app/db.py`
 - Backend tests: `backend/tests`
 - Packaging scripts: `scripts`
@@ -57,16 +85,29 @@ There is no compatibility fallback for old names or old environment variables.
 - `AppMenu` may store only UI expansion state, never active route state.
 - All static frontend UI text must go through `t("namespace.key")`.
 - Do not translate user input, AI output, or existing database content.
-- Keep Agent UI scaffolding UI-only unless a later phase adds runtime.
-- Do not render Agent trace, timeline, reasoning, or execution chain in this phase.
+- Dashboard Agent Trace consumes Runtime events first and falls back to local demo flow only when Runtime is unavailable.
+- Runtime fallback must clearly show `当前使用本地规划模板生成，后端 Runtime 未连接` in the user-visible flow.
+- Runtime success and fallback must not display old `plan_context_lookup`, `ui-mock`, or static UI mock wording.
+- Runtime output should answer the user's prompt directly; for a Python learning prompt, return a concrete Python learning plan summary.
+- Goals should display `structuredPlan` when present while keeping legacy task apply flows based on `tasks`.
+- Keep Agent Trace visually secondary to the Workspace; it must not replace the prompt input or dominate the Dashboard.
+- Internal `reasoning` nodes must display as `Plan` / `执行计划`; do not expose hidden chain-of-thought.
 - Keep Calendar, Notes, Goals, and Settings functionality available through the menu.
 
 ## Backend Rules
 
-- Do not change business API payloads, response schemas, or SQLite tables for frontend-only UI work.
 - Keep AI features demoable without an API key.
 - Never expose full API keys in read endpoints, logs, screenshots, or docs.
-- Preserve mock fallback and source-grounded RAG behavior.
+- Preserve source-grounded RAG behavior.
+- LLM-generated planning output must be parsed, schema-validated, and completed with fallback defaults.
+- `GoalPlanOut` must keep `summary`, `phases`, `tasks`, and `sources` while adding `structuredPlan`.
+- `planning_goals` is planning result history/cache, not a confirmed execution table.
+- Runtime tools are restricted to read-only or preview-only behavior in this phase.
+- `search_materials`, `get_today_plans`, and `get_memory` are read-only.
+- `propose_tasks` may return structured task previews but must not write to `plans`, Goals, Calendar, or Notes.
+- `structuredPlan` is the fact source; Runtime final output should be rendered from it.
+- `RuntimeOrchestrator` is the only component that coordinates Planner, Memory, Tool Router, and Stream Engine.
+- Rust/Tauri streaming bridge must stay a thin pass-through; do not put Runtime state or business logic in Rust.
 
 ## Commands
 

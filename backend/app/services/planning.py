@@ -16,11 +16,18 @@ from ..schemas import (
     PlannerTask,
     ReplanApplyRequest,
     ReplanTask,
+    StructuredGoalPlan,
 )
 from .llm import LlmClient
 from .planner import _json_object
 from .plans import create_plan, list_plans
 from .rag import RagService
+from .structured_goal_plan import (
+    build_local_structured_plan,
+    derive_phase_items,
+    derive_planner_tasks,
+    normalize_structured_plan,
+)
 
 
 GOAL_PLAN_LLM_TIMEOUT_SECONDS = 30
@@ -112,6 +119,18 @@ def _normalize_replan_tasks(items: object, target_date: str) -> list[ReplanTask]
     return tasks
 
 
+def _structured_from_parsed(
+    parsed: dict[str, object] | None,
+    fallback: StructuredGoalPlan,
+) -> StructuredGoalPlan:
+    if not parsed:
+        return fallback
+    raw = parsed.get("structuredPlan") or parsed.get("structured_plan")
+    if raw is None and "goalTitle" in parsed and "milestones" in parsed:
+        raw = parsed
+    return normalize_structured_plan(raw, fallback)
+
+
 def _plan_to_dict(plan: PlanOut) -> dict[str, object]:
     return plan.model_dump(by_alias=True)
 
@@ -125,15 +144,26 @@ class PlanningService:
         preferences = payload.preferences or load_memory()
         sources = self.rag.retrieve(" ".join([payload.goal, payload.materials]), limit=4)
         retrieved_sources = [source.model_dump(by_alias=True) for source in sources]
+        fallback_structured = build_local_structured_plan(
+            payload.goal,
+            date=payload.date,
+            deadline=payload.deadline,
+            daily_hours=payload.daily_hours,
+            source_count=len(sources),
+        )
         llm_result, _ = LlmClient().complete(
             "planning_goal_plan",
             (
                 "You are an AI planning agent. Return only valid JSON, no markdown. "
-                'Required shape: {"summary":"...","phases":[{"title":"...","detail":"..."}],'
+                'Required shape: {"summary":"...","structuredPlan":{"goalTitle":"...",'
+                '"goalDescription":"...","durationDays":14,"milestones":[{"title":"...",'
+                '"description":"...","tasks":[{"title":"...","description":"...",'
+                '"estimatedMinutes":60,"dueDate":"YYYY-MM-DD or null","priority":"low|medium|high"}]}],'
+                '"reviewPlan":{"frequency":"daily|weekly","questions":["..."]}},'
+                '"phases":[{"title":"...","detail":"..."}],'
                 '"tasks":[{"time":"HH:MM","title":"...","reason":"..."}]}. '
-                "Use exactly 3 phases and exactly 3 tasks for the given date. "
-                "Do not nest tasks inside phases. Do not add keys outside summary, phases, tasks. "
-                "Use retrievedSources when available and keep each field concise."
+                "Use retrievedSources when available. The structuredPlan is the source of truth. "
+                "Do not include write intents and do not claim that data was written."
             ),
             _dump(
                 {
@@ -159,17 +189,21 @@ class PlanningService:
             mode = "llm"
             provider = llm_result.provider if llm_result else None
             model = llm_result.model if llm_result else None
-            summary = str(parsed.get("summary") or f"Generated a goal plan for {payload.goal}.")
+            structured_plan = _structured_from_parsed(parsed, fallback_structured)
+            summary = str(parsed.get("summary") or structured_plan.goal_description)
             phases = _normalize_phase_items(parsed.get("phases"))
             tasks = _normalize_planner_tasks(parsed.get("tasks"))
         else:
-            summary, phases, tasks = self._mock_goal_plan(payload, len(sources))
+            structured_plan = fallback_structured
+            summary = structured_plan.goal_description
+            phases = []
+            tasks = []
 
         if not phases or not tasks:
-            fallback_summary, fallback_phases, fallback_tasks = self._mock_goal_plan(payload, len(sources))
-            summary = summary or fallback_summary
-            phases = phases or fallback_phases
-            tasks = tasks or fallback_tasks
+            phases = phases or derive_phase_items(structured_plan)
+            tasks = tasks or derive_planner_tasks(structured_plan)
+        if not summary:
+            summary = structured_plan.goal_description
 
         plan_id = str(uuid4())
         with get_conn() as conn:
@@ -177,9 +211,9 @@ class PlanningService:
                 """
                 INSERT INTO planning_goals(
                   id, goal, deadline, daily_hours, materials, preferences,
-                  summary, phases_json, tasks_json
+                  summary, phases_json, tasks_json, structured_plan_json, sources_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     plan_id,
@@ -191,6 +225,8 @@ class PlanningService:
                     summary,
                     _dump([phase.model_dump() for phase in phases]),
                     _dump([task.model_dump() for task in tasks]),
+                    _dump(structured_plan.model_dump(by_alias=True)),
+                    _dump(retrieved_sources),
                 ),
             )
 
@@ -201,6 +237,7 @@ class PlanningService:
             phases=phases,
             tasks=tasks,
             sources=sources,
+            structuredPlan=structured_plan,
             provider=provider,
             model=model,
         )

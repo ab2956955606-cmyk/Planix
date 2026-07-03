@@ -1,12 +1,12 @@
 # Planix
 
-Planix is an AI planning workspace for goals, schedules, knowledge materials, daily reviews, and Windows desktop delivery. It combines a RIVA-style AI OS shell with a React frontend, FastAPI backend, SQLite persistence, local FTS5/BM25 retrieval, and a Tauri desktop package.
+Planix is an AI planning workspace for goals, schedules, knowledge materials, daily reviews, grounded planning, Agent Runtime execution, and Windows desktop delivery. It combines a RIVA-style AI OS shell with a React frontend, FastAPI backend, SQLite persistence, FTS5/BM25 retrieval, NDJSON Runtime streaming, and a Tauri desktop package.
 
 ## 中文简介
 
-Planix 面向学习、求职和长期目标管理场景。用户可以维护日历任务、保存资料、上传 TXT/MD 文件、使用本地资料库问答、生成目标规划、执行今日复盘、预览重排任务，并通过质量评估查看规划是否足够清晰、可执行和有作品集价值。
+Planix 面向学习、求职和长期目标管理场景。用户可以维护日历任务、保存资料、上传 TXT/MD 文件、使用本地资料库问答、生成结构化目标规划、执行今日复盘、预览重排任务，并通过质量评估查看规划是否足够清晰、可执行和有作品集价值。
 
-当前版本已完成前端品牌、后端标识、桌面 sidecar、环境变量、数据库路径和 MSI 产物的 Planix 统一命名。项目不再读取旧环境变量，也不做旧数据迁移。
+当前阶段为 **Phase 3.5：Planning Intelligence + Grounded RAG**。Planix 会先从本地资料库检索相关资料，再生成严格结构化的目标规划，并让 Runtime 的任务预览和最终输出使用同一份 `structuredPlan`。本阶段只做检索、规划、预览和展示，不会自动写入 Goals、Calendar 或 Notes。
 
 ## Architecture
 
@@ -17,22 +17,107 @@ Planix 面向学习、求职和长期目标管理场景。用户可以维护日�
 | Backend | FastAPI |
 | Storage | SQLite |
 | RAG | SQLite FTS5/BM25 |
-| AI | DeepSeek-first OpenAI-compatible client with mock fallback |
+| Planning | Structured goal plan schema + grounded sources |
+| Runtime | Planner + Memory + Tool Router + Stream Engine + Runtime Orchestrator |
+| Streaming | Web fetch NDJSON + Tauri `stream_agent_runtime` bridge |
+| AI | DeepSeek-first OpenAI-compatible client with local structured fallback |
 | Desktop | Tauri v2 + `planix-api.exe` sidecar |
 | Installer | `release/Planix-v1.1.4-windows-x64.msi` |
 
 ## Features
 
 - Calendar and daily task management
-- Goal planning with AI-generated phases and today tasks
+- Structured goal planning with phases, tasks, estimated time, priority, due date, and review plan
+- Grounded RAG using local SQLite FTS5/BM25 sources
 - Daily review, suggestions, and replan preview
 - Knowledge base with paste input and TXT/MD upload
-- Local FTS5/BM25 retrieval with cited sources
 - Planner quality evaluation across six dimensions
 - Model settings with masked API key state
 - RIVA dashboard with Dashboard / Calendar / Notes / Goals / Settings routes
+- Agent Flow Trace connected to real Runtime NDJSON events
+- Safe Runtime tools: read-only retrieval plus preview-only task proposals
+- Runtime output answers the user's goal directly, for example returning a readable Python learning plan
+- Runtime run and event persistence for future replay/debug
 - Chinese and English realtime switching
 - Tauri desktop shell with FastAPI sidecar
+
+## Planning Intelligence
+
+`/api/planning/goal-plan` keeps the old compatibility fields and adds `structuredPlan`:
+
+```ts
+type StructuredGoalPlan = {
+  goalTitle: string;
+  goalDescription: string;
+  durationDays: number;
+  milestones: Array<{
+    title: string;
+    description: string;
+    tasks: Array<{
+      title: string;
+      description: string;
+      estimatedMinutes: number;
+      dueDate: string | null;
+      priority: "low" | "medium" | "high";
+    }>;
+  }>;
+  reviewPlan: {
+    frequency: "daily" | "weekly";
+    questions: string[];
+  };
+};
+```
+
+The backend treats `structuredPlan` as the source of truth. LLM output is parsed, validated, and completed with a local structured fallback when fields are missing or invalid. The legacy `summary`, `phases`, `tasks`, and `sources` fields remain available so existing Calendar and plan-apply flows continue to work.
+
+`planning_goals` stores generated planning results and source snapshots only. It is a planning history/cache table, not a confirmed execution model and not a formal Goals/Tasks table.
+
+## Grounded RAG
+
+Planix stores pasted or uploaded materials in SQLite and indexes chunks with FTS5/BM25. RAG sources use a stable shape:
+
+```ts
+type RagSource = {
+  documentId: string;
+  title: string;
+  chunk: string;
+  score: number;
+  chunkIndex: number;
+};
+```
+
+The backend sorts results before returning them. The frontend displays `score` as a backend relevance value and does not reinterpret the ranking. When sources are found, planning and Runtime output include a "参考资料 / References" section.
+
+## Runtime API
+
+Planix Runtime turns one prompt into an observable execution stream:
+
+```text
+User input
+  -> Planner
+  -> Memory System
+  -> Tool Router
+  -> Stream Engine
+  -> Agent Flow Trace
+```
+
+Runtime endpoint:
+
+```http
+POST /api/runtime/run
+Content-Type: application/json
+Accept: application/x-ndjson
+```
+
+Events are NDJSON objects such as `node`, `delta`, `tool`, `status`, `final`, and `error`. The desktop build uses the Tauri `stream_agent_runtime` IPC bridge to forward sidecar events to the frontend.
+
+Runtime safety rules:
+
+- `search_materials`, `get_today_plans`, and `get_memory` are read-only.
+- `propose_tasks` returns structured previews only.
+- Runtime never auto-writes generated tasks to `plans`, Goals, Calendar, or Notes in this phase.
+- `structuredPlan` is the fact source; final output is rendered from it so Trace, preview, and Output stay consistent.
+- If true LLM token streaming is unavailable, Planix does not fake it by splitting a completed LLM response. It still streams Runtime step/tool/status events and uses local structured fallback output when needed.
 
 ## Environment Variables
 
@@ -122,16 +207,8 @@ python -m compileall backend
 cd apps\web
 npx.cmd tsc -b
 npm.cmd run lint
+npm.cmd run test
 npm.cmd run build
-cd ..\..
-powershell -ExecutionPolicy Bypass -File .\scripts\check-desktop-config.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\check-packaging-toolchain.ps1
-```
-
-After launching the desktop app:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\wait-api-health.ps1 -Url http://127.0.0.1:8000/api/health -TimeoutSeconds 30
 ```
 
 Expected health response:
@@ -146,7 +223,7 @@ Expected health response:
 
 ## Portfolio Summary
 
-Planix demonstrates a complete AI application path: frontend product shell, backend APIs, SQLite persistence, local retrieval, AI planning, review/replan loop, quality evaluation, desktop packaging, sidecar startup, health checks, and MSI release automation. It is designed as a strong AI application / full-stack / desktop portfolio project.
+Planix demonstrates a complete AI application path: frontend product shell, backend APIs, SQLite persistence, local retrieval, structured AI planning, grounded RAG, review/replan loop, Runtime event streaming, safe tool routing, quality evaluation, desktop packaging, sidecar startup, health checks, and MSI release automation. It is designed as a strong AI application / full-stack / desktop portfolio project.
 
 ## Maintenance Rule
 

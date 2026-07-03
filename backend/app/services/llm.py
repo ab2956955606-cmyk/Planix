@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+import json
 import os
+from typing import Iterator
 from uuid import uuid4
 
 import httpx
@@ -161,7 +163,7 @@ class LlmClient:
     ) -> tuple[LlmResult | None, LlmError | None]:
         """Returns (result, error). On success error is None; on failure result is None."""
         if not self.is_enabled():
-            record_ai_run(feature, self.settings, user, success=True, output_summary="mock fallback")
+            record_ai_run(feature, self.settings, user, success=True, output_summary="local fallback")
             return (None, None)
 
         api_key_error = validate_api_key_format(self.settings.api_key)
@@ -239,3 +241,84 @@ class LlmClient:
 
         record_ai_run(feature, self.settings, user, output_summary=content, success=True)
         return (LlmResult(content=content, provider=self.settings.provider, model=self.settings.model), None)
+
+    def stream_tokens(
+        self,
+        feature: str,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 800,
+        temperature: float | None = None,
+        timeout_seconds: int | None = None,
+    ) -> Iterator[str]:
+        """Yield OpenAI-compatible streaming tokens.
+
+        This method intentionally does not call complete() and split a full
+        response afterward. If real streaming is unavailable, callers should
+        fall back at the runtime level.
+        """
+        if not self.is_enabled():
+            return
+
+        api_key_error = validate_api_key_format(self.settings.api_key)
+        if api_key_error:
+            record_ai_run(feature, self.settings, user, success=False, error=api_key_error)
+            raise RuntimeError(api_key_error)
+
+        payload = {
+            "model": self.settings.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": self.settings.temperature if temperature is None else temperature,
+            "max_tokens": _effective_max_tokens(self.settings, max_tokens),
+            "stream": True,
+        }
+        request_timeout = timeout_seconds if timeout_seconds is not None else self.settings.timeout_seconds
+        output_parts: list[str] = []
+        try:
+            with httpx.Client(timeout=max(1, request_timeout), trust_env=False) as client:
+                with client.stream(
+                    "POST",
+                    _chat_completions_url(self.settings.base_url, self.settings.provider),
+                    headers={
+                        "Authorization": f"Bearer {self.settings.api_key.strip()}",
+                        "Accept-Encoding": "gzip, deflate",
+                    },
+                    json=payload,
+                ) as response:
+                    if response.status_code != 200:
+                        body = response.read().decode("utf-8", errors="replace")
+                        llm_err = _classify_http_error(response.status_code, body)
+                        record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
+                        raise RuntimeError(llm_err.message)
+
+                    for line in response.iter_lines():
+                        if not line:
+                            continue
+                        data = line.removeprefix("data:").strip()
+                        if not data:
+                            continue
+                        if data == "[DONE]":
+                            break
+                        try:
+                            payload_line = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        choice = (payload_line.get("choices") or [{}])[0]
+                        delta = choice.get("delta") or {}
+                        content = _message_content(delta)
+                        if content:
+                            output_parts.append(content)
+                            yield content
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
+            record_ai_run(feature, self.settings, user, success=False, error=str(exc))
+            raise RuntimeError(str(exc)) from exc
+        except Exception as exc:
+            if not isinstance(exc, RuntimeError):
+                record_ai_run(feature, self.settings, user, success=False, error=str(exc))
+            raise
+
+        record_ai_run(feature, self.settings, user, output_summary="".join(output_parts), success=True)
