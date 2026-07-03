@@ -2,7 +2,6 @@ import { ChevronLeft, ChevronRight, NotebookPen } from 'lucide-react';
 import type { AppData, Lang } from '../types';
 import { getMonthDays, monthKey, todayISO } from '../utils/date';
 import { weekdayLabels } from '../lib/i18n';
-import { CollapsibleSection } from './CollapsibleSection';
 
 interface CalendarPanelProps {
   lang: Lang;
@@ -34,15 +33,18 @@ export function CalendarPanel(props: CalendarPanelProps) {
     return plans.every((plan) => plan.done) ? 'done-all' : 'has-plan';
   }
 
-  const navActions = (
-    <div className="icon-row">
-      <button className="icon-button" onClick={() => shiftMonth(-1)} aria-label="Previous month"><ChevronLeft size={18} /></button>
-      <button className="icon-button" onClick={() => shiftMonth(1)} aria-label="Next month"><ChevronRight size={18} /></button>
-    </div>
-  );
-
   return (
-    <CollapsibleSection title={monthTitle} subtitle={t('calendar')} actions={navActions}>
+    <section className="surface calendar-panel">
+      <div className="section-head">
+        <div>
+          <span className="eyebrow">{t('calendar')}</span>
+          <h2>{monthTitle}</h2>
+        </div>
+        <div className="icon-row">
+          <button className="icon-button" onClick={() => shiftMonth(-1)} aria-label="Previous month"><ChevronLeft size={18} /></button>
+          <button className="icon-button" onClick={() => shiftMonth(1)} aria-label="Next month"><ChevronRight size={18} /></button>
+        </div>
+      </div>
       <div className="weekday-grid">
         {weekdayLabels(lang).map((day) => <span key={day}>{day}</span>)}
       </div>
@@ -67,6 +69,6 @@ export function CalendarPanel(props: CalendarPanelProps) {
         <span><NotebookPen size={16} />{t('monthNote')} · {monthKey(viewDate)}</span>
         <textarea value={monthNote} onChange={(event) => onMonthNoteChange(event.target.value)} placeholder={t('monthNotePlaceholder')} />
       </label>
-    </CollapsibleSection>
+    </section>
   );
 }

@@ -11,7 +11,6 @@ import type {
   PlannerTask,
   RagDocument,
   RagDocumentInput,
-  RagSource,
   ReplanApplyPayload
 } from '../types';
 import { invoke } from '@tauri-apps/api/core';

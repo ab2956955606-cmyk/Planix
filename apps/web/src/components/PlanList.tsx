@@ -1,7 +1,6 @@
 import { Check, Clock3, Plus, Trash2 } from 'lucide-react';
 import type { Plan } from '../types';
 import { formatReadable } from '../utils/date';
-import { CollapsibleSection } from './CollapsibleSection';
 
 interface PlanListProps {
   date: string;
@@ -22,7 +21,13 @@ export function PlanList(props: PlanListProps) {
   const { date, lang, plans, draft, time, onDraftChange, onTimeChange, onAdd, onToggle, onDelete, onCompletionChange, t } = props;
 
   return (
-    <CollapsibleSection title={`${t('plans')} · ${plans.length}`} subtitle={formatReadable(date, lang)}>
+    <section className="surface plan-panel">
+      <div className="section-head">
+        <div>
+          <span className="eyebrow">{formatReadable(date, lang)}</span>
+          <h2>{t('plans')} · {plans.length}</h2>
+        </div>
+      </div>
       <div className="plan-list">
         {plans.length === 0 && (
           <div className="empty-state">
@@ -66,6 +71,6 @@ export function PlanList(props: PlanListProps) {
         />
         <button className="primary-icon" onClick={onAdd} aria-label={t('addTask')}><Plus size={20} /></button>
       </div>
-    </CollapsibleSection>
+    </section>
   );
 }

@@ -51,9 +51,9 @@ select:focus {
 }
 
 .app-shell {
-  width: min(1200px, calc(100% - 32px));
+  width: min(1380px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 20px 0 32px;
+  padding: 24px 0 36px;
 }
 
 .topbar {
@@ -148,49 +148,27 @@ h1 {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 480px);
-  gap: 16px;
+  grid-template-columns: minmax(0, 0.95fr) minmax(380px, 1.05fr);
+  gap: 18px;
   align-items: start;
 }
 
 .left-stack {
   display: grid;
-  gap: 16px;
+  gap: 18px;
 }
 
 .surface {
-  border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.05);
+  border-radius: 20px;
+  padding: 18px;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.06);
 }
 
 .section-head {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 16px;
-}
-
-.collapse-toggle {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  background: rgba(118, 118, 128, 0.1);
-  color: #6e6e73;
-  flex-shrink: 0;
-  transition: background 0.2s;
-}
-.collapse-toggle:hover {
-  background: rgba(118, 118, 128, 0.2);
-  color: #1d1d1f;
-}
-
-.collapse-content { transition: height 0.25s ease, opacity 0.2s ease; }
-
-.collapsible-surface.is-folded {
-  padding-bottom: 12px;
 }
 
 .eyebrow {
@@ -203,7 +181,7 @@ h1 {
 }
 
 .section-head h2 {
-  font-size: 18px;
+  font-size: 20px;
   letter-spacing: 0;
 }
 
@@ -225,28 +203,24 @@ h1 {
 .date-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 7px;
 }
 
 .weekday-grid {
-  margin-bottom: 5px;
+  margin-bottom: 8px;
   color: #8e8e93;
   font-size: 12px;
-  gap: 4px;
-}
-
-.date-grid {
-  gap: 4px;
+  text-align: center;
 }
 
 .date-cell {
   position: relative;
   display: grid;
   place-items: center;
-  border-radius: 10px;
+  aspect-ratio: 1;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.46);
   color: #1d1d1f;
-  padding: 6px 4px;
-  min-height: 36px;
 }
 
 .date-cell.muted {
@@ -256,12 +230,11 @@ h1 {
 .date-cell.today span {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: #1d1d1f;
   color: #fff;
-  font-size: 13px;
 }
 
 .date-cell.selected {
@@ -283,11 +256,11 @@ h1 {
 .ai-grid label,
 .settings-grid label {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .note-box {
-  margin-top: 12px;
+  margin-top: 16px;
 }
 
 .note-box span,
@@ -296,26 +269,16 @@ h1 {
 .settings-grid span {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: #6e6e73;
   font-size: 12px;
 }
 
 .note-box textarea,
 .ai-grid textarea {
-  min-height: 72px;
-  padding: 10px;
-  resize: none;
-  overflow-wrap: break-word;
-  white-space: pre-wrap;
-}
-
-.completion-box textarea {
-  min-height: 52px;
-  padding: 8px;
-  resize: none;
-  overflow-wrap: break-word;
-  white-space: pre-wrap;
+  min-height: 88px;
+  padding: 12px;
+  resize: vertical;
 }
 
 .plan-panel {
@@ -343,13 +306,11 @@ h1 {
 .plan-card {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) 34px;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 14px;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid rgba(60, 60, 67, 0.1);
-  overflow-wrap: break-word;
-  word-break: break-word;
 }
 
 .plan-card.is-done {
@@ -396,8 +357,7 @@ h1 {
 }
 
 .plan-title {
-  line-height: 1.5;
-  overflow-wrap: anywhere;
+  line-height: 1.55;
 }
 
 .completion-box textarea {
@@ -421,9 +381,7 @@ h1 {
 }
 
 .add-row textarea {
-  resize: none;
-  overflow-wrap: break-word;
-  white-space: pre-wrap;
+  resize: vertical;
 }
 
 .primary-icon {
@@ -538,29 +496,16 @@ h1 {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  min-height: 36px;
-  padding: 0 14px;
-  border-radius: 10px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 11px;
   background: #1d1d1f;
   color: #fff;
-  font-weight: 500;
-  font-size: 14px;
-  transition: opacity 0.2s, transform 0.15s;
-}
-.settings-actions button:hover,
-.workflow-head button:hover {
-  opacity: 0.88;
-  transform: translateY(-1px);
-}
-.settings-actions button:active,
-.workflow-head button:active {
-  transform: translateY(0);
 }
 
 .workflow-head button:disabled {
   cursor: not-allowed;
-  opacity: 0.48;
-  transform: none;
+  opacity: 0.58;
 }
 
 .material-grid {
@@ -642,22 +587,10 @@ h1 {
   justify-content: center;
   gap: 7px;
   min-height: 38px;
-  padding: 0 14px;
-  border-radius: 10px;
+  padding: 0 12px;
+  border-radius: 12px;
   background: #1d1d1f;
   color: #fff;
-  font-weight: 500;
-  font-size: 14px;
-  transition: opacity 0.2s, transform 0.15s;
-}
-.command-row button:hover,
-.apply-button:hover {
-  opacity: 0.88;
-  transform: translateY(-1px);
-}
-.command-row button:active,
-.apply-button:active {
-  transform: translateY(0);
 }
 
 .apply-button {

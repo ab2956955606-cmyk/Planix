@@ -14,7 +14,6 @@ import {
   Trash2,
   UploadCloud
 } from 'lucide-react';
-import { CollapsibleSection } from './CollapsibleSection';
 import type {
   AiSettings,
   AppliedPlan,
@@ -323,7 +322,14 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   const modeLabel = mode === 'mock' ? t('mockMode') : mode === 'llm' ? t('llmMode') : t('apiMode');
 
   return (
-    <CollapsibleSection title={t('aiWorkspace')} subtitle={`${modeLabel}`}>
+    <section className="surface ai-panel">
+      <div className="section-head">
+        <div>
+          <span className="eyebrow"><Bot size={14} /> {modeLabel}</span>
+          <h2>{t('aiWorkspace')}</h2>
+        </div>
+      </div>
+
       <ModelSettings
         settings={settings}
         apiKey={apiKey}
@@ -448,7 +454,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
         <button onClick={() => runUtility('eval')}><DatabaseZap size={16} />{t('evaluate')}</button>
       </div>
       {utilityResult && <ResultView result={utilityResult} t={t} />}
-    </CollapsibleSection>
+    </section>
   );
 }
 
