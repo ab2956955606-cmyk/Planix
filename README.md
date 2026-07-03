@@ -11,10 +11,6 @@
   <img alt="Desktop" src="https://img.shields.io/badge/Desktop-Tauri%20%2B%20Sidecar-6e6e73">
 </p>
 
-![MyNotes AI 中文界面](assets/mynotes-demo.png)
-
-![MyNotes AI English UI](assets/mynotes-demo-en.png)
-
 ## 中文介绍
 
 **MyNotes AI** 是一个面向学习、求职和长期目标管理的 AI 规划系统。它把长期目标输入、资料沉淀、AI 拆解、日程执行、每日复盘、重排预览、资料问答和质量评测连接成一个完整闭环。
