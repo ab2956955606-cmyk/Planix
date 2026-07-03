@@ -32,9 +32,9 @@ export function getMonthDays(viewDate: Date): Array<{ iso: string; day: number; 
   });
 }
 
-export function formatReadable(iso: string, lang: 'zh' | 'en'): string {
+export function formatReadable(iso: string, lang: 'zh-CN' | 'en-US'): string {
   const date = new Date(`${iso}T00:00:00`);
-  return new Intl.DateTimeFormat(lang === 'zh' ? 'zh-CN' : 'en-US', {
+  return new Intl.DateTimeFormat(lang, {
     month: 'long',
     day: 'numeric',
     weekday: 'short'

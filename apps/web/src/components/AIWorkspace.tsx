@@ -44,10 +44,13 @@ import {
   uploadRagDocument
 } from '../lib/api';
 
+type WorkspaceSection = 'all' | 'notes' | 'goals' | 'settings';
+
 interface AIWorkspaceProps {
   data: AppData;
   date: string;
   preferences: string;
+  section?: WorkspaceSection;
   onPreferencesChange: (value: string) => void;
   onApplyTasks: (tasks: PlannerTask[]) => void;
   onReplanApplied: (plans: AppliedPlan[]) => void;
@@ -85,8 +88,8 @@ function apiDetailToText(detail: unknown): string {
 }
 
 export function AIWorkspace(props: AIWorkspaceProps) {
-  const { data, date, preferences, onPreferencesChange, onApplyTasks, onReplanApplied, t } = props;
-  const [goal, setGoal] = useState('3 个月内拿到北京 AI 应用开发实习');
+  const { data, date, preferences, section = 'all', onPreferencesChange, onApplyTasks, onReplanApplied, t } = props;
+  const [goal, setGoal] = useState(t('legacy.goalPlaceholder'));
   const [deadline, setDeadline] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() + 3);
@@ -110,6 +113,31 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   const [reviewStatus, setReviewStatus] = useState('');
 
   const payload = { goal, deadline, dailyHours, materials, preferences, date, data };
+  const showSettings = section === 'all' || section === 'settings';
+  const showMaterials = section === 'all' || section === 'notes';
+  const showGoals = section === 'all' || section === 'goals';
+  const showReview = section === 'all' || section === 'goals';
+  const showNotesUtility = section === 'all' || section === 'notes';
+  const showMemoryUtility = section === 'all' || section === 'settings';
+  const showEvalUtility = section === 'all' || section === 'goals';
+  const mode = goalPlan?.mode ?? dailyReview?.mode ?? utilityResult?.mode;
+  const modeLabel = mode === 'mock' ? t('legacy.mockMode') : mode === 'llm' ? t('legacy.llmMode') : t('legacy.apiMode');
+  const heading =
+    section === 'notes'
+      ? t('legacy.notesTitle')
+      : section === 'goals'
+        ? t('legacy.goalsTitle')
+        : section === 'settings'
+          ? t('legacy.settingsTitle')
+          : t('legacy.aiWorkspace');
+  const hint =
+    section === 'notes'
+      ? t('legacy.notesHint')
+      : section === 'goals'
+        ? t('legacy.goalsHint')
+        : section === 'settings'
+          ? t('legacy.settingsHint')
+          : t('legacy.backendTip');
 
   useEffect(() => {
     fetchAiSettings()
@@ -136,16 +164,16 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     setDocumentStatus('');
     try {
       const saved = await createRagDocument({
-        title: docTitle.trim() || t('materialTitle'),
+        title: docTitle.trim() || t('legacy.materialTitle'),
         content,
         sourceType: 'paste'
       });
       setDocuments((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setDocContent('');
       setDocTitle('');
-      setDocumentStatus(t('materialSaved'));
+      setDocumentStatus(t('legacy.materialSaved'));
     } catch {
-      setDocumentStatus(t('materialSaveError'));
+      setDocumentStatus(t('legacy.materialSaveError'));
     } finally {
       setLoading('');
     }
@@ -161,9 +189,9 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       setUploadFile(null);
       setDocTitle('');
       setFileInputKey((current) => current + 1);
-      setDocumentStatus(t('materialUploaded'));
+      setDocumentStatus(t('legacy.materialUploaded'));
     } catch {
-      setDocumentStatus(t('materialUploadError'));
+      setDocumentStatus(t('legacy.materialUploadError'));
     } finally {
       setLoading('');
     }
@@ -174,7 +202,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       await deleteRagDocument(id);
       setDocuments((current) => current.filter((item) => item.id !== id));
     } catch {
-      setDocumentStatus(t('materialSaveError'));
+      setDocumentStatus(t('legacy.materialSaveError'));
     }
   }
 
@@ -204,7 +232,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     try {
       const applied = await applyReplanTasks({ tasks: dailyReview.replanTasks });
       onReplanApplied(applied);
-      setReviewStatus(t('replanApplied'));
+      setReviewStatus(t('legacy.replanApplied'));
     } finally {
       setLoading('');
     }
@@ -217,7 +245,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       if (action === 'eval') setUtilityResult(await evaluatePlanner(payload));
       if (action === 'memory') {
         await saveMemory(preferences);
-        setUtilityResult({ summary: t('saved') });
+        setUtilityResult({ summary: t('legacy.saved') });
       }
     } finally {
       setLoading('');
@@ -228,29 +256,29 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     setSettingsStatus('');
     const baseUrl = settings.baseUrl.trim();
     if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
-      setSettingsStatus('Base URL 必须以 http:// 或 https:// 开头');
+      setSettingsStatus(t('legacy.baseUrlInvalid'));
       return;
     }
     try {
       const parsed = new URL(baseUrl);
       if (settings.provider === 'deepseek' && parsed.hostname === 'api.deepseek.com' && parsed.pathname !== '/') {
-        setSettingsStatus('DeepSeek Base URL 请填写 https://api.deepseek.com，不要包含 /v1 或 /chat/completions');
+        setSettingsStatus(t('legacy.deepseekBaseUrlInvalid'));
         return;
       }
     } catch {
-      setSettingsStatus('Base URL 格式错误');
+      setSettingsStatus(t('legacy.baseUrlFormatInvalid'));
       return;
     }
     if (!settings.model.trim()) {
-      setSettingsStatus('模型名称不能为空');
+      setSettingsStatus(t('legacy.modelRequired'));
       return;
     }
     if (settings.temperature < 0 || settings.temperature > 2) {
-      setSettingsStatus('温度范围必须在 0 到 2 之间');
+      setSettingsStatus(t('legacy.temperatureInvalid'));
       return;
     }
     if (settings.timeoutSeconds < 5 || settings.timeoutSeconds > 120) {
-      setSettingsStatus('超时时间必须在 5 到 120 秒之间');
+      setSettingsStatus(t('legacy.timeoutInvalid'));
       return;
     }
 
@@ -265,22 +293,22 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       });
       setSettings(saved);
       setApiKey('');
-      setSettingsStatus(t('settingsSaved'));
+      setSettingsStatus(t('legacy.settingsSaved'));
     } catch (err) {
       if (err instanceof ApiNetworkError) {
-        setSettingsStatus('后端服务未启动');
+        setSettingsStatus(t('legacy.backendOffline'));
       } else if (err instanceof ApiHttpError) {
         const detailStr = apiDetailToText(err.detail);
         const detailDisplay = detailStr ? `: ${detailStr}` : '';
         if (err.status === 422) {
-          setSettingsStatus(`设置字段格式错误${detailDisplay}`);
+          setSettingsStatus(`${t('legacy.settingsFieldInvalid')}${detailDisplay}`);
         } else if (err.status === 500) {
-          setSettingsStatus(`后端保存设置失败${detailDisplay}`);
+          setSettingsStatus(`${t('legacy.backendSaveFailed')}${detailDisplay}`);
         } else {
-          setSettingsStatus(`保存设置失败 (${err.status})${detailDisplay}`);
+          setSettingsStatus(`${t('legacy.settingsSaveFailed')} (${err.status})${detailDisplay}`);
         }
       } else {
-        setSettingsStatus(t('settingsError'));
+        setSettingsStatus(t('legacy.settingsError'));
       }
     }
   }
@@ -291,172 +319,386 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       if (test.ok) {
         setSettingsStatus(test.message);
       } else {
-        // Map error types to user-friendly messages
         const errorMessages: Record<string, string> = {
-          no_key: 'API Key 未保存，请在设置中填入 API Key',
-          auth_error: 'API Key 无效或已过期',
-          insufficient_balance: '账户余额不足',
-          bad_model: '模型名不存在或不支持',
-          bad_base_url: 'Base URL 无法连接，请检查地址是否正确',
-          bad_request: '请求参数错误，请检查 Base URL 和模型名',
-          timeout: '模型服务请求超时，请检查网络或增大超时时间',
-          network_error: 'Base URL 无法连接，请检查地址是否正确',
-          server_error: '模型服务端错误，请稍后重试',
-          rate_limited: '请求过于频繁，请稍后重试',
+          no_key: t('legacy.noApiKey'),
+          auth_error: t('legacy.authError'),
+          insufficient_balance: t('legacy.insufficientBalance'),
+          bad_model: t('legacy.badModel'),
+          bad_base_url: t('legacy.badBaseUrl'),
+          bad_request: t('legacy.badRequest'),
+          timeout: t('legacy.timeoutError'),
+          network_error: t('legacy.networkError'),
+          server_error: t('legacy.serverError'),
+          rate_limited: t('legacy.rateLimited')
         };
         const errorType = test.errorType ?? '';
-        setSettingsStatus(errorMessages[errorType] || test.message || '模型测试失败，请检查设置');
+        setSettingsStatus(errorMessages[errorType] || test.message || t('legacy.modelTestFailed'));
       }
     } catch (err) {
       if (err instanceof ApiNetworkError) {
-        setSettingsStatus('后端服务未启动或连接失败，请确认后端已运行在 127.0.0.1:8000');
+        setSettingsStatus(t('legacy.backendConnectionFailed'));
       } else if (err instanceof ApiHttpError) {
         const detailText = apiDetailToText(err.detail);
-        setSettingsStatus(`模型测试请求失败 (${err.status})${detailText ? `: ${detailText}` : ''}`);
+        setSettingsStatus(`${t('legacy.modelTestRequestFailed')} (${err.status})${detailText ? `: ${detailText}` : ''}`);
       } else {
-        setSettingsStatus('请求后端失败，请重试');
+        setSettingsStatus(t('legacy.backendRequestFailed'));
       }
     }
   }
-
-  const mode = goalPlan?.mode ?? dailyReview?.mode ?? utilityResult?.mode;
-  const modeLabel = mode === 'mock' ? t('mockMode') : mode === 'llm' ? t('llmMode') : t('apiMode');
 
   return (
     <section className="surface ai-panel">
       <div className="section-head">
         <div>
           <span className="eyebrow"><Bot size={14} /> {modeLabel}</span>
-          <h2>{t('aiWorkspace')}</h2>
+          <h2>{heading}</h2>
+          <p className="section-hint">{hint}</p>
         </div>
       </div>
 
-      <ModelSettings
-        settings={settings}
-        apiKey={apiKey}
-        settingsStatus={settingsStatus}
-        setSettings={setSettings}
-        setApiKey={setApiKey}
-        clearSettingsStatus={() => setSettingsStatus('')}
-        saveModelSettings={saveModelSettings}
-        testModel={testModel}
-        t={t}
-      />
+      {showSettings && (
+        <>
+          <ModelSettings
+            settings={settings}
+            apiKey={apiKey}
+            settingsStatus={settingsStatus}
+            setSettings={setSettings}
+            setApiKey={setApiKey}
+            clearSettingsStatus={() => setSettingsStatus('')}
+            saveModelSettings={saveModelSettings}
+            testModel={testModel}
+            t={t}
+          />
+          {section === 'settings' && (
+            <PreferenceCard
+              preferences={preferences}
+              onPreferencesChange={onPreferencesChange}
+              onSave={() => runUtility('memory')}
+              saving={loading === 'memory'}
+              t={t}
+            />
+          )}
+        </>
+      )}
 
-      <div className="workflow-card">
-        <div className="workflow-head">
-          <div>
-            <span>{t('materialLibrary')}</span>
-            <strong>{t('materialLibraryHint')}</strong>
-          </div>
-          <div className="workflow-buttons">
-            <button onClick={saveMaterial} disabled={loading === 'material' || !docContent.trim()}>
-              <Library size={16} />{t('saveMaterial')}
-            </button>
-            <button onClick={uploadMaterial} disabled={loading === 'upload-material' || !uploadFile}>
-              <UploadCloud size={16} />{t('uploadMaterial')}
-            </button>
-          </div>
+      {showMaterials && (
+        <MaterialLibrary
+          documents={documents}
+          docTitle={docTitle}
+          docContent={docContent}
+          uploadFile={uploadFile}
+          fileInputKey={fileInputKey}
+          documentStatus={documentStatus}
+          loading={loading}
+          setDocTitle={setDocTitle}
+          setDocContent={setDocContent}
+          setUploadFile={setUploadFile}
+          saveMaterial={saveMaterial}
+          uploadMaterial={uploadMaterial}
+          removeMaterial={removeMaterial}
+          t={t}
+        />
+      )}
+
+      {(showMaterials || showGoals) && (
+        <MaterialQuestion materials={materials} setMaterials={setMaterials} runUtility={runUtility} loading={loading} t={t} />
+      )}
+
+      {showGoals && (
+        <GoalPlanner
+          goal={goal}
+          deadline={deadline}
+          dailyHours={dailyHours}
+          preferences={preferences}
+          materials={materials}
+          loading={loading}
+          goalPlan={goalPlan}
+          setGoal={setGoal}
+          setDeadline={setDeadline}
+          setDailyHours={setDailyHours}
+          onPreferencesChange={onPreferencesChange}
+          setMaterials={setMaterials}
+          runGoalPlan={runGoalPlan}
+          onApplyTasks={onApplyTasks}
+          t={t}
+        />
+      )}
+
+      {showReview && (
+        <DailyReview
+          dailyReview={dailyReview}
+          reviewStatus={reviewStatus}
+          loading={loading}
+          runDailyReview={runDailyReview}
+          applyReviewReplan={applyReviewReplan}
+          t={t}
+        />
+      )}
+
+      {(showNotesUtility || showMemoryUtility || showEvalUtility) && (
+        <div className="command-row">
+          {showNotesUtility && <button onClick={() => runUtility('rag')}><FileSearch size={16} />{t('legacy.rag')}</button>}
+          {showMemoryUtility && <button onClick={() => runUtility('memory')}><Save size={16} />{t('legacy.saveMemory')}</button>}
+          {showEvalUtility && <button onClick={() => runUtility('eval')}><DatabaseZap size={16} />{t('legacy.evaluate')}</button>}
         </div>
-        <div className="ai-grid material-grid">
-          <label>
-            <span>{t('materialTitle')}</span>
-            <input value={docTitle} onChange={(event) => setDocTitle(event.target.value)} placeholder={t('materialTitlePlaceholder')} />
-          </label>
-          <label>
-            <span>{t('materialFile')}</span>
+      )}
+      {utilityResult && <ResultView result={utilityResult} t={t} />}
+    </section>
+  );
+}
+
+function MaterialLibrary(props: {
+  documents: RagDocument[];
+  docTitle: string;
+  docContent: string;
+  uploadFile: File | null;
+  fileInputKey: number;
+  documentStatus: string;
+  loading: string;
+  setDocTitle: (value: string) => void;
+  setDocContent: (value: string) => void;
+  setUploadFile: (value: File | null) => void;
+  saveMaterial: () => void;
+  uploadMaterial: () => void;
+  removeMaterial: (id: string) => void;
+  t: (key: string) => string;
+}) {
+  const {
+    documents,
+    docTitle,
+    docContent,
+    uploadFile,
+    fileInputKey,
+    documentStatus,
+    loading,
+    setDocTitle,
+    setDocContent,
+    setUploadFile,
+    saveMaterial,
+    uploadMaterial,
+    removeMaterial,
+    t
+  } = props;
+  const fileInputId = `material-file-${fileInputKey}`;
+
+  return (
+    <div className="workflow-card">
+      <div className="workflow-head">
+        <div>
+          <span>{t('legacy.materialLibrary')}</span>
+          <strong>{t('legacy.materialLibraryHint')}</strong>
+        </div>
+        <div className="workflow-buttons">
+          <button onClick={saveMaterial} disabled={loading === 'material' || !docContent.trim()}>
+            <Library size={16} />{t('legacy.saveMaterial')}
+          </button>
+          <button onClick={uploadMaterial} disabled={loading === 'upload-material' || !uploadFile}>
+            <UploadCloud size={16} />{t('legacy.uploadMaterial')}
+          </button>
+        </div>
+      </div>
+      <div className="ai-grid material-grid">
+        <label>
+          <span>{t('legacy.materialTitle')}</span>
+          <input value={docTitle} onChange={(event) => setDocTitle(event.target.value)} placeholder={t('legacy.materialTitlePlaceholder')} />
+        </label>
+        <div className="file-field">
+          <span>{t('legacy.materialFile')}</span>
+          <div className="file-picker">
             <input
+              id={fileInputId}
+              className="file-input"
               key={fileInputKey}
               type="file"
               accept=".txt,.md,text/plain,text/markdown"
               onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
             />
-          </label>
-          <label className="wide">
-            <span>{t('materialContent')}</span>
-            <textarea value={docContent} onChange={(event) => setDocContent(event.target.value)} placeholder={t('materialContentPlaceholder')} />
-          </label>
-        </div>
-        {documentStatus && <p className="inline-status">{documentStatus}</p>}
-        <div className="material-list">
-          <span className="eyebrow">{t('recentMaterials')}</span>
-          {!documents.length && <div className="empty-state">{t('noMaterials')}</div>}
-          {documents.slice(0, 5).map((document) => (
-            <article className="material-item" key={document.id}>
-              <div>
-                <strong>{document.title}</strong>
-                <p>{document.summary}</p>
-                <small>{document.chunks} chunks · {document.sourceType}</small>
-              </div>
-              <button className="icon-button danger" onClick={() => removeMaterial(document.id)} aria-label={t('delete')}>
-                <Trash2 size={15} />
-              </button>
-            </article>
-          ))}
-        </div>
-      </div>
-
-      <div className="workflow-card">
-        <div className="workflow-head">
-          <div>
-            <span>{t('goalPlanning')}</span>
-            <strong>{t('goalPlanningHint')}</strong>
+            <label className="file-picker-button" htmlFor={fileInputId}>
+              <UploadCloud size={15} />
+              {t('legacy.chooseFile')}
+            </label>
+            <span className="file-name">{uploadFile?.name ?? t('legacy.noFileSelected')}</span>
           </div>
-          <button onClick={runGoalPlan} disabled={loading === 'goal'}><Sparkles size={16} />{t('generateGoalPlan')}</button>
         </div>
-        <div className="ai-grid">
-          <label>
-            <span>{t('goal')}</span>
-            <input value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} />
-          </label>
-          <label>
-            <span>{t('deadline')}</span>
-            <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
-          </label>
-          <label>
-            <span>{t('dailyHours')}</span>
-            <input type="number" min={1} max={12} value={dailyHours} onChange={(event) => setDailyHours(Number(event.target.value))} />
-          </label>
-          <label className="wide">
-            <span>{t('preference')}</span>
-            <input value={preferences} onChange={(event) => onPreferencesChange(event.target.value)} placeholder={t('preferencePlaceholder')} />
-          </label>
-          <label className="wide">
-            <span>{t('materials')}</span>
-            <textarea value={materials} onChange={(event) => setMaterials(event.target.value)} placeholder={t('materialsPlaceholder')} />
-          </label>
+        <label className="wide">
+          <span>{t('legacy.materialContent')}</span>
+          <textarea value={docContent} onChange={(event) => setDocContent(event.target.value)} placeholder={t('legacy.materialContentPlaceholder')} />
+        </label>
+      </div>
+      {documentStatus && <p className="inline-status">{documentStatus}</p>}
+      <div className="material-list">
+        <span className="eyebrow">{t('legacy.recentMaterials')}</span>
+        {!documents.length && <div className="empty-state">{t('legacy.noMaterials')}</div>}
+        {documents.slice(0, 5).map((document) => (
+          <article className="material-item" key={document.id}>
+            <div>
+              <strong>{document.title}</strong>
+              <p>{document.summary}</p>
+              <small>{document.chunks} {t('legacy.chunks')} / {document.sourceType} {t('legacy.sourceType')}</small>
+            </div>
+            <button className="icon-button danger" onClick={() => removeMaterial(document.id)} aria-label={t('common.delete')}>
+              <Trash2 size={15} />
+            </button>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MaterialQuestion(props: {
+  materials: string;
+  setMaterials: (value: string) => void;
+  runUtility: (action: 'rag' | 'eval' | 'memory') => void;
+  loading: string;
+  t: (key: string) => string;
+}) {
+  const { materials, setMaterials, runUtility, loading, t } = props;
+  return (
+    <div className="workflow-card">
+      <div className="workflow-head">
+        <div>
+          <span>{t('legacy.materials')}</span>
+          <strong>{t('legacy.notesHint')}</strong>
         </div>
-        {loading === 'goal' && <div className="empty-state">{t('loading')}</div>}
-        {goalPlan && <GoalPlanView plan={goalPlan} t={t} />}
-        <button className="apply-button" onClick={() => onApplyTasks(goalPlan?.tasks ?? [])} disabled={!goalPlan?.tasks.length}>
-          {goalPlan?.tasks.length ? t('applyTasks') : t('noAiTasks')}
+        <button onClick={() => runUtility('rag')} disabled={loading === 'rag' || !materials.trim()}>
+          <FileSearch size={16} />{t('legacy.askMaterials')}
         </button>
       </div>
+      <label className="wide field-stack">
+        <span>{t('legacy.materials')}</span>
+        <textarea value={materials} onChange={(event) => setMaterials(event.target.value)} placeholder={t('legacy.materialsPlaceholder')} />
+      </label>
+    </div>
+  );
+}
 
-      <div className="workflow-card">
-        <div className="workflow-head">
-          <div>
-            <span>{t('dailyReview')}</span>
-            <strong>{t('dailyReviewHint')}</strong>
-          </div>
-          <button onClick={runDailyReview} disabled={loading === 'review'}><ClipboardCheck size={16} />{t('runDailyReview')}</button>
+function GoalPlanner(props: {
+  goal: string;
+  deadline: string;
+  dailyHours: number;
+  preferences: string;
+  materials: string;
+  loading: string;
+  goalPlan: GoalPlanResponse | null;
+  setGoal: (value: string) => void;
+  setDeadline: (value: string) => void;
+  setDailyHours: (value: number) => void;
+  onPreferencesChange: (value: string) => void;
+  setMaterials: (value: string) => void;
+  runGoalPlan: () => void;
+  onApplyTasks: (tasks: PlannerTask[]) => void;
+  t: (key: string) => string;
+}) {
+  const {
+    goal,
+    deadline,
+    dailyHours,
+    preferences,
+    materials,
+    loading,
+    goalPlan,
+    setGoal,
+    setDeadline,
+    setDailyHours,
+    onPreferencesChange,
+    setMaterials,
+    runGoalPlan,
+    onApplyTasks,
+    t
+  } = props;
+
+  return (
+    <div className="workflow-card">
+      <div className="workflow-head">
+        <div>
+          <span>{t('legacy.goalPlanning')}</span>
+          <strong>{t('legacy.goalPlanningHint')}</strong>
         </div>
-        {loading === 'review' && <div className="empty-state">{t('loading')}</div>}
-        {!dailyReview && loading !== 'review' && <div className="empty-state">{t('reviewEmpty')}</div>}
-        {dailyReview && <DailyReviewView review={dailyReview} t={t} />}
-        <button className="apply-button" onClick={applyReviewReplan} disabled={!dailyReview?.replanTasks.length || loading === 'apply-replan'}>
-          {dailyReview?.replanTasks.length ? t('applyReplan') : t('noReplanTasks')}
-        </button>
-        {reviewStatus && <p className="inline-status">{reviewStatus}</p>}
+        <button onClick={runGoalPlan} disabled={loading === 'goal'}><Sparkles size={16} />{t('legacy.generateGoalPlan')}</button>
       </div>
+      <div className="ai-grid">
+        <label>
+          <span>{t('legacy.goal')}</span>
+          <input value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('legacy.goalPlaceholder')} />
+        </label>
+        <label>
+          <span>{t('legacy.deadline')}</span>
+          <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
+        </label>
+        <label>
+          <span>{t('legacy.dailyHours')}</span>
+          <input type="number" min={1} max={12} value={dailyHours} onChange={(event) => setDailyHours(Number(event.target.value))} />
+        </label>
+        <label className="wide">
+          <span>{t('legacy.preference')}</span>
+          <input value={preferences} onChange={(event) => onPreferencesChange(event.target.value)} placeholder={t('legacy.preferencePlaceholder')} />
+        </label>
+        <label className="wide">
+          <span>{t('legacy.materials')}</span>
+          <textarea value={materials} onChange={(event) => setMaterials(event.target.value)} placeholder={t('legacy.materialsPlaceholder')} />
+        </label>
+      </div>
+      {loading === 'goal' && <div className="empty-state">{t('legacy.loading')}</div>}
+      {goalPlan && <GoalPlanView plan={goalPlan} t={t} />}
+      <button className="apply-button" onClick={() => onApplyTasks(goalPlan?.tasks ?? [])} disabled={!goalPlan?.tasks.length}>
+        {goalPlan?.tasks.length ? t('legacy.applyTasks') : t('legacy.noAiTasks')}
+      </button>
+    </div>
+  );
+}
 
-      <div className="command-row">
-        <button onClick={() => runUtility('rag')}><FileSearch size={16} />{t('rag')}</button>
-        <button onClick={() => runUtility('memory')}><Save size={16} />{t('saveMemory')}</button>
-        <button onClick={() => runUtility('eval')}><DatabaseZap size={16} />{t('evaluate')}</button>
+function DailyReview(props: {
+  dailyReview: DailyReviewResponse | null;
+  reviewStatus: string;
+  loading: string;
+  runDailyReview: () => void;
+  applyReviewReplan: () => void;
+  t: (key: string) => string;
+}) {
+  const { dailyReview, reviewStatus, loading, runDailyReview, applyReviewReplan, t } = props;
+  return (
+    <div className="workflow-card">
+      <div className="workflow-head">
+        <div>
+          <span>{t('legacy.dailyReview')}</span>
+          <strong>{t('legacy.dailyReviewHint')}</strong>
+        </div>
+        <button onClick={runDailyReview} disabled={loading === 'review'}><ClipboardCheck size={16} />{t('legacy.runDailyReview')}</button>
       </div>
-      {utilityResult && <ResultView result={utilityResult} t={t} />}
-    </section>
+      {loading === 'review' && <div className="empty-state">{t('legacy.loading')}</div>}
+      {!dailyReview && loading !== 'review' && <div className="empty-state">{t('legacy.reviewEmpty')}</div>}
+      {dailyReview && <DailyReviewView review={dailyReview} t={t} />}
+      <button className="apply-button" onClick={applyReviewReplan} disabled={!dailyReview?.replanTasks.length || loading === 'apply-replan'}>
+        {dailyReview?.replanTasks.length ? t('legacy.applyReplan') : t('legacy.noReplanTasks')}
+      </button>
+      {reviewStatus && <p className="inline-status">{reviewStatus}</p>}
+    </div>
+  );
+}
+
+function PreferenceCard(props: {
+  preferences: string;
+  saving: boolean;
+  onPreferencesChange: (value: string) => void;
+  onSave: () => void;
+  t: (key: string) => string;
+}) {
+  const { preferences, saving, onPreferencesChange, onSave, t } = props;
+  return (
+    <div className="workflow-card">
+      <div className="workflow-head">
+        <div>
+          <span>{t('legacy.preference')}</span>
+          <strong>{t('legacy.savePreferenceHint')}</strong>
+        </div>
+        <button onClick={onSave} disabled={saving}><Save size={16} />{t('legacy.saveMemory')}</button>
+      </div>
+      <label className="wide field-stack">
+        <span>{t('legacy.preference')}</span>
+        <textarea value={preferences} onChange={(event) => onPreferencesChange(event.target.value)} placeholder={t('legacy.preferencePlaceholder')} />
+      </label>
+    </div>
   );
 }
 
@@ -485,12 +727,12 @@ function ModelSettings(props: {
   return (
     <div className="model-settings">
       <div className="settings-title">
-        <span><Settings size={15} />{t('aiSettings')}</span>
-        <strong>{hasConfiguredKey ? t('hasKey') : t('noKey')}</strong>
+        <span><Settings size={15} />{t('legacy.aiSettings')}</span>
+        <strong>{hasConfiguredKey ? t('legacy.hasKey') : t('legacy.noKey')}</strong>
       </div>
       <div className="settings-grid">
         <label>
-          <span>{t('provider')}</span>
+          <span>{t('legacy.provider')}</span>
           <select value={settings.provider} onChange={(event) => updateSettings((current) => ({ ...current, provider: event.target.value as AiSettings['provider'] }))}>
             <option value="deepseek">DeepSeek</option>
             <option value="openai">OpenAI</option>
@@ -499,34 +741,34 @@ function ModelSettings(props: {
           </select>
         </label>
         <label>
-          <span>{t('baseUrl')}</span>
+          <span>{t('legacy.baseUrl')}</span>
           <input value={settings.baseUrl} onChange={(event) => updateSettings((current) => ({ ...current, baseUrl: event.target.value }))} />
         </label>
         <label>
-          <span>{t('model')}</span>
+          <span>{t('legacy.model')}</span>
           <select value={settings.model} onChange={(event) => updateSettings((current) => ({ ...current, model: event.target.value }))}>
             <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
             <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-            <option value="deepseek-chat">DeepSeek Chat (legacy)</option>
-            <option value="deepseek-reasoner">DeepSeek Reasoner (legacy)</option>
+            <option value="deepseek-chat">DeepSeek Chat</option>
+            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
           </select>
         </label>
         <label>
-          <span><KeyRound size={13} />{t('apiKey')}</span>
-          <input type="password" value={apiKey} onChange={(event) => updateApiKey(event.target.value)} placeholder={t('apiKeyPlaceholder')} />
+          <span><KeyRound size={13} />{t('legacy.apiKey')}</span>
+          <input type="password" value={apiKey} onChange={(event) => updateApiKey(event.target.value)} placeholder={t('legacy.apiKeyPlaceholder')} />
         </label>
         <label>
-          <span>{t('temperature')}</span>
+          <span>{t('legacy.temperature')}</span>
           <input type="number" min={0} max={2} step={0.1} value={settings.temperature} onChange={(event) => updateSettings((current) => ({ ...current, temperature: Number(event.target.value) }))} />
         </label>
         <label>
-          <span>{t('timeout')}</span>
+          <span>{t('legacy.timeout')}</span>
           <input type="number" min={5} max={120} value={settings.timeoutSeconds} onChange={(event) => updateSettings((current) => ({ ...current, timeoutSeconds: Number(event.target.value) }))} />
         </label>
       </div>
       <div className="settings-actions">
-        <button onClick={saveModelSettings}><Save size={16} />{t('saveSettings')}</button>
-        <button onClick={testModel}><PlugZap size={16} />{t('testModel')}</button>
+        <button onClick={saveModelSettings}><Save size={16} />{t('legacy.saveSettings')}</button>
+        <button onClick={testModel}><PlugZap size={16} />{t('legacy.testModel')}</button>
         {settingsStatus && <span>{settingsStatus}</span>}
       </div>
     </div>
@@ -539,8 +781,8 @@ function GoalPlanView({ plan, t }: { plan: GoalPlanResponse; t: (key: string) =>
       <h3>{plan.summary}</h3>
       {plan.provider && <p><strong>{plan.provider}</strong> / {plan.model}</p>}
       {plan.phases.map((phase) => <p key={phase.title}><strong>{phase.title}</strong>: {phase.detail}</p>)}
-      <SourceList sources={plan.sources ?? []} title={t('referencedSources')} t={t} />
-      <h3>{t('todayTasks')}</h3>
+      <SourceList sources={plan.sources ?? []} title={t('legacy.referencedSources')} t={t} />
+      <h3>{t('legacy.todayTasks')}</h3>
       {plan.tasks.map((task) => <TaskPreview key={`${task.time}-${task.title}`} time={task.time} title={task.title} reason={task.reason} />)}
     </div>
   );
@@ -550,9 +792,9 @@ function DailyReviewView({ review, t }: { review: DailyReviewResponse; t: (key: 
   return (
     <div className="result-view">
       <h3>{review.summary}</h3>
-      <p>{t('completionRatio')}: {review.doneCount}/{review.totalCount}</p>
+      <p>{t('legacy.completionRatio')}: {review.doneCount}/{review.totalCount}</p>
       <ul>{review.suggestions.map((item) => <li key={item}>{item}</li>)}</ul>
-      <h3><RotateCcw size={15} /> {t('replanPreview')} / {review.targetDate}</h3>
+      <h3><RotateCcw size={15} /> {t('legacy.replanPreview')} / {review.targetDate}</h3>
       {review.replanTasks.map((task) => (
         <TaskPreview key={`${task.targetDate}-${task.time}-${task.title}`} time={task.time} title={task.title} reason={task.reason} />
       ))}
@@ -578,7 +820,7 @@ function SourceList({ sources, title, t }: { sources: RagSource[]; title: string
         <article className="source-item" key={`${source.documentId}-${source.chunkIndex}-${source.title}`}>
           <div className="source-meta">
             <strong>{source.title}</strong>
-            <span>{t('relevance')}: {source.score.toFixed(3)}</span>
+            <span>{t('legacy.relevance')}: {source.score.toFixed(3)}</span>
           </div>
           <p>{source.chunk}</p>
         </article>
@@ -588,14 +830,14 @@ function SourceList({ sources, title, t }: { sources: RagSource[]; title: string
 }
 
 function ResultView({ result, t }: { result: PlannerResponse; t: (key: string) => string }) {
-  const heading = result.score ? `${t('score')}: ${result.score}/5` : result.summary ?? result.answer ?? t('aiWorkspace');
+  const heading = result.score ? `${t('legacy.score')}: ${result.score}/5` : result.summary ?? result.answer ?? t('legacy.aiWorkspace');
   return (
     <div className="result-view utility-result">
       <h3>{heading}</h3>
       {result.provider && <p><strong>{result.provider}</strong> / {result.model}</p>}
       {result.suggestions && <ul>{result.suggestions.map((item) => <li key={item}>{item}</li>)}</ul>}
       {result.answer && result.answer !== heading && <p>{result.answer}</p>}
-      <SourceList sources={result.sources ?? []} title={t('sources')} t={t} />
+      <SourceList sources={result.sources ?? []} title={t('legacy.sources')} t={t} />
       {result.keywords && <p>{result.keywords.join(' / ')}</p>}
       {result.results && <ul>{result.results.map((item) => <li key={item.case}><strong>{item.score}/5</strong> {item.case} - {item.reason}</li>)}</ul>}
     </div>

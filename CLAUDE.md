@@ -1,14 +1,17 @@
-# CLAUDE.md - MyNotes AI
+# CLAUDE.md - Planix
 
 ## Positioning
 
-MyNotes AI is a `v1.1.4` AI application portfolio project. It combines calendar planning, AI goal decomposition, daily review, RAG material Q&A, planner evaluation, and Windows desktop packaging.
+Planix is a `v1.1.4` AI application portfolio project. It presents a RIVA-style AI OS Shell on the frontend and keeps the existing planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
 
-It should be treated as a real AI full-stack product, not a static page.
+Planix is a frontend display brand. Do not rename backend service names, API contracts, database paths, localStorage keys, sidecar names, MSI artifact names, or Tauri identifiers unless a future phase explicitly requires it.
 
 ## Stack
 
 - `apps/web`: React 18 + TypeScript + Vite
+- `apps/web/src/shell`: Planix RIVA Shell, App Menu, Inspector, hash route
+- `apps/web/src/pages`: Dashboard, Calendar, Notes, Goals, Settings
+- `apps/web/src/i18n`: `zh-CN` / `en-US` text system
 - `apps/desktop`: Tauri v2 desktop shell
 - `backend/app`: FastAPI backend
 - SQLite: plans, month notes, planning goals, daily reviews, AI settings, local RAG documents, chunks, FTS5 index, AI run logs
@@ -34,105 +37,45 @@ The frontend uses Tauri IPC for desktop API calls so WebView2 does not block loc
 
 ## Main Files
 
-- `apps/web/src/App.tsx`: main React composition
-- `apps/web/src/components/AIWorkspace.tsx`: AI settings, goal planning, daily review, RAG material flow
+- `apps/web/src/App.tsx`: global state, route switch, business callbacks
+- `apps/web/src/shell/useAppRoute.ts`: hash route source of truth
+- `apps/web/src/shell/RivaShell.tsx`: main shell composition
+- `apps/web/src/shell/AppMenu.tsx`: collapsible top-left menu and language switch
+- `apps/web/src/shell/InspectorPanel.tsx`: read-only Inspector snapshot UI
+- `apps/web/src/pages/DashboardPage.tsx`: UI-only Agent workspace scaffold
+- `apps/web/src/components/AIWorkspace.tsx`: Notes, Goals, and Settings feature sections
 - `apps/web/src/components/CalendarPanel.tsx`: calendar and month note UI
 - `apps/web/src/components/PlanList.tsx`: daily task UI
 - `apps/web/src/lib/api.ts`: API and Tauri IPC proxy client
-- `apps/web/src/lib/i18n.ts`: Chinese/English UI text
 - `apps/desktop/src-tauri/src/main.rs`: Tauri startup, sidecar lifecycle, health preflight, IPC proxy
 - `backend/app/main.py`: FastAPI app and CORS
 - `backend/app/schemas.py`: API contracts
-- `backend/app/db.py`: SQLite schema
-- `backend/app/services/llm.py`: OpenAI-compatible LLM client
-- `backend/app/services/rag.py`: FTS5/BM25 RAG service
-- `backend/app/services/planning.py`: goal plan, review, and replan apply logic
-- Missing `GET /api/planning/daily-review?date=...` results should return an empty `mode='saved'` object, not HTTP 404.
 
-## Verify
+## Frontend Constraints
 
-Backend:
+- Do not add `react-router`; keep lightweight hash routing.
+- `AppRoute` is the only active-page state.
+- Language is `zh-CN | en-US`, persisted with the existing `my_notes_lang` key.
+- All static UI text should use `t("namespace.key")`.
+- Keep Agent UI as a shell-level scaffold only.
+- Do not show trace, timeline, reasoning, or execution chain UI in the current phase.
+- Do not change existing request payloads or response schemas.
+
+## Verification Commands
+
+```powershell
+cd apps\web
+npx.cmd tsc -b
+npm.cmd run lint
+npm.cmd run test
+npm.cmd run build
+```
 
 ```powershell
 python -m compileall backend
 .\.venv\Scripts\python.exe -m pytest backend\tests
 ```
 
-Frontend:
-
-```powershell
-cd apps\web
-npm.cmd run lint
-npx.cmd tsc -b
-npm.cmd run test
-npm.cmd run build
-```
-
-Desktop:
-
-```powershell
-.\scripts\check-desktop-config.ps1
-.\scripts\check-packaging-toolchain.ps1
-cd apps\desktop
-cargo fmt
-cargo check
-npm.cmd run build
-```
-
-Release:
-
-```powershell
-.\scripts\build-release.ps1 -Version 1.1.4
-.\scripts\smoke-test-installed.ps1
-.\scripts\verify-msi-user-path.ps1 -InstalledDir "H:\mynotes"
-```
-
-Note: in restricted sandbox environments, Vite/esbuild may fail to read `vite.config.ts` even when TypeScript and lint pass. Report that as an environment limitation, not as a code failure.
-
-## AI And API Key Safety
-
-- Default model: `deepseek-v4-flash`.
-- Recommended DeepSeek base URL: `https://api.deepseek.com`.
-- DeepSeek chat endpoint must resolve to `/chat/completions`, not `/v1/chat/completions`.
-- `GET /api/ai/settings` returns `hasApiKey`, never the full key.
-- A blank API key in `PUT /api/ai/settings` clears the stored key; do not silently preserve stale cached keys.
-- Once a local AI settings row exists, blank or legacy cached keys must report `hasApiKey=false` and must not fall back to environment variables.
-- Only a freshly user-saved key should be marked as configured in local storage.
-- Do not commit real keys, `.env`, logs, DB files, MSI temp output, or caches.
-- Real DeepSeek testing belongs in `scripts/test-deepseek-real.ps1` and requires explicit local env vars.
-- Unit tests and CI must remain mock/stable.
-- DeepSeek v4/reasoning-style models require enough output budget for even small smoke tests; tiny `max_tokens` values can produce empty content.
-- Treat empty LLM message content as an error and fall back/report clearly instead of marking the call successful.
-
-## Desktop Rules
-
-- Bundled frontend resource: `apps/desktop/src-tauri/resources/index.html`.
-- Bundled sidecar resource: `apps/desktop/src-tauri/resources/binaries/mynotes-api.exe`.
-- Tauri preflights `http://127.0.0.1:8000/api/health`.
-- Tauri IPC command `proxy_api` must read `MYNOTES_API_PORT`, not hard-code a divergent frontend API port.
-- Desktop TXT/MD upload must avoid direct `fetch()` to `127.0.0.1`; read file text and write through the JSON RAG API over `proxy_api`.
-- A valid health response includes `status`, `app`, `pid`, and `version`.
-- If MyNotes API is already running, skip spawning a new sidecar.
-- If another app owns port `8000`, show/log a clear conflict.
-- Only kill the sidecar process spawned by the current Tauri process, but close/destroy events must kill its full Windows process tree so PyInstaller parent/child processes do not remain.
-
 ## Documentation Maintenance
 
-Always update `README.md`, `AGENTS.md`, and `CLAUDE.md` when changing:
-
-- versions, release names, or phase status
-- setup/build/test/release commands
-- API endpoints or schema fields
-- AI provider defaults, key handling, or env vars
-- desktop sidecar behavior, resource paths, or packaging scripts
-- database schema or storage paths
-- screenshots, project pitch, or resume value
-
-If none of these changed, mention that no documentation update was needed.
-
-## Collaboration Rules
-
-- Answer the user in Chinese.
-- Keep implementation practical and portfolio-oriented.
-- Prefer small focused changes and real verification.
-- Do not create a GitHub Release unless explicitly asked.
+`README.md`, `AGENTS.md`, and `CLAUDE.md` must be kept current whenever the project changes meaningfully. This includes phase status, frontend shell, i18n, API behavior, database behavior, AI strategy, packaging, release artifacts, screenshots, and portfolio positioning.

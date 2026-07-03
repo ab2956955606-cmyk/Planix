@@ -1,4 +1,37 @@
-export type Lang = 'zh' | 'en';
+export type Language = 'zh-CN' | 'en-US';
+export type Lang = Language;
+
+export type AppRoute = 'dashboard' | 'calendar' | 'notes' | 'goals' | 'settings';
+
+export interface AgentFlowNode {
+  id: string;
+  label: string;
+  kind: 'input' | 'plan' | 'tool' | 'output';
+  status: 'idle' | 'running' | 'done' | 'error';
+}
+
+export interface InspectorLog {
+  id: string;
+  level: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  timestamp: number;
+}
+
+export interface InspectorSnapshot {
+  route: AppRoute;
+  agentStatus: 'idle' | 'running' | 'done' | 'error';
+  logs: InspectorLog[];
+  memory: {
+    preferenceSummary: string;
+    materialCount: number;
+    planCount: number;
+  };
+  api: {
+    mode: 'local' | 'backend' | 'unknown';
+    hasApiKey: boolean;
+    provider: string;
+  };
+}
 
 export interface Plan {
   id: string;

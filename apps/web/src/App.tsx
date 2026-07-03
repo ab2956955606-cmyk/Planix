@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AIWorkspace } from './components/AIWorkspace';
-import { CalendarPanel } from './components/CalendarPanel';
-import { Header } from './components/Header';
-import { PlanList } from './components/PlanList';
+import { CalendarPage } from './pages/CalendarPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { GoalsPage } from './pages/GoalsPage';
+import { NotesPage } from './pages/NotesPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { RivaShell } from './shell/RivaShell';
+import { useAppRoute } from './shell/useAppRoute';
 import {
   createPlan as createRemotePlan,
   deletePlan as deleteRemotePlan,
@@ -11,9 +14,9 @@ import {
   saveRemoteMonthNote,
   updatePlan as updateRemotePlan
 } from './lib/api';
-import { useText } from './lib/i18n';
-import { ensureDay, loadData, loadLang, loadMonthNote, loadPreferences, saveData, saveLang, saveMonthNote, savePreferences } from './lib/storage';
-import type { AppData, AppliedPlan, Lang, Plan, PlannerTask } from './types';
+import { loadLanguage, saveLanguage, useI18n } from './i18n';
+import { ensureDay, loadData, loadMonthNote, loadPreferences, saveData, saveMonthNote, savePreferences } from './lib/storage';
+import type { AppData, AppliedPlan, InspectorLog, InspectorSnapshot, Language, Plan, PlannerTask } from './types';
 import { monthKey, todayISO } from './utils/date';
 
 function createId(): string {
@@ -25,7 +28,8 @@ function getYearMonth(date: Date): { year: number; month: number } {
 }
 
 export function App() {
-  const [lang, setLang] = useState<Lang>(() => loadLang());
+  const { route, setRoute } = useAppRoute();
+  const [language, setLanguage] = useState<Language>(() => loadLanguage());
   const [data, setData] = useState<AppData>(() => loadData());
   const [selectedDate, setSelectedDate] = useState(() => todayISO());
   const [viewDate, setViewDate] = useState(() => new Date());
@@ -33,7 +37,9 @@ export function App() {
   const [draft, setDraft] = useState('');
   const [time, setTime] = useState(() => `${String(new Date().getHours()).padStart(2, '0')}:00`);
   const [preferences, setPreferences] = useState(() => loadPreferences());
-  const t = useText(lang);
+  const [agentStatus, setAgentStatus] = useState<InspectorSnapshot['agentStatus']>('idle');
+  const [inspectorLogs, setInspectorLogs] = useState<InspectorLog[]>([]);
+  const t = useI18n(language);
 
   const selectedPlans = useMemo(() => ensureDay(data, selectedDate).plans, [data, selectedDate]);
 
@@ -42,9 +48,21 @@ export function App() {
   }, [data]);
 
   useEffect(() => {
-    saveLang(lang);
-    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
-  }, [lang]);
+    saveLanguage(language);
+    document.documentElement.lang = language;
+    document.title = t('common.appName');
+  }, [language, t]);
+
+  useEffect(() => {
+    setInspectorLogs([
+      {
+        id: 'boot',
+        level: 'info',
+        message: t('inspector.bootLog'),
+        timestamp: Date.now()
+      }
+    ]);
+  }, [language, t]);
 
   useEffect(() => {
     const key = monthKey(viewDate);
@@ -89,6 +107,13 @@ export function App() {
   useEffect(() => {
     savePreferences(preferences);
   }, [preferences]);
+
+  function addInspectorLog(log: Omit<InspectorLog, 'id' | 'timestamp'>) {
+    setInspectorLogs((current) => [
+      { ...log, id: createId(), timestamp: Date.now() },
+      ...current.filter((item) => item.id !== 'boot')
+    ].slice(0, 8));
+  }
 
   function updateDay(date: string, updater: (plans: Plan[]) => Plan[]) {
     setData((current) => {
@@ -160,44 +185,76 @@ export function App() {
     setViewDate(new Date());
   }
 
+  function handleToday() {
+    selectToday();
+    setRoute('calendar');
+  }
+
+  const inspector = useMemo<InspectorSnapshot>(() => ({
+    route,
+    agentStatus,
+    logs: inspectorLogs,
+    memory: {
+      preferenceSummary: preferences.trim() || t('inspector.emptyMemory'),
+      materialCount: 0,
+      planCount: selectedPlans.length
+    },
+    api: {
+      mode: 'unknown',
+      hasApiKey: false,
+      provider: 'DeepSeek'
+    }
+  }), [agentStatus, inspectorLogs, preferences, route, selectedPlans.length, t]);
+
+  const aiPageProps = {
+    data,
+    date: selectedDate,
+    preferences,
+    onPreferencesChange: setPreferences,
+    onApplyTasks: applyAiTasks,
+    onReplanApplied: applyRemotePlans,
+    t
+  };
+
   return (
-    <div className="app-shell">
-      <Header lang={lang} onLangChange={setLang} onToday={selectToday} t={t} />
-      <main className="layout">
-        <div className="left-stack">
-          <CalendarPanel
-            lang={lang}
-            data={data}
-            selectedDate={selectedDate}
-            viewDate={viewDate}
-            monthNote={monthNote}
-            onViewDateChange={setViewDate}
-            onSelectDate={setSelectedDate}
-            onMonthNoteChange={(value) => {
-              const key = monthKey(viewDate);
-              const { year, month } = getYearMonth(viewDate);
-              setMonthNote(value);
-              saveMonthNote(key, value);
-              void saveRemoteMonthNote(year, month, value).catch(() => undefined);
-            }}
-            t={t}
-          />
-          <AIWorkspace
-            data={data}
-            date={selectedDate}
-            preferences={preferences}
-            onPreferencesChange={setPreferences}
-            onApplyTasks={applyAiTasks}
-            onReplanApplied={applyRemotePlans}
-            t={t}
-          />
-        </div>
-        <PlanList
-          date={selectedDate}
-          lang={lang}
+    <RivaShell
+      route={route}
+      language={language}
+      inspector={inspector}
+      onRouteChange={setRoute}
+      onLanguageChange={setLanguage}
+      onToday={handleToday}
+      t={t}
+    >
+      {route === 'dashboard' && (
+        <DashboardPage
           plans={selectedPlans}
+          preferences={preferences}
+          inspector={inspector}
+          onAgentStatusChange={setAgentStatus}
+          onLog={addInspectorLog}
+          t={t}
+        />
+      )}
+      {route === 'calendar' && (
+        <CalendarPage
+          lang={language}
+          data={data}
+          selectedDate={selectedDate}
+          viewDate={viewDate}
+          monthNote={monthNote}
+          selectedPlans={selectedPlans}
           draft={draft}
           time={time}
+          onViewDateChange={setViewDate}
+          onSelectDate={setSelectedDate}
+          onMonthNoteChange={(value) => {
+            const key = monthKey(viewDate);
+            const { year, month } = getYearMonth(viewDate);
+            setMonthNote(value);
+            saveMonthNote(key, value);
+            void saveRemoteMonthNote(year, month, value).catch(() => undefined);
+          }}
           onDraftChange={setDraft}
           onTimeChange={setTime}
           onAdd={addPlan}
@@ -218,7 +275,10 @@ export function App() {
           }}
           t={t}
         />
-      </main>
-    </div>
+      )}
+      {route === 'notes' && <NotesPage {...aiPageProps} />}
+      {route === 'goals' && <GoalsPage {...aiPageProps} />}
+      {route === 'settings' && <SettingsPage {...aiPageProps} />}
+    </RivaShell>
   );
 }

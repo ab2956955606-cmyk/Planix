@@ -28,7 +28,7 @@ interface AiPayload {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   API layer for MyNotes AI desktop app.
+   API layer for Planix desktop app.
 
    In the Tauri v2 MSI build, the frontend loads via a custom protocol
    (tauri://) which is treated as a secure context. WebView2 blocks

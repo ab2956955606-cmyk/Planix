@@ -1,4 +1,4 @@
-import type { AppData, DayRecord } from '../types';
+import type { AppData, DayRecord, Language } from '../types';
 
 const DATA_KEY = 'my_notes_data_v2';
 const LEGACY_DATA_KEY = 'my_notes_data';
@@ -46,11 +46,13 @@ export function saveMonthNote(key: string, value: string): void {
   localStorage.setItem(`note_${key}`, value);
 }
 
-export function loadLang(): 'zh' | 'en' {
-  return localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'zh';
+export function loadLang(): Language {
+  const value = localStorage.getItem(LANG_KEY);
+  if (value === 'en' || value === 'en-US') return 'en-US';
+  return 'zh-CN';
 }
 
-export function saveLang(lang: 'zh' | 'en'): void {
+export function saveLang(lang: Language): void {
   localStorage.setItem(LANG_KEY, lang);
 }
 
