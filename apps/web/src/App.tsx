@@ -7,6 +7,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { RivaShell } from './shell/RivaShell';
 import { useAppRoute } from './shell/useAppRoute';
 import {
+  ApiHttpError,
   clearAllPlans as clearAllRemotePlans,
   createPlan as createRemotePlan,
   deletePlan as deleteRemotePlan,
@@ -20,7 +21,21 @@ import {
 } from './lib/api';
 import { loadLanguage, saveLanguage, useI18n } from './i18n';
 import { ensureDay, loadData, loadMonthNote, loadPreferences, saveData, saveMonthNote, savePreferences } from './lib/storage';
-import type { AiSettings, AppData, AppliedPlan, GoalPlanResponse, GoalPlanTask, InspectorLog, InspectorSnapshot, Language, Plan, RefinedTask } from './types';
+import type {
+  AiSettings,
+  AppData,
+  AppliedPlan,
+  CalendarWriteSummary,
+  GoalPlanResponse,
+  GoalPlanTask,
+  InspectorLog,
+  InspectorSnapshot,
+  Language,
+  Plan,
+  RefinedTask,
+  RuntimePlanProposal,
+  StructuredGoalPlan
+} from './types';
 import { monthKey, todayISO } from './utils/date';
 
 function createId(): string {
@@ -43,6 +58,14 @@ function stableKeyPart(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\u4e00-\u9fff-]/gi, '').slice(0, 48);
 }
 
+function stableHash(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
 function buildGoalTaskSourceKey(
   goalPlan: GoalPlanResponse,
   milestoneIndex: number,
@@ -53,6 +76,25 @@ function buildGoalTaskSourceKey(
     ? `goal-plan:${goalPlan.id}`
     : `goal-plan:${stableKeyPart(goalPlan.structuredPlan?.goalTitle || goalPlan.summary)}:${stableKeyPart(task.title)}:${task.dueDate || 'no-date'}`;
   return `${base}:m${milestoneIndex}:t${taskIndex}`;
+}
+
+function buildRuntimeTaskSourceKey(
+  proposal: RuntimePlanProposal,
+  milestoneIndex: number,
+  taskIndex: number,
+  task: GoalPlanTask
+): string {
+  if (proposal.runtimeRunId) {
+    return `runtime-proposal:${proposal.runtimeRunId}:m${milestoneIndex}:t${taskIndex}`;
+  }
+  const raw = [
+    proposal.goal,
+    milestoneIndex,
+    taskIndex,
+    task.title,
+    task.dueDate || 'no-date'
+  ].join('|');
+  return `runtime-proposal:${stableHash(raw)}`;
 }
 
 function defaultGoalTaskTime(index: number): string {
@@ -254,19 +296,23 @@ export function App() {
     return 'created';
   }
 
-  async function applyGoalPlanToCalendar(goalPlan: GoalPlanResponse): Promise<{ created: number; updated: number; failed: number; otherDates: boolean }> {
-    const structured = goalPlan.structuredPlan;
-    if (!structured) return { created: 0, updated: 0, failed: 0, otherDates: false };
+  async function applyStructuredPlanToCalendar(input: {
+    structuredPlan: StructuredGoalPlan;
+    fallbackDate: string;
+    buildSourceKey: (milestoneIndex: number, taskIndex: number, task: GoalPlanTask) => string;
+  }): Promise<CalendarWriteSummary> {
+    const { structuredPlan, fallbackDate, buildSourceKey } = input;
     let created = 0;
     let updated = 0;
     let failed = 0;
     let sequence = 0;
     const targetDates = new Set<string>();
-    for (const [milestoneIndex, milestone] of structured.milestones.entries()) {
+    const errors: string[] = [];
+    for (const [milestoneIndex, milestone] of structuredPlan.milestones.entries()) {
       for (const [taskIndex, task] of milestone.tasks.entries()) {
-        const targetDate = normalizeGoalTaskDate(task.dueDate, selectedDate);
+        const targetDate = normalizeGoalTaskDate(task.dueDate, fallbackDate);
         targetDates.add(targetDate);
-        const sourceKey = buildGoalTaskSourceKey(goalPlan, milestoneIndex, taskIndex, task);
+        const sourceKey = buildSourceKey(milestoneIndex, taskIndex, task);
         try {
           const result = await createOrUpdateGoalPlanTask({
             date: targetDate,
@@ -276,13 +322,38 @@ export function App() {
           });
           if (result === 'created') created += 1;
           else updated += 1;
-        } catch {
+        } catch (err) {
           failed += 1;
+          errors.push(err instanceof Error ? err.message : String(err));
         }
         sequence += 1;
       }
     }
-    return { created, updated, failed, otherDates: Array.from(targetDates).some((date) => date !== selectedDate) };
+    return { created, updated, failed, affectedDates: Array.from(targetDates), errors };
+  }
+
+  async function applyGoalPlanToCalendar(goalPlan: GoalPlanResponse): Promise<{ created: number; updated: number; failed: number; otherDates: boolean }> {
+    const structured = goalPlan.structuredPlan;
+    if (!structured) return { created: 0, updated: 0, failed: 0, otherDates: false };
+    const result = await applyStructuredPlanToCalendar({
+      structuredPlan: structured,
+      fallbackDate: selectedDate,
+      buildSourceKey: (milestoneIndex, taskIndex, task) => buildGoalTaskSourceKey(goalPlan, milestoneIndex, taskIndex, task)
+    });
+    return {
+      created: result.created,
+      updated: result.updated,
+      failed: result.failed,
+      otherDates: result.affectedDates.some((date) => date !== selectedDate)
+    };
+  }
+
+  async function applyRuntimeProposalToCalendar(proposal: RuntimePlanProposal): Promise<CalendarWriteSummary> {
+    return applyStructuredPlanToCalendar({
+      structuredPlan: proposal.structuredPlan,
+      fallbackDate: selectedDate || todayISO(),
+      buildSourceKey: (milestoneIndex, taskIndex, task) => buildRuntimeTaskSourceKey(proposal, milestoneIndex, taskIndex, task)
+    });
   }
 
   function applyRemotePlans(plans: AppliedPlan[]) {
@@ -372,16 +443,41 @@ export function App() {
     return { deleted, failed };
   }
 
-  async function clearAllPlans(): Promise<{ deleted: number }> {
-    const result = await clearAllRemotePlans();
-    setData((current) => {
-      const next: AppData = {};
-      for (const [date, day] of Object.entries(current)) {
-        next[date] = { ...day, plans: [] };
+  async function clearAllPlans(): Promise<{ deleted: number; failed: number }> {
+    try {
+      const result = await clearAllRemotePlans();
+      setData((current) => {
+        const next: AppData = {};
+        for (const [date, day] of Object.entries(current)) {
+          next[date] = { ...day, plans: [] };
+        }
+        return next;
+      });
+      return { deleted: result.deleted, failed: 0 };
+    } catch (err) {
+      if (!(err instanceof ApiHttpError) || err.status !== 404) {
+        throw err;
       }
-      return next;
-    });
-    return result;
+    }
+
+    const uniquePlans = Array.from(
+      new Map(
+        Object.entries(data)
+          .flatMap(([date, day]) => day.plans.map((plan) => [plan.id, { date, plan }] as const))
+      ).values()
+    );
+    let deleted = 0;
+    let failed = 0;
+    for (const { date, plan } of uniquePlans) {
+      try {
+        await deleteRemotePlan(plan.id);
+        removePlanFromDate(date, plan.id);
+        deleted += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { deleted, failed };
   }
 
   function selectToday() {
@@ -443,6 +539,12 @@ export function App() {
           inspector={inspector}
           onAgentStatusChange={setAgentStatus}
           onLog={addInspectorLog}
+          onApplyRuntimeProposalToCalendar={applyRuntimeProposalToCalendar}
+          onViewCalendarDate={(date) => {
+            setSelectedDate(date);
+            setViewDate(new Date(`${date}T00:00:00`));
+            setRoute('calendar');
+          }}
           t={t}
         />
       )}

@@ -5,7 +5,9 @@ import type {
   AgentRunRequest,
   AgentRuntimeEvent,
   AgentRuntimeToolCall,
-  ModelKnowledgeDecision
+  ModelKnowledgeDecision,
+  RuntimePlanProposal,
+  StructuredGoalPlan
 } from '../types';
 
 type AgentFlowState = {
@@ -15,6 +17,7 @@ type AgentFlowState = {
   runId: number;
   runtimeRunId: string;
   lastPrompt: string;
+  latestProposal?: RuntimePlanProposal;
 };
 
 const listeners = new Set<() => void>();
@@ -25,7 +28,8 @@ let state: AgentFlowState = {
   isRunning: false,
   runId: 0,
   runtimeRunId: '',
-  lastPrompt: ''
+  lastPrompt: '',
+  latestProposal: undefined
 };
 
 function delay(ms: number): Promise<void> {
@@ -157,7 +161,8 @@ function resetFlow() {
     traceVisible: false,
     isRunning: false,
     runId: current.runId + 1,
-    runtimeRunId: ''
+    runtimeRunId: '',
+    latestProposal: undefined
   }));
 }
 
@@ -173,7 +178,8 @@ async function runDemoFlow(prompt: string, options: { fallback?: boolean } = {})
     isRunning: true,
     runId,
     runtimeRunId: '',
-    lastPrompt: trimmedPrompt
+    lastPrompt: trimmedPrompt,
+    latestProposal: undefined
   }));
 
   const isCurrentRun = () => state.runId === runId;
@@ -367,6 +373,89 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function nonEmptyString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isValidStructuredPlan(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value) || !Array.isArray(value.milestones)) return false;
+  return value.milestones.some((milestone) => (
+    isRecord(milestone)
+    && Array.isArray(milestone.tasks)
+    && milestone.tasks.some((task) => isRecord(task) && typeof task.title === 'string' && task.title.trim())
+  ));
+}
+
+function normalizeStructuredPlan(value: unknown, fallbackGoal: string): StructuredGoalPlan | undefined {
+  if (!isValidStructuredPlan(value)) return undefined;
+  const rawMilestones = Array.isArray(value.milestones) ? value.milestones : [];
+  const milestones: StructuredGoalPlan['milestones'] = rawMilestones
+    .map((milestone, milestoneIndex) => {
+      if (!isRecord(milestone) || !Array.isArray(milestone.tasks)) return undefined;
+      const tasks: StructuredGoalPlan['milestones'][number]['tasks'] = milestone.tasks
+        .filter((task): task is Record<string, unknown> => isRecord(task) && Boolean(nonEmptyString(task.title)))
+        .map((task) => {
+          const priority = task.priority === 'low' || task.priority === 'medium' || task.priority === 'high'
+            ? task.priority
+            : 'medium';
+          const estimatedMinutes = typeof task.estimatedMinutes === 'number' && Number.isFinite(task.estimatedMinutes) && task.estimatedMinutes > 0
+            ? task.estimatedMinutes
+            : 60;
+          return {
+            title: nonEmptyString(task.title),
+            description: nonEmptyString(task.description),
+            estimatedMinutes,
+            dueDate: typeof task.dueDate === 'string' && task.dueDate.trim() ? task.dueDate.trim() : null,
+            priority
+          };
+        });
+      if (!tasks.length) return undefined;
+      return {
+        title: nonEmptyString(milestone.title) || `Milestone ${milestoneIndex + 1}`,
+        description: nonEmptyString(milestone.description),
+        tasks
+      };
+    })
+    .filter((milestone): milestone is StructuredGoalPlan['milestones'][number] => Boolean(milestone));
+  if (!milestones.length) return undefined;
+  const reviewPlan = isRecord(value.reviewPlan) ? value.reviewPlan : {};
+  const frequency = reviewPlan.frequency === 'weekly' ? 'weekly' : 'daily';
+  const questions = Array.isArray(reviewPlan.questions)
+    ? reviewPlan.questions.filter((item): item is string => typeof item === 'string')
+    : [];
+  return {
+    goalTitle: nonEmptyString(value.goalTitle) || fallbackGoal || 'Runtime proposal',
+    goalDescription: nonEmptyString(value.goalDescription),
+    durationDays: typeof value.durationDays === 'number' && Number.isFinite(value.durationDays) && value.durationDays > 0
+      ? value.durationDays
+      : milestones.length,
+    milestones,
+    reviewPlan: { frequency, questions }
+  };
+}
+
+function extractRuntimePlanProposal(toolCall: AgentRuntimeToolCall, runtimeRunId: string): RuntimePlanProposal | undefined {
+  if (toolCall.name !== 'propose_tasks' || !isRecord(toolCall.output)) return undefined;
+  const input = isRecord(toolCall.input) ? toolCall.input : {};
+  const goal = typeof input.goal === 'string' && input.goal.trim()
+    ? input.goal.trim()
+    : 'Runtime proposal';
+  const structuredPlan = normalizeStructuredPlan(toolCall.output.structuredPlan, goal);
+  if (!structuredPlan) return undefined;
+  const mode = toolCall.output.mode === 'llm' ? 'llm' : 'local_fallback';
+  return {
+    runtimeRunId,
+    goal: goal === 'Runtime proposal' ? structuredPlan.goalTitle : goal,
+    structuredPlan,
+    tasks: Array.isArray(toolCall.output.tasks) ? toolCall.output.tasks : [],
+    sources: Array.isArray(toolCall.output.sources) ? toolCall.output.sources : [],
+    mode,
+    fallbackReason: typeof toolCall.output.fallbackReason === 'string' ? toolCall.output.fallbackReason : undefined,
+    errorType: typeof toolCall.output.errorType === 'string' ? toolCall.output.errorType : undefined,
+    baseUrlHost: typeof toolCall.output.baseUrlHost === 'string' ? toolCall.output.baseUrlHost : undefined
+  };
+}
+
 function extractModelKnowledgeDecision(toolCall: AgentRuntimeToolCall): ModelKnowledgeDecision | undefined {
   const candidates = [
     toolCall.modelKnowledgeDecision,
@@ -455,6 +544,11 @@ function applyRuntimeEvent(event: AgentRuntimeEvent) {
       status: event.status || 'done',
       toolCall: runtimeToolToFlowTool(event.toolCall)
     });
+    const proposal = extractRuntimePlanProposal(event.toolCall, event.runId);
+    updateState((current) => ({
+      ...current,
+      latestProposal: proposal ?? (event.toolCall?.name === 'propose_tasks' ? undefined : current.latestProposal)
+    }));
     return;
   }
   if (event.type === 'status' && event.nodeId && event.status) {
@@ -499,7 +593,8 @@ async function runRuntimeFlow(
     isRunning: true,
     runId,
     runtimeRunId: '',
-    lastPrompt: payload.input
+    lastPrompt: payload.input,
+    latestProposal: undefined
   }));
 
   try {

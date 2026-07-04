@@ -1125,7 +1125,7 @@ function GoalPlanner(props: {
         </label>
       </div>
       {loading === 'goal' && <div className="empty-state">{t('legacy.loading')}</div>}
-      {goalStatus && <p className="inline-status">{goalStatus}</p>}
+      {goalStatus && <p className={`inline-status ${loading === 'apply-goal-calendar' ? 'calendar-write-status' : ''}`}>{goalStatus}</p>}
       {goalPlan && (
         <GoalPlanView
           plan={goalPlan}
@@ -1142,8 +1142,14 @@ function GoalPlanner(props: {
           t={t}
         />
       )}
-      <button className="apply-button" onClick={onApplyGoalPlanToCalendar} disabled={!goalPlan?.structuredPlan || loading === 'apply-goal-calendar'}>
-        {goalPlan?.structuredPlan ? t('legacy.writeToCalendar') : t('legacy.noGoalTasksToWrite')}
+      <button
+        className={`apply-button ${loading === 'apply-goal-calendar' ? 'is-writing' : ''}`}
+        onClick={onApplyGoalPlanToCalendar}
+        disabled={!goalPlan?.structuredPlan || loading === 'apply-goal-calendar'}
+      >
+        {loading === 'apply-goal-calendar'
+          ? t('legacy.writingToCalendar')
+          : goalPlan?.structuredPlan ? t('legacy.writeToCalendar') : t('legacy.noGoalTasksToWrite')}
       </button>
     </div>
   );

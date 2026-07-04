@@ -95,6 +95,119 @@ describe('agentFlowStore', () => {
     expect(serialized).toContain('历史记忆 / History Memory');
     expect(serialized).toContain('memoryContextSummary');
     expect(serialized).toContain('structuredPlan');
+    expect(getAgentFlowSnapshot().latestProposal).toBeUndefined();
+  });
+
+  it('stores the latest real runtime proposal for Dashboard calendar writing', () => {
+    agentFlowActions.resetFlow();
+
+    agentFlowActions.applyRuntimeEvent({
+      runId: 'runtime-proposal-1',
+      sequence: 1,
+      type: 'tool',
+      nodeId: 'tool-propose',
+      nodeType: 'tool',
+      title: 'propose_tasks',
+      status: 'done',
+      toolCall: {
+        name: 'propose_tasks',
+        input: { goal: 'Python plan' },
+        output: {
+          mode: 'llm',
+          structuredPlan: {
+            goalTitle: 'Python plan',
+            goalDescription: 'Build a practical Python learning path',
+            durationDays: 7,
+            milestones: [
+              {
+                title: 'Basics',
+                description: 'Learn syntax',
+                tasks: [
+                  {
+                    title: 'Practice variables',
+                    description: 'Write examples',
+                    estimatedMinutes: 45,
+                    dueDate: '2026-07-04',
+                    priority: 'medium'
+                  }
+                ]
+              }
+            ],
+            reviewPlan: { frequency: 'daily', questions: ['What worked?'] }
+          },
+          tasks: [{ title: 'Practice variables' }],
+          sources: []
+        },
+        latencyMs: 20,
+        writeMode: 'preview'
+      }
+    });
+
+    const proposal = getAgentFlowSnapshot().latestProposal;
+    expect(proposal?.runtimeRunId).toBe('runtime-proposal-1');
+    expect(proposal?.goal).toBe('Python plan');
+    expect(proposal?.structuredPlan.milestones[0].tasks[0].title).toBe('Practice variables');
+  });
+
+  it('stores valid local fallback runtime proposals for Dashboard calendar writing', () => {
+    agentFlowActions.resetFlow();
+
+    agentFlowActions.applyRuntimeEvent({
+      runId: 'runtime-proposal-fallback',
+      sequence: 1,
+      type: 'tool',
+      nodeId: 'tool-propose',
+      nodeType: 'tool',
+      title: 'propose_tasks',
+      status: 'done',
+      toolCall: {
+        name: 'propose_tasks',
+        input: { goal: 'Fallback plan' },
+        output: {
+          mode: 'local_fallback',
+          structuredPlan: {
+            goalTitle: 'Fallback plan',
+            milestones: [{ title: 'Phase', tasks: [{ title: 'Task' }] }]
+          }
+        },
+        latencyMs: 10,
+        writeMode: 'preview'
+      }
+    });
+
+    const proposal = getAgentFlowSnapshot().latestProposal;
+    expect(proposal?.runtimeRunId).toBe('runtime-proposal-fallback');
+    expect(proposal?.mode).toBe('local_fallback');
+    expect(proposal?.structuredPlan.milestones[0].tasks[0].title).toBe('Task');
+  });
+
+  it('does not store malformed runtime proposals', () => {
+    agentFlowActions.resetFlow();
+
+    agentFlowActions.applyRuntimeEvent({
+      runId: 'runtime-proposal-malformed',
+      sequence: 1,
+      type: 'tool',
+      nodeId: 'tool-propose',
+      nodeType: 'tool',
+      title: 'propose_tasks',
+      status: 'done',
+      toolCall: {
+        name: 'propose_tasks',
+        input: { goal: 'Malformed plan' },
+        output: {
+          mode: 'local_fallback',
+          structuredPlan: {
+            goalTitle: 'Malformed plan',
+            milestones: [{ title: 'Phase', tasks: [{ title: '' }] }]
+          }
+        },
+        latencyMs: 10,
+        writeMode: 'preview'
+      }
+    });
+
+    expect(getAgentFlowSnapshot().latestProposal).toBeUndefined();
   });
 
   it('keeps model knowledge decision metadata from search_materials tool calls', () => {

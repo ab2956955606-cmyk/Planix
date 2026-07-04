@@ -94,6 +94,9 @@ There is no compatibility fallback for old names or old environment variables.
 - Runtime success and fallback must not display old `plan_context_lookup`, `ui-mock`, or static UI mock wording.
 - Runtime output should answer the user's prompt directly; for a Python learning prompt, return a concrete Python learning plan summary.
 - Goals should display `structuredPlan` when present while keeping legacy task apply flows based on `tasks`.
+- Goals calendar writes must show immediate writing feedback, a visible pressed/writing button state, and final created/updated/failed counts.
+- Dashboard Runtime proposals may be written to Calendar only after the user clicks `写入日历`; valid `llm` and `local_fallback` structuredPlan outputs are both writable, and Runtime execution itself must not auto-write Calendar data.
+- Calendar full-plan clearing should prefer `DELETE /api/plans/all`; if an older backend returns 404, the frontend may fall back to deleting known plans one by one and must keep any failed deletions visible.
 - Settings model input is free text. The only built-in recommendations are `deepseek-v4-flash` and `deepseek-v4-pro`; do not restore legacy model display names.
 - Keep Agent Trace visually secondary to the Workspace; it must not replace the prompt input or dominate the Dashboard.
 - Internal `reasoning` nodes must display as `Plan` / `执行计划`; do not expose hidden chain-of-thought.
@@ -155,6 +158,8 @@ Desktop packaging:
 powershell -ExecutionPolicy Bypass -File .\scripts\check-packaging-toolchain.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.1.4
 ```
+
+Latest local MSI generation record: `release\Planix-v1.1.4-windows-x64.msi` was regenerated on 2026-07-04 with SHA256 `f0bfdfd0a5e7a3c8cba444c8ce7b8e57f22358192ed3096b42638a2255394766`. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
 
 ## Documentation Maintenance
 

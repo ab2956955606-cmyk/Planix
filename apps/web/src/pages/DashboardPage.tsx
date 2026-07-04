@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { BrainCircuit, Boxes, CheckCircle2, Database, Send, Sparkles, Target } from 'lucide-react';
+import { BrainCircuit, Boxes, CalendarPlus, CheckCircle2, Database, ExternalLink, Send, Sparkles, Target } from 'lucide-react';
 import { AgentFlowTrace } from '../components/agent/flow/AgentFlowTrace';
-import { agentFlowActions } from '../store/agentFlowStore';
-import type { InspectorLog, InspectorSnapshot, Plan } from '../types';
+import { agentFlowActions, useAgentFlow } from '../store/agentFlowStore';
+import type { CalendarWriteSummary, GoalPlanTask, InspectorLog, InspectorSnapshot, Plan, RuntimePlanProposal } from '../types';
 
 interface DashboardPageProps {
   date: string;
@@ -11,14 +11,20 @@ interface DashboardPageProps {
   inspector: InspectorSnapshot;
   onAgentStatusChange: (status: InspectorSnapshot['agentStatus']) => void;
   onLog: (log: Omit<InspectorLog, 'id' | 'timestamp'>) => void;
+  onApplyRuntimeProposalToCalendar: (proposal: RuntimePlanProposal) => Promise<CalendarWriteSummary>;
+  onViewCalendarDate: (date: string) => void;
   t: (key: string) => string;
 }
 
 export function DashboardPage(props: DashboardPageProps) {
-  const { date, plans, preferences, inspector, onAgentStatusChange, onLog, t } = props;
+  const { date, plans, preferences, inspector, onAgentStatusChange, onLog, onApplyRuntimeProposalToCalendar, onViewCalendarDate, t } = props;
   const [prompt, setPrompt] = useState('');
   const [output, setOutput] = useState(t('dashboard.outputReady'));
   const [forceModelKnowledge, setForceModelKnowledge] = useState(false);
+  const [calendarWriteStatus, setCalendarWriteStatus] = useState('');
+  const [calendarWriteLoading, setCalendarWriteLoading] = useState(false);
+  const [firstWrittenDate, setFirstWrittenDate] = useState('');
+  const { latestProposal, isRunning } = useAgentFlow();
   const doneCount = plans.filter((plan) => plan.done).length;
   const pendingCount = plans.length - doneCount;
 
@@ -28,6 +34,8 @@ export function DashboardPage(props: DashboardPageProps) {
     onAgentStatusChange('running');
     onLog({ level: 'info', message: t('dashboard.outputRunning') });
     setOutput(t('dashboard.outputRunning'));
+    setCalendarWriteStatus('');
+    setFirstWrittenDate('');
     void agentFlowActions.runRuntimeFlow(
       {
         input: value,
@@ -52,6 +60,34 @@ export function DashboardPage(props: DashboardPageProps) {
         }
       }
     );
+  }
+
+  async function writeProposalToCalendar() {
+    if (!latestProposal || calendarWriteLoading) return;
+    setCalendarWriteLoading(true);
+    setCalendarWriteStatus(t('dashboard.writingToCalendar'));
+    setFirstWrittenDate('');
+    try {
+      const result = await onApplyRuntimeProposalToCalendar(latestProposal);
+      const successful = result.created + result.updated;
+      let status = '';
+      if (result.failed === 0) {
+        status = `${t('dashboard.calendarWriteSuccess')}: ${t('legacy.createdCount')} ${result.created}, ${t('legacy.updatedCount')} ${result.updated}, ${t('legacy.failedCount')} ${result.failed}`;
+      } else if (successful > 0) {
+        status = `${t('dashboard.calendarWritePartial')}, ${t('legacy.failedCount')} ${result.failed}`;
+      } else {
+        status = t('dashboard.calendarWriteFailed');
+      }
+      if (result.affectedDates.some((item) => item !== date) && status !== t('dashboard.calendarWriteFailed')) {
+        status = `${status}。${t('legacy.goalTasksWrittenToOtherDates')}`;
+      }
+      setFirstWrittenDate(result.affectedDates[0] || date);
+      setCalendarWriteStatus(status);
+    } catch {
+      setCalendarWriteStatus(t('dashboard.calendarWriteFailed'));
+    } finally {
+      setCalendarWriteLoading(false);
+    }
   }
 
   return (
@@ -96,6 +132,16 @@ export function DashboardPage(props: DashboardPageProps) {
             <span>{t('dashboard.outputTitle')}</span>
             <p>{output || t('dashboard.outputEmpty')}</p>
           </div>
+          <RuntimeProposalPreview
+            proposal={latestProposal}
+            isRunning={isRunning}
+            status={calendarWriteStatus}
+            writing={calendarWriteLoading}
+            firstWrittenDate={firstWrittenDate}
+            onWrite={writeProposalToCalendar}
+            onViewCalendar={onViewCalendarDate}
+            t={t}
+          />
         </article>
 
         <article className="workspace-summary riva-panel">
@@ -128,6 +174,93 @@ export function DashboardPage(props: DashboardPageProps) {
         </article>
       </div>
     </section>
+  );
+}
+
+function RuntimeProposalPreview(props: {
+  proposal?: RuntimePlanProposal;
+  isRunning: boolean;
+  status: string;
+  writing: boolean;
+  firstWrittenDate: string;
+  onWrite: () => void;
+  onViewCalendar: (date: string) => void;
+  t: (key: string) => string;
+}) {
+  const { proposal, isRunning, status, writing, firstWrittenDate, onWrite, onViewCalendar, t } = props;
+  const tasks = proposal ? proposal.structuredPlan.milestones.flatMap((milestone, milestoneIndex) => (
+    milestone.tasks.map((task, taskIndex) => ({ milestone, milestoneIndex, task, taskIndex }))
+  )) : [];
+  const modeLabel = proposal?.mode === 'local_fallback'
+    ? t('dashboard.runtimeProposalModeLocalFallback')
+    : t('dashboard.runtimeProposalModeLlm');
+
+  return (
+    <div className="runtime-proposal-preview">
+      <div className="runtime-proposal-head">
+        <div>
+          <span className="riva-eyebrow">{t('dashboard.runtimeProposalEyebrow')}</span>
+          <h3>{t('dashboard.runtimeProposalTitle')}</h3>
+        </div>
+        {proposal ? <em>{t('dashboard.runtimeProposalTaskCount')}: {tasks.length}</em> : null}
+      </div>
+      {!proposal ? (
+        <p className="runtime-proposal-empty">
+          {isRunning ? t('dashboard.runtimeProposalWaiting') : t('dashboard.runtimeProposalEmpty')}
+        </p>
+      ) : (
+        <>
+          <p className="runtime-proposal-summary">{proposal.structuredPlan.goalDescription || proposal.goal}</p>
+          <div className="runtime-proposal-list">
+            {tasks.map(({ milestone, milestoneIndex, task, taskIndex }) => (
+              <RuntimeProposalTask
+                key={`${milestoneIndex}-${taskIndex}-${task.title}`}
+                milestoneTitle={milestone.title}
+                task={task}
+                t={t}
+              />
+            ))}
+          </div>
+          <div className="runtime-proposal-meta">
+            <span>{t('dashboard.runtimeProposalSources')}: {proposal.sources.length}</span>
+            <span>{t('dashboard.runtimeProposalMode')}: {modeLabel}</span>
+          </div>
+        </>
+      )}
+      {status && <p className={`inline-status ${writing ? 'calendar-write-status' : ''}`}>{status}</p>}
+      <div className="runtime-proposal-actions">
+        <button
+          type="button"
+          className={`apply-button ${writing ? 'is-writing' : ''}`}
+          onClick={onWrite}
+          disabled={!proposal || isRunning || writing}
+        >
+          <CalendarPlus size={17} />
+          {writing ? t('dashboard.writingToCalendar') : t('legacy.writeToCalendar')}
+        </button>
+        {firstWrittenDate ? (
+          <button type="button" className="section-action-button" onClick={() => onViewCalendar(firstWrittenDate)}>
+            <ExternalLink size={15} />
+            {t('dashboard.viewCalendar')}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function RuntimeProposalTask(props: { milestoneTitle: string; task: GoalPlanTask; t: (key: string) => string }) {
+  const { milestoneTitle, task, t } = props;
+  return (
+    <article className="runtime-proposal-task">
+      <div>
+        <span>{milestoneTitle}</span>
+        <strong>{task.title}</strong>
+        {task.description ? <p>{task.description}</p> : null}
+      </div>
+      <time>{task.dueDate || t('dashboard.noDueDate')}</time>
+      <em>{task.estimatedMinutes || 0} min</em>
+    </article>
   );
 }
 

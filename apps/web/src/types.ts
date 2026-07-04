@@ -49,6 +49,26 @@ export interface AgentFlowNode {
   diff?: AgentFlowDiff;
 }
 
+export interface RuntimePlanProposal {
+  runtimeRunId: string;
+  goal: string;
+  structuredPlan: StructuredGoalPlan;
+  tasks: unknown[];
+  sources: unknown[];
+  mode: 'llm' | 'local_fallback';
+  fallbackReason?: string;
+  errorType?: string;
+  baseUrlHost?: string;
+}
+
+export interface CalendarWriteSummary {
+  created: number;
+  updated: number;
+  failed: number;
+  affectedDates: string[];
+  errors: string[];
+}
+
 export interface AgentRunRequest {
   input: string;
   date: string;

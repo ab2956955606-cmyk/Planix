@@ -15,7 +15,7 @@ interface CalendarPageProps {
   onSelectDate: (date: string) => void;
   onMonthNoteChange: (value: string) => void;
   onClearSelectedDayPlans: (date: string) => Promise<{ deleted: number; failed: number }>;
-  onClearAllPlans: () => Promise<{ deleted: number }>;
+  onClearAllPlans: () => Promise<{ deleted: number; failed: number }>;
   onDraftChange: (value: string) => void;
   onTimeChange: (value: string) => void;
   onAdd: () => void;

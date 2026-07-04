@@ -14,7 +14,7 @@ interface CalendarPanelProps {
   onSelectDate: (date: string) => void;
   onMonthNoteChange: (value: string) => void;
   onClearSelectedDayPlans: (date: string) => Promise<{ deleted: number; failed: number }>;
-  onClearAllPlans: () => Promise<{ deleted: number }>;
+  onClearAllPlans: () => Promise<{ deleted: number; failed: number }>;
   t: (key: string) => string;
 }
 
@@ -77,7 +77,8 @@ export function CalendarPanel(props: CalendarPanelProps) {
     setClearStatus('');
     try {
       const result = await onClearAllPlans();
-      setClearStatus(`${t('legacy.clearAllPlansDone')}: ${t('legacy.deletedCount')} ${result.deleted}`);
+      const failedPart = result.failed > 0 ? `, ${t('legacy.failedCount')} ${result.failed}` : '';
+      setClearStatus(`${t('legacy.clearAllPlansDone')}: ${t('legacy.deletedCount')} ${result.deleted}${failedPart}`);
     } catch {
       setClearStatus(t('legacy.clearAllPlansFailed'));
     } finally {

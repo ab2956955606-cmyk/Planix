@@ -56,7 +56,22 @@ export const zhCN: I18nNamespace = {
     toolPlaceholderBody: 'Runtime 工具采用只读调用和预览式任务提案。本阶段不会自动写入日历。',
     cardHintPlans: '来自日历和任务列表',
     cardHintKnowledge: '资料问答和本地检索入口',
-    cardHintGoals: '目标拆解、复盘和评估入口'
+    cardHintGoals: '目标拆解、复盘和评估入口',
+    runtimeProposalEyebrow: 'Runtime 提案',
+    runtimeProposalTitle: '任务提案 Preview',
+    runtimeProposalEmpty: '暂无可写入的任务提案',
+    runtimeProposalWaiting: '正在等待 Runtime 任务提案...',
+    runtimeProposalTaskCount: '任务数',
+    runtimeProposalSources: '来源',
+    runtimeProposalMode: '模式',
+    runtimeProposalModeLlm: '模型计划',
+    runtimeProposalModeLocalFallback: '本地模板计划，可检查后写入日历',
+    writingToCalendar: '正在写入日历...',
+    calendarWriteSuccess: '已写入日历',
+    calendarWritePartial: '部分计划写入成功',
+    calendarWriteFailed: '写入日历失败，请检查后端服务或计划数据',
+    viewCalendar: '查看日历',
+    noDueDate: '无日期'
   },
   agent: {
     title: 'AI 智能体工作台',

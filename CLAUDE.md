@@ -127,6 +127,9 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Runtime output should answer the user's goal directly, such as producing a readable Python learning plan for a Python learning prompt.
 - Internal `reasoning` nodes must display as `Plan` / `执行计划`; do not expose hidden chain-of-thought.
 - Goals should render `structuredPlan` when present and keep old task-apply behavior based on legacy `tasks`.
+- Goals calendar writes should show immediate writing feedback, visible pressed/writing button styling, and final created/updated/failed counts.
+- Dashboard Runtime proposals may be written to Calendar only after the user clicks `写入日历`; valid `llm` and `local_fallback` structuredPlan outputs are both writable, and Runtime execution itself must not auto-write Calendar data.
+- Calendar full-plan clearing prefers `DELETE /api/plans/all`; when an older backend returns 404, the frontend may fall back to deleting known plans individually and should retain failed deletions in state.
 - Settings model input is free text with built-in recommendations for `deepseek-v4-flash` and `deepseek-v4-pro` only.
 - Do not change existing request payloads or response schemas unless explicitly required by the phase plan.
 
@@ -188,6 +191,8 @@ python -m compileall backend
 powershell -ExecutionPolicy Bypass -File .\scripts\check-desktop-config.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\check-packaging-toolchain.ps1
 ```
+
+Latest local MSI generation record: `release\Planix-v1.1.4-windows-x64.msi` was regenerated on 2026-07-04 with SHA256 `f0bfdfd0a5e7a3c8cba444c8ce7b8e57f22358192ed3096b42638a2255394766`. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
 
 ## Documentation Maintenance
 

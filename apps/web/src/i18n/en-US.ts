@@ -56,7 +56,22 @@ export const enUS: I18nNamespace = {
     toolPlaceholderBody: 'Runtime tools are routed through read-only calls and preview-only task proposals. No automatic calendar writes happen in this phase.',
     cardHintPlans: 'From calendar and task list',
     cardHintKnowledge: 'Material Q&A and local retrieval entry',
-    cardHintGoals: 'Goal decomposition, daily review, and evaluation entry'
+    cardHintGoals: 'Goal decomposition, daily review, and evaluation entry',
+    runtimeProposalEyebrow: 'Runtime proposal',
+    runtimeProposalTitle: 'Task proposal Preview',
+    runtimeProposalEmpty: 'No writable task proposal yet.',
+    runtimeProposalWaiting: 'Waiting for the Runtime proposal...',
+    runtimeProposalTaskCount: 'Tasks',
+    runtimeProposalSources: 'Sources',
+    runtimeProposalMode: 'Mode',
+    runtimeProposalModeLlm: 'Model plan',
+    runtimeProposalModeLocalFallback: 'Local template plan, review before writing to calendar',
+    writingToCalendar: 'Writing to calendar...',
+    calendarWriteSuccess: 'Written to calendar',
+    calendarWritePartial: 'Some plans were written successfully',
+    calendarWriteFailed: 'Failed to write to calendar. Check the backend service or plan data',
+    viewCalendar: 'View calendar',
+    noDueDate: 'No date'
   },
   agent: {
     title: 'AI Agent Workspace',
