@@ -300,11 +300,63 @@ function runtimeToolToFlowTool(toolCall: AgentRuntimeToolCall) {
   return {
     name: toolCall.name,
     input: toolValueToText(toolCall.input),
-    output: toolValueToText(toolCall.output),
+    output: runtimeToolOutputToText(toolCall),
     latencyMs: toolCall.latencyMs ?? 0,
     expanded: true,
     writeMode: toolCall.writeMode
   };
+}
+
+function runtimeToolOutputToText(toolCall: AgentRuntimeToolCall): string {
+  if (toolCall.name === 'get_memory') {
+    return formatMemoryToolOutput(toolCall.output);
+  }
+  if (toolCall.name === 'propose_tasks') {
+    return formatProposalToolOutput(toolCall.output);
+  }
+  return toolValueToText(toolCall.output);
+}
+
+function formatMemoryToolOutput(output: unknown): string {
+  if (!isRecord(output)) return toolValueToText(output);
+  return [
+    '偏好记忆 / Preference Memory',
+    toolValueToText(output.preferenceMemory ?? {}),
+    '',
+    '历史记忆 / History Memory',
+    toolValueToText(output.historyMemory ?? {})
+  ].join('\n');
+}
+
+function formatProposalToolOutput(output: unknown): string {
+  if (!isRecord(output)) return toolValueToText(output);
+  const sections = [
+    `mode: ${String(output.mode ?? 'local_fallback')}`,
+    '',
+    'memoryContextSummary',
+    String(output.memoryContextSummary ?? ''),
+    '',
+    'structuredPlan',
+    toolValueToText(output.structuredPlan ?? {}),
+    '',
+    'tasks preview',
+    toolValueToText(output.tasks ?? []),
+    '',
+    'sources',
+    toolValueToText(output.sources ?? [])
+  ];
+  if (output.fallbackReason || output.errorType || output.baseUrlHost) {
+    sections.push('', 'diagnostics', toolValueToText({
+      fallbackReason: output.fallbackReason,
+      errorType: output.errorType,
+      baseUrlHost: output.baseUrlHost
+    }));
+  }
+  return sections.join('\n');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function ensureRuntimeRun(event: AgentRuntimeEvent): boolean {

@@ -222,6 +222,10 @@ class PlanningService:
                 "Use at most 3 milestones, at most 2 tasks per milestone, and at most 3 review questions. "
                 "Keep field values natural and concise; avoid oversized JSON. Use retrievedSources when available. "
                 "The structuredPlan is the source of truth. Do not write user data. "
+                "The user payload may include preferenceMemory, historyMemory, todayPlans, and memoryContextSummary. "
+                "Respect explicit constraints first, then preferenceMemory, then todayPlans, then historyMemory, then RAG materials. "
+                "If preferenceMemory.dailyAvailableMinutes exists, keep task estimatedMinutes and daily workload within that time budget. "
+                "Do not invent personal details that are not present in the provided context. "
                 "All user-facing string values must use outputLanguage from the user payload. "
                 "If outputLanguage is zh-CN, write Simplified Chinese; keep technical terms like Python, FastAPI, RAG, API as-is."
             ),

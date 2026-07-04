@@ -1,6 +1,7 @@
 import json
 
 from app.db import get_conn
+from app.services.runtime import _merge_preference_memory
 
 
 def _runtime_payload() -> dict:
@@ -35,6 +36,56 @@ def test_runtime_run_returns_valid_ndjson_sequence(client):
     assert "observation" in node_types
     assert "output" in node_types
 
+    tool_names = [event["toolCall"]["name"] for event in events if event["type"] == "tool"]
+    assert tool_names == ["get_memory", "get_today_plans", "search_materials", "propose_tasks"]
+
+
+def test_runtime_preference_memory_merges_fields_without_overwriting_saved_values():
+    saved = json.dumps(
+        {
+            "preferenceMemory": {
+                "learningStyle": "项目驱动",
+                "dailyAvailableMinutes": 120,
+                "outputLanguage": "zh",
+            }
+        },
+        ensure_ascii=False,
+    )
+    payload = json.dumps({"dailyAvailableMinutes": 60}, ensure_ascii=False)
+
+    merged = _merge_preference_memory(payload, saved)
+
+    assert merged.learning_style == "项目驱动"
+    assert merged.daily_available_minutes == 60
+    assert merged.output_language == "zh"
+
+
+def test_runtime_plain_text_preferences_extract_only_explicit_preferences():
+    merged = _merge_preference_memory("我每天只有 1 小时，喜欢项目驱动", "")
+
+    assert merged.daily_available_minutes == 60
+    assert merged.learning_style == "项目驱动"
+    assert merged.raw_preference_text == "我每天只有 1 小时，喜欢项目驱动"
+    assert merged.career_direction == ""
+    assert merged.project_preference == ""
+
+
+def test_runtime_get_memory_returns_preference_and_history_context(client):
+    payload = _runtime_payload()
+    payload["preferences"] = json.dumps({"dailyAvailableMinutes": 60}, ensure_ascii=False)
+
+    events = _stream_events(client, payload)
+
+    memory_event = next(
+        event for event in events
+        if event["type"] == "tool" and event["toolCall"]["name"] == "get_memory"
+    )
+    output = memory_event["toolCall"]["output"]
+    assert "preferenceMemory" in output
+    assert "historyMemory" in output
+    assert output["preferenceMemory"]["dailyAvailableMinutes"] == 60
+    assert output["preferenceMemory"]["learningStyle"] == "项目驱动"
+
 
 def test_runtime_tools_are_readonly_or_preview_and_do_not_write_plans(client):
     client.post(
@@ -63,10 +114,12 @@ def test_runtime_tools_are_readonly_or_preview_and_do_not_write_plans(client):
         if event["toolCall"]["name"] == "propose_tasks"
     )
     proposal = proposal_event["toolCall"]["output"]
-    assert proposal["notice"].startswith("当前仅生成结构化预览")
+    assert proposal["notice"] == "Preview only; no user data was modified."
+    assert proposal["mode"] in {"llm", "local_fallback"}
     assert proposal["structuredPlan"]["goalTitle"]
     assert proposal["structuredPlan"]["milestones"]
     assert proposal["tasks"]
+    assert proposal["memoryContextSummary"]
 
     after = client.get("/api/plans", params={"date": "2026-07-03"}).json()
     assert [item["id"] for item in after] == [item["id"] for item in before]
@@ -110,6 +163,29 @@ def test_runtime_search_materials_returns_sources(client):
     assert {"documentId", "title", "chunk", "score", "chunkIndex"} <= set(source)
 
 
+def test_runtime_search_materials_query_uses_context_pack(client):
+    payload = _runtime_payload()
+    payload["input"] = "学 Python 找 AI 应用实习"
+    payload["preferences"] = json.dumps(
+        {
+            "learningStyle": "项目驱动",
+            "careerDirection": "AI 应用实习",
+        },
+        ensure_ascii=False,
+    )
+
+    events = _stream_events(client, payload)
+
+    material_event = next(
+        event for event in events
+        if event["type"] == "tool" and event["toolCall"]["name"] == "search_materials"
+    )
+    query = material_event["toolCall"]["input"]["query"]
+    assert "Python" in query
+    assert "项目驱动" in query
+    assert "AI 应用实习" in query
+
+
 def test_runtime_python_goal_returns_learning_plan(client):
     events = _stream_events(
         client,
@@ -135,6 +211,31 @@ def test_runtime_python_goal_returns_learning_plan(client):
     structured = proposal_event["toolCall"]["output"]["structuredPlan"]
     assert structured["durationDays"] >= 1
     assert structured["milestones"][0]["tasks"][0]["priority"] in {"low", "medium", "high"}
+
+
+def test_runtime_daily_available_minutes_limits_local_fallback_tasks(client):
+    events = _stream_events(
+        client,
+        {
+            "input": "帮我规划一个 Python 学习计划",
+            "date": "2026-07-03",
+            "preferences": json.dumps({"dailyAvailableMinutes": 60}, ensure_ascii=False),
+            "materials": "",
+            "data": {},
+        },
+    )
+
+    proposal_event = next(
+        event for event in events
+        if event["type"] == "tool" and event["toolCall"]["name"] == "propose_tasks"
+    )
+    tasks = [
+        task
+        for milestone in proposal_event["toolCall"]["output"]["structuredPlan"]["milestones"]
+        for task in milestone["tasks"]
+    ]
+    assert tasks
+    assert max(task["estimatedMinutes"] for task in tasks) <= 60
 
 
 def test_runtime_success_events_do_not_include_old_ui_mock_names(client):

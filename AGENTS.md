@@ -109,8 +109,12 @@ There is no compatibility fallback for old names or old environment variables.
 - Planning fallback must be transparent with safe diagnostics: `fallbackReason`, `errorType`, and host-only `baseUrlHost`.
 - `planning_goals` is planning result history/cache, not a confirmed execution table.
 - Runtime tools are restricted to read-only or preview-only behavior in this phase.
+- Runtime must build one internal Context Pack containing goal, explicit constraints, preference memory, history memory, today plans, materials, and output language.
+- Preference memory is separate from history memory and has higher planning priority.
+- `payload.preferences` must merge field-by-field with saved preferences; never overwrite the whole preference object when only one field is provided.
 - `search_materials`, `get_today_plans`, and `get_memory` are read-only.
-- `propose_tasks` may return structured task previews but must not write to `plans`, Goals, Calendar, or Notes.
+- `get_memory` returns `preferenceMemory` and `historyMemory`; do not add a separate `get_preferences` tool.
+- `propose_tasks` may return structured task previews with `memoryContextSummary` but must not write to `plans`, Goals, Calendar, or Notes.
 - `structuredPlan` is the fact source; Runtime final output should be rendered from it.
 - `RuntimeOrchestrator` is the only component that coordinates Planner, Memory, Tool Router, and Stream Engine.
 - Rust/Tauri streaming bridge must stay a thin pass-through; do not put Runtime state or business logic in Rust.

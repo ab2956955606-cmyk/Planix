@@ -44,6 +44,59 @@ describe('agentFlowStore', () => {
     expect(serialized).not.toContain('ui-mock');
   });
 
+  it('formats memory and proposal runtime tool outputs for trace inspection', () => {
+    agentFlowActions.resetFlow();
+
+    agentFlowActions.applyRuntimeEvent({
+      runId: 'runtime-2',
+      sequence: 1,
+      type: 'tool',
+      nodeId: 'tool-memory',
+      nodeType: 'tool',
+      title: 'get_memory',
+      status: 'done',
+      toolCall: {
+        name: 'get_memory',
+        input: { date: '2026-07-03' },
+        output: {
+          preferenceMemory: { learningStyle: '项目驱动', dailyAvailableMinutes: 60 },
+          historyMemory: { recentProgress: ['Built runtime trace'] }
+        },
+        latencyMs: 8,
+        writeMode: 'readonly'
+      }
+    });
+    agentFlowActions.applyRuntimeEvent({
+      runId: 'runtime-2',
+      sequence: 2,
+      type: 'tool',
+      nodeId: 'tool-propose',
+      nodeType: 'tool',
+      title: 'propose_tasks',
+      status: 'done',
+      toolCall: {
+        name: 'propose_tasks',
+        input: { goal: 'Python plan' },
+        output: {
+          mode: 'local_fallback',
+          memoryContextSummary: '偏好：项目驱动，每天约 60 分钟。',
+          structuredPlan: { goalTitle: 'Python plan' },
+          tasks: [{ title: 'Build CLI' }],
+          sources: [],
+          fallbackReason: 'missing_api_key'
+        },
+        latencyMs: 20,
+        writeMode: 'preview'
+      }
+    });
+
+    const serialized = JSON.stringify(getAgentFlowSnapshot().nodes);
+    expect(serialized).toContain('偏好记忆 / Preference Memory');
+    expect(serialized).toContain('历史记忆 / History Memory');
+    expect(serialized).toContain('memoryContextSummary');
+    expect(serialized).toContain('structuredPlan');
+  });
+
   it('shows explicit fallback notice in local demo mode', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('document', { documentElement: { lang: 'zh-CN' } });

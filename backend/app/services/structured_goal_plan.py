@@ -25,6 +25,7 @@ def build_local_structured_plan(
     cleaned_goal = goal.strip() or "提升 AI 应用开发能力"
     duration_days = _duration_days(date, deadline, 28 if is_python_goal(cleaned_goal) else 21)
     start_date = _parse_date_or_none(date)
+    daily_minutes = max(30, min(int(float(daily_hours or 2) * 60), 480))
 
     if is_python_goal(cleaned_goal):
         title = "Python 入门到项目实战"
@@ -95,6 +96,10 @@ def build_local_structured_plan(
 
     if source_count:
         description = f"{description} 本次规划参考了 {source_count} 条资料片段。"
+
+    for milestone in milestones:
+        for task in milestone.tasks:
+            task.estimated_minutes = min(task.estimated_minutes, daily_minutes)
 
     return StructuredGoalPlan(
         goalTitle=title,

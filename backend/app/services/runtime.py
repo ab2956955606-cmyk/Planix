@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date as date_type
 import json
+import re
 import time
 from typing import Any, Iterator
 from uuid import uuid4
 
 from ..db import get_conn, load_memory
-from ..schemas import AgentRunRequest, StructuredGoalPlan
-from .llm import LlmClient
+from ..schemas import AgentRunRequest, GoalPlanRequest, StructuredGoalPlan
 from .plans import list_plans
+from .planning import PlanningService
 from .rag import RagService
 from .structured_goal_plan import build_local_structured_plan, derive_planner_tasks, render_goal_plan_markdown
 
@@ -27,6 +28,81 @@ class RuntimeStep:
     content: str = ""
     tool_name: str = ""
     tool_input: dict[str, object] | None = None
+
+
+@dataclass
+class RuntimePreferenceMemory:
+    learning_style: str = "项目驱动"
+    daily_available_minutes: int = 120
+    planning_style: str = "具体可执行"
+    output_language: str = "zh"
+    difficulty_preference: str = "practical"
+    career_direction: str = ""
+    project_preference: str = ""
+    raw_preference_text: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "learningStyle": self.learning_style,
+            "dailyAvailableMinutes": self.daily_available_minutes,
+            "planningStyle": self.planning_style,
+            "outputLanguage": self.output_language,
+            "difficultyPreference": self.difficulty_preference,
+        }
+        if self.career_direction:
+            result["careerDirection"] = self.career_direction
+        if self.project_preference:
+            result["projectPreference"] = self.project_preference
+        if self.raw_preference_text:
+            result["rawPreferenceText"] = self.raw_preference_text
+        return result
+
+
+@dataclass
+class RuntimeHistoryMemory:
+    long_term_goals: list[str] = field(default_factory=list)
+    active_projects: list[str] = field(default_factory=list)
+    recent_progress: list[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "longTermGoals": self.long_term_goals,
+            "activeProjects": self.active_projects,
+            "recentProgress": self.recent_progress,
+            "constraints": self.constraints,
+        }
+
+
+@dataclass
+class RuntimeContextPack:
+    goal: str
+    date: str
+    explicit_constraints: list[str]
+    preference_memory: RuntimePreferenceMemory
+    history_memory: RuntimeHistoryMemory
+    today_plans: list[dict[str, object]]
+    materials: list[dict[str, object]]
+    output_language: str
+    raw_materials: str
+    payload_data: dict[str, Any]
+
+    def memory_output(self) -> dict[str, object]:
+        return {
+            "preferenceMemory": self.preference_memory.to_dict(),
+            "historyMemory": self.history_memory.to_dict(),
+        }
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "goal": self.goal,
+            "explicitConstraints": self.explicit_constraints,
+            "preferenceMemory": self.preference_memory.to_dict(),
+            "historyMemory": self.history_memory.to_dict(),
+            "todayPlans": self.today_plans,
+            "materials": self.materials,
+            "outputLanguage": self.output_language,
+        }
 
 
 class AgentRunRepository:
@@ -110,34 +186,48 @@ class MemorySystem:
     def __init__(self, repository: AgentRunRepository):
         self.repository = repository
 
-    def get_context(self, payload: AgentRunRequest) -> dict[str, object]:
-        preferences = payload.preferences.strip() or load_memory()
-        return {
-            "currentGoal": payload.input,
-            "date": payload.date,
-            "preferences": preferences,
-            "materials": payload.materials[:3000],
-            "recentRuns": self.repository.recent_summaries(),
-        }
+    def get_context(self, payload: AgentRunRequest) -> RuntimeContextPack:
+        saved_preferences = load_memory()
+        preference_memory = _merge_preference_memory(payload.preferences, saved_preferences)
+        output_language = str(preference_memory.output_language or "zh")
+        explicit_constraints = _extract_constraints(" ".join([payload.input, payload.preferences]))
+        history_memory = _build_history_memory(
+            payload_preferences=payload.preferences,
+            saved_preferences=saved_preferences,
+            recent_runs=self.repository.recent_summaries(),
+            explicit_constraints=explicit_constraints,
+        )
+        return RuntimeContextPack(
+            goal=payload.input.strip() or "Planix agent task",
+            date=payload.date,
+            explicit_constraints=explicit_constraints,
+            preference_memory=preference_memory,
+            history_memory=history_memory,
+            today_plans=[],
+            materials=[],
+            output_language=output_language if output_language in {"zh", "en"} else "zh",
+            raw_materials=payload.materials[:3000],
+            payload_data=payload.data,
+        )
 
 
 class RuntimePlanner:
-    def plan(self, payload: AgentRunRequest, memory: dict[str, object]) -> list[RuntimeStep]:
+    def plan(self, payload: AgentRunRequest, context: RuntimeContextPack) -> list[RuntimeStep]:
         focus = payload.input.strip() or "Planix agent task"
         plan_content = (
             f"Plan for: {focus}\n"
-            "1. Retrieve grounded context from memory, materials, and today's plans.\n"
-            "2. Generate a structured planning preview without writing user data.\n"
-            "3. Render the preview as a readable plan for user confirmation."
+            "1. Read preference memory and history memory as separate context layers.\n"
+            "2. Read today's plans, then retrieve local materials with the context pack.\n"
+            "3. Generate a structured planning preview without writing user data."
         )
         return [
             RuntimeStep(id="plan", node_type="reasoning", title="Execution Plan", content=plan_content),
             RuntimeStep(
-                id="tool-materials",
+                id="tool-memory",
                 node_type="tool",
-                title="search_materials",
-                tool_name="search_materials",
-                tool_input={"query": " ".join([payload.input, payload.materials]).strip(), "topK": 3},
+                title="get_memory",
+                tool_name="get_memory",
+                tool_input={"date": payload.date},
             ),
             RuntimeStep(
                 id="tool-plans",
@@ -147,18 +237,18 @@ class RuntimePlanner:
                 tool_input={"date": payload.date},
             ),
             RuntimeStep(
-                id="tool-memory",
+                id="tool-materials",
                 node_type="tool",
-                title="get_memory",
-                tool_name="get_memory",
-                tool_input={"date": payload.date},
+                title="search_materials",
+                tool_name="search_materials",
+                tool_input={"query": _build_search_query(context), "topK": 3},
             ),
             RuntimeStep(
                 id="tool-propose",
                 node_type="tool",
                 title="propose_tasks",
                 tool_name="propose_tasks",
-                tool_input={"goal": payload.input, "date": payload.date, "preferences": memory.get("preferences", "")},
+                tool_input={"goal": payload.input, "date": payload.date},
             ),
         ]
 
@@ -179,33 +269,64 @@ class ToolRouter:
 class RuntimeToolExecutor:
     def __init__(self):
         self.rag = RagService()
+        self.planning = PlanningService()
 
-    def execute(self, tool_call: dict[str, object], memory: dict[str, object]) -> object:
+    def execute(self, tool_call: dict[str, object], context: RuntimeContextPack) -> object:
         name = str(tool_call["name"])
         tool_input = tool_call.get("input")
         params = tool_input if isinstance(tool_input, dict) else {}
         if name == "get_memory":
-            return {
-                "preferences": memory.get("preferences", ""),
-                "recentRuns": memory.get("recentRuns", []),
-            }
+            tool_call["input"] = {"date": context.date}
+            return context.memory_output()
         if name == "get_today_plans":
-            plan_date = str(params.get("date") or memory.get("date") or date_type.today().isoformat())
-            return [plan.model_dump(by_alias=True) for plan in list_plans(plan_date)]
+            context.today_plans = _today_plans_from_context(context)
+            tool_call["input"] = {"date": context.date}
+            return context.today_plans
         if name == "search_materials":
-            query = str(params.get("query") or memory.get("currentGoal") or "")
-            return [source.model_dump(by_alias=True) for source in self.rag.retrieve(query, limit=3)]
+            limit = _int_param(params.get("topK"), 3, minimum=1, maximum=8)
+            query = _build_search_query(context)
+            context.materials = [source.model_dump(by_alias=True) for source in self.rag.retrieve(query, limit=limit)]
+            tool_call["input"] = {"query": query, "topK": limit}
+            return context.materials
         if name == "propose_tasks":
-            goal = str(params.get("goal") or memory.get("currentGoal") or "Planix task")
-            plan_date = str(params.get("date") or memory.get("date") or date_type.today().isoformat())
-            query = " ".join([goal, str(memory.get("materials") or "")]).strip()
-            sources = self.rag.retrieve(query, limit=3)
-            structured_plan = build_local_structured_plan(goal, date=plan_date, daily_hours=2, source_count=len(sources))
+            summary = build_memory_context_summary(context.preference_memory, context.history_memory, context.today_plans)
+            daily_hours = max(context.preference_memory.daily_available_minutes, 30) / 60
+            plan = self.planning.create_goal_plan(
+                GoalPlanRequest(
+                    goal=context.goal,
+                    date=context.date,
+                    dailyHours=daily_hours,
+                    materials=_planning_materials(context),
+                    preferences=_planning_preferences(context, summary),
+                    outputLanguage="zh-CN" if context.output_language == "zh" else "en-US",
+                )
+            )
+            structured_plan = plan.structured_plan or build_local_structured_plan(
+                context.goal,
+                date=context.date,
+                daily_hours=daily_hours,
+                source_count=len(context.materials),
+            )
+            tasks = [task.model_dump(by_alias=True) for task in plan.tasks] or [
+                task.model_dump(by_alias=True) for task in derive_planner_tasks(structured_plan)
+            ]
+            sources = [source.model_dump(by_alias=True) for source in plan.sources] or context.materials
+            tool_call["input"] = {
+                "goal": context.goal,
+                "date": context.date,
+                "memoryContextSummary": summary,
+                "outputLanguage": context.output_language,
+            }
             return {
-                "notice": "当前仅生成结构化预览，尚未写入 Goals、Calendar 或 Notes。",
+                "notice": "Preview only; no user data was modified.",
+                "mode": "llm" if plan.mode == "llm" else "local_fallback",
                 "structuredPlan": structured_plan.model_dump(by_alias=True),
-                "tasks": [task.model_dump(by_alias=True) for task in derive_planner_tasks(structured_plan)],
-                "sources": [source.model_dump(by_alias=True) for source in sources],
+                "tasks": tasks,
+                "sources": sources,
+                "memoryContextSummary": summary,
+                "fallbackReason": _runtime_fallback_reason(plan.fallback_reason),
+                "errorType": plan.error_type,
+                "baseUrlHost": plan.base_url_host,
             }
         return {"error": f"Tool {name} is not available."}
 
@@ -223,8 +344,8 @@ class RuntimeOrchestrator:
         stream = StreamEngine(run_id, self.repository)
         final_output = ""
         try:
-            memory = self.memory_system.get_context(payload)
-            steps = self.planner.plan(payload, memory)
+            context = self.memory_system.get_context(payload)
+            steps = self.planner.plan(payload, context)
 
             yield stream.encode(
                 stream.make_event(
@@ -267,7 +388,7 @@ class RuntimeOrchestrator:
                     )
                 )
                 start = time.perf_counter()
-                output = self.tool_executor.execute(routed, memory)
+                output = self.tool_executor.execute(routed, context)
                 latency_ms = max(1, int((time.perf_counter() - start) * 1000))
                 tool_call = {
                     **routed,
@@ -339,7 +460,7 @@ class RuntimeOrchestrator:
             rendered = render_goal_plan_markdown(
                 structured_plan,
                 source_items,
-                local_template=not LlmClient().is_enabled(),
+                local_template=proposal.get("mode") == "local_fallback",
                 today_plan_count=today_plan_count,
             )
             for chunk in _chunk_text(rendered):
@@ -363,6 +484,235 @@ class RuntimeOrchestrator:
             f"Executed {readonly} read-only tool(s) and {preview} preview tool(s). "
             f"Retrieved {source_count} material source(s). No user data was modified."
         )
+
+
+def build_memory_context_summary(
+    preference_memory: RuntimePreferenceMemory,
+    history_memory: RuntimeHistoryMemory,
+    today_plans: list[dict[str, object]],
+) -> str:
+    parts = [
+        (
+            f"偏好：{preference_memory.learning_style}，每天约 "
+            f"{preference_memory.daily_available_minutes} 分钟，计划风格为 {preference_memory.planning_style}，"
+            f"输出语言 {preference_memory.output_language}。"
+        )
+    ]
+    if preference_memory.career_direction:
+        parts.append(f"职业方向：{preference_memory.career_direction}。")
+    if preference_memory.project_preference:
+        parts.append(f"项目偏好：{preference_memory.project_preference}。")
+    if history_memory.long_term_goals:
+        parts.append(f"长期目标：{'；'.join(history_memory.long_term_goals[:3])}。")
+    if history_memory.active_projects:
+        parts.append(f"活跃项目：{'；'.join(history_memory.active_projects[:3])}。")
+    if history_memory.recent_progress:
+        parts.append(f"近期进展：{'；'.join(history_memory.recent_progress[:2])}。")
+    if history_memory.constraints:
+        parts.append(f"约束：{'；'.join(history_memory.constraints[:3])}。")
+    parts.append(f"今日已有 {len(today_plans)} 项计划。")
+    return "".join(parts)
+
+
+def _merge_preference_memory(payload_preferences: str, saved_preferences: str) -> RuntimePreferenceMemory:
+    merged: dict[str, object] = {
+        "learningStyle": "项目驱动",
+        "dailyAvailableMinutes": 120,
+        "planningStyle": "具体可执行",
+        "outputLanguage": "zh",
+        "difficultyPreference": "practical",
+    }
+    for source in (_extract_preference_fields(saved_preferences), _extract_preference_fields(payload_preferences)):
+        for key, value in source.items():
+            if value in (None, ""):
+                continue
+            merged[key] = value
+
+    daily_minutes = _int_param(merged.get("dailyAvailableMinutes"), 120, minimum=15, maximum=1440)
+    output_language = str(merged.get("outputLanguage") or "zh")
+    if output_language not in {"zh", "en"}:
+        output_language = "zh"
+    difficulty = str(merged.get("difficultyPreference") or "practical")
+    if difficulty not in {"beginner", "practical", "advanced"}:
+        difficulty = "practical"
+    return RuntimePreferenceMemory(
+        learning_style=str(merged.get("learningStyle") or "项目驱动"),
+        daily_available_minutes=daily_minutes,
+        planning_style=str(merged.get("planningStyle") or "具体可执行"),
+        output_language=output_language,
+        difficulty_preference=difficulty,
+        career_direction=str(merged.get("careerDirection") or ""),
+        project_preference=str(merged.get("projectPreference") or ""),
+        raw_preference_text=str(merged.get("rawPreferenceText") or ""),
+    )
+
+
+def _extract_preference_fields(raw_text: str) -> dict[str, object]:
+    text = (raw_text or "").strip()
+    if not text:
+        return {}
+    parsed = _json_dict(text)
+    if parsed:
+        source = parsed.get("preferenceMemory") if isinstance(parsed.get("preferenceMemory"), dict) else parsed
+        return _preference_fields_from_dict(source if isinstance(source, dict) else {})
+    return _preference_fields_from_text(text)
+
+
+def _preference_fields_from_dict(raw: dict[str, Any]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    mapping = {
+        "learningStyle": "learningStyle",
+        "learning_style": "learningStyle",
+        "dailyAvailableMinutes": "dailyAvailableMinutes",
+        "daily_available_minutes": "dailyAvailableMinutes",
+        "dailyMinutes": "dailyAvailableMinutes",
+        "planningStyle": "planningStyle",
+        "planning_style": "planningStyle",
+        "outputLanguage": "outputLanguage",
+        "output_language": "outputLanguage",
+        "difficultyPreference": "difficultyPreference",
+        "difficulty_preference": "difficultyPreference",
+        "careerDirection": "careerDirection",
+        "career_direction": "careerDirection",
+        "projectPreference": "projectPreference",
+        "project_preference": "projectPreference",
+        "rawPreferenceText": "rawPreferenceText",
+        "raw_preference_text": "rawPreferenceText",
+    }
+    for old_key, new_key in mapping.items():
+        if old_key not in raw:
+            continue
+        value = raw.get(old_key)
+        if new_key == "dailyAvailableMinutes":
+            value = _minutes_from_value(value)
+        if new_key == "outputLanguage":
+            value = _normalize_output_language(value)
+        if value not in (None, ""):
+            result[new_key] = value
+    return result
+
+
+def _preference_fields_from_text(text: str) -> dict[str, object]:
+    result: dict[str, object] = {"rawPreferenceText": text}
+    minutes = _minutes_from_text(text)
+    if minutes:
+        result["dailyAvailableMinutes"] = minutes
+    lower = text.lower()
+    if "项目" in text or "project" in lower:
+        result["learningStyle"] = "项目驱动"
+    elif "课程" in text or "course" in lower:
+        result["learningStyle"] = "课程驱动"
+    elif "刷题" in text or "leetcode" in lower or "算法题" in text:
+        result["learningStyle"] = "刷题驱动"
+    if "强执行" in text:
+        result["planningStyle"] = "强执行"
+    elif "详细" in text or "detailed" in lower:
+        result["planningStyle"] = "详细"
+    elif "简洁" in text or "concise" in lower or "short" in lower:
+        result["planningStyle"] = "简洁"
+    if "英文" in text or "english" in lower:
+        result["outputLanguage"] = "en"
+    elif "中文" in text or "chinese" in lower:
+        result["outputLanguage"] = "zh"
+    if "入门" in text or "beginner" in lower:
+        result["difficultyPreference"] = "beginner"
+    elif "进阶" in text or "advanced" in lower:
+        result["difficultyPreference"] = "advanced"
+    return result
+
+
+def _build_history_memory(
+    *,
+    payload_preferences: str,
+    saved_preferences: str,
+    recent_runs: list[str],
+    explicit_constraints: list[str],
+) -> RuntimeHistoryMemory:
+    merged = RuntimeHistoryMemory(recent_progress=recent_runs[:3])
+    for raw_text in (saved_preferences, payload_preferences):
+        parsed = _json_dict(raw_text)
+        if not parsed:
+            continue
+        source = parsed.get("historyMemory") if isinstance(parsed.get("historyMemory"), dict) else parsed
+        if not isinstance(source, dict):
+            continue
+        merged.long_term_goals.extend(_string_list(source.get("longTermGoals") or source.get("long_term_goals")))
+        merged.active_projects.extend(_string_list(source.get("activeProjects") or source.get("active_projects")))
+        merged.recent_progress.extend(_string_list(source.get("recentProgress") or source.get("recent_progress")))
+        merged.constraints.extend(_string_list(source.get("constraints")))
+    merged.constraints.extend(item for item in explicit_constraints if item not in merged.constraints)
+    merged.long_term_goals = _dedupe(merged.long_term_goals)[:5]
+    merged.active_projects = _dedupe(merged.active_projects)[:5]
+    merged.recent_progress = _dedupe(merged.recent_progress)[:5]
+    merged.constraints = _dedupe(merged.constraints)[:6]
+    return merged
+
+
+def _today_plans_from_context(context: RuntimeContextPack) -> list[dict[str, object]]:
+    day = context.payload_data.get(context.date, {}) if isinstance(context.payload_data, dict) else {}
+    frontend_plans = day.get("plans", []) if isinstance(day, dict) else []
+    if isinstance(frontend_plans, list) and frontend_plans:
+        return [dict(plan) for plan in frontend_plans if isinstance(plan, dict)]
+    return [plan.model_dump(by_alias=True) for plan in list_plans(context.date)]
+
+
+def _build_search_query(context: RuntimeContextPack) -> str:
+    preference = context.preference_memory
+    history = context.history_memory
+    parts = [
+        context.goal,
+        *context.explicit_constraints,
+        preference.learning_style,
+        preference.planning_style,
+        preference.career_direction,
+        preference.project_preference,
+        preference.raw_preference_text,
+        *history.long_term_goals,
+        *history.active_projects,
+        *history.recent_progress,
+        *history.constraints,
+        context.raw_materials,
+    ]
+    return " ".join(str(part).strip() for part in parts if str(part).strip())
+
+
+def _planning_preferences(context: RuntimeContextPack, summary: str) -> str:
+    return json.dumps(
+        {
+            "preferenceMemory": context.preference_memory.to_dict(),
+            "historyMemory": context.history_memory.to_dict(),
+            "explicitConstraints": context.explicit_constraints,
+            "todayPlans": context.today_plans,
+            "memoryContextSummary": summary,
+            "priorityOrder": [
+                "current user goal",
+                "explicit constraints",
+                "preferenceMemory",
+                "todayPlans",
+                "historyMemory",
+                "RAG materials",
+                "safe defaults",
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _planning_materials(context: RuntimeContextPack) -> str:
+    return json.dumps(
+        {
+            "rawMaterials": context.raw_materials,
+            "retrievedSources": context.materials,
+            "contextPack": context.to_dict(),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _runtime_fallback_reason(value: str | None) -> str | None:
+    if value == "mock_provider":
+        return "local_provider"
+    return value
 
 
 def _tool_output_list(tool_outputs: list[dict[str, object]], name: str) -> list[Any]:
@@ -393,3 +743,81 @@ def _chunk_text(text: str) -> Iterator[str]:
     lines = text.splitlines(keepends=True)
     for line in lines:
         yield line
+
+
+def _json_dict(text: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(text or "")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _minutes_from_value(value: object) -> int | None:
+    if isinstance(value, (int, float)):
+        return max(15, min(int(value), 1440))
+    return _minutes_from_text(str(value or ""))
+
+
+def _minutes_from_text(text: str) -> int | None:
+    normalized = text.strip().lower()
+    if not normalized:
+        return None
+    hour_match = re.search(r"(\d+(?:\.\d+)?)\s*(小时|小時|hour|hours|h)(?:\b|$)", normalized)
+    if hour_match:
+        return max(15, min(int(float(hour_match.group(1)) * 60), 1440))
+    minute_match = re.search(r"(\d+)\s*(分钟|分鐘|min|mins|minute|minutes)(?:\b|$)", normalized)
+    if minute_match:
+        return max(15, min(int(minute_match.group(1)), 1440))
+    try:
+        return max(15, min(int(float(normalized)), 1440))
+    except ValueError:
+        return None
+
+
+def _normalize_output_language(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"zh", "zh-cn", "chinese", "中文"}:
+        return "zh"
+    if normalized in {"en", "en-us", "english", "英文"}:
+        return "en"
+    return None
+
+
+def _extract_constraints(text: str) -> list[str]:
+    constraints: list[str] = []
+    for part in re.split(r"[\n。.!?；;]", text or ""):
+        cleaned = part.strip()
+        if not cleaned:
+            continue
+        lower = cleaned.lower()
+        if any(token in cleaned for token in ("必须", "不能", "不要", "最多", "至少", "截止", "每天", "预算")) or any(
+            token in lower for token in ("must", "cannot", "deadline", "budget", "only", "at most", "at least")
+        ):
+            constraints.append(cleaned[:160])
+    return _dedupe(constraints)[:6]
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _int_param(value: object, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(float(str(value)))
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(parsed, maximum))

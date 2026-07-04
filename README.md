@@ -117,8 +117,11 @@ Events are NDJSON objects such as `node`, `delta`, `tool`, `status`, `final`, an
 
 Runtime safety rules:
 
+- Runtime builds one internal Context Pack from the current goal, explicit constraints, preference memory, history memory, today's plans, and local RAG materials.
+- `get_memory` returns separate `preferenceMemory` and `historyMemory` layers. Preference memory controls planning style, daily time budget, output language, difficulty, career direction, and project preference.
+- Runtime tool order is `get_memory -> get_today_plans -> search_materials -> propose_tasks`, while the NDJSON event protocol remains unchanged.
 - `search_materials`, `get_today_plans`, and `get_memory` are read-only.
-- `propose_tasks` returns structured previews only.
+- `propose_tasks` returns structured previews only, including `mode`, `structuredPlan`, derived tasks, sources, diagnostics, and a deterministic `memoryContextSummary`.
 - Runtime never auto-writes generated tasks to `plans`, Goals, Calendar, or Notes in this phase.
 - `structuredPlan` is the fact source; final output is rendered from it so Trace, preview, and Output stay consistent.
 - If true LLM token streaming is unavailable, Planix does not fake it by splitting a completed LLM response. It still streams Runtime step/tool/status events and uses local structured fallback output when needed.

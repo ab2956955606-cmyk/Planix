@@ -133,6 +133,11 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Stream Engine turns Runtime state into events only.
 - Runtime Orchestrator is the only coordinator.
 - Tools are read-only or preview-only: `search_materials`, `get_today_plans`, `get_memory`, `propose_tasks`.
+- Runtime builds one internal Context Pack from goal, explicit constraints, preference memory, history memory, today plans, materials, and output language.
+- Preference memory is a separate context layer and has higher priority than history memory.
+- `get_memory` returns `preferenceMemory` and `historyMemory`; do not add `get_preferences`.
+- `payload.preferences` must merge field-by-field with saved preferences, not replace the full object.
+- `propose_tasks` returns preview-only `structuredPlan`, tasks, sources, diagnostics, and `memoryContextSummary`.
 - `propose_tasks` must not write to `plans`, Goals, Calendar, or Notes; automatic writes are reserved for a later confirmed phase.
 - `structuredPlan` drives Runtime preview and final output rendering.
 - Rust `stream_agent_runtime` must remain a thin pass-through bridge.
