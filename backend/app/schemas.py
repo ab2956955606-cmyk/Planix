@@ -22,12 +22,21 @@ class AiPayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class AgentRunOptions(BaseModel):
+    force_model_knowledge: bool = Field(default=False, alias="forceModelKnowledge")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class AgentRunRequest(BaseModel):
     input: str
     date: str
-    preferences: str = ""
+    preferences: str | dict[str, Any] = ""
     materials: str = ""
     data: dict[str, Any] = Field(default_factory=dict)
+    options: AgentRunOptions = Field(default_factory=AgentRunOptions)
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class MemoryPayload(BaseModel):
@@ -80,10 +89,60 @@ class RagQueryOut(BaseModel):
     model: str | None = None
 
 
+class AiMaterialDraftRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=200)
+    output_language: Literal["zh", "en"] = Field(default="zh", alias="outputLanguage")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("query cannot be empty")
+        return cleaned
+
+
+class AiMaterialDraftOut(BaseModel):
+    title: str
+    content: str
+    summary: str
+    source_type: Literal["model_knowledge", "local_knowledge_template"] = Field(alias="sourceType")
+    caveat: str | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class ToolSpec(BaseModel):
     name: str
     description: str
     parameters: dict[str, str]
+
+
+class RefinedTask(BaseModel):
+    title: str = Field(min_length=1)
+    objective: str = Field(min_length=1)
+    estimated_minutes: int = Field(alias="estimatedMinutes", gt=0)
+    steps: list[str] = Field(min_length=3)
+    checklist: list[str] = Field(min_length=2)
+    acceptance_criteria: list[str] = Field(alias="acceptanceCriteria", min_length=1)
+    deliverable: str = Field(min_length=1)
+    risks: list[str] = Field(default_factory=list)
+    fallback_tips: list[str] = Field(default_factory=list, alias="fallbackTips")
+    mode: Literal["llm", "local_fallback"] = "local_fallback"
+    fallback_reason: str | None = Field(default=None, alias="fallbackReason")
+    error_type: str | None = Field(default=None, alias="errorType")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("title", "objective", "deliverable")
+    @classmethod
+    def _required_string(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("field cannot be empty")
+        return cleaned
 
 
 class PlanBase(BaseModel):
@@ -97,6 +156,8 @@ class PlanBase(BaseModel):
     priority: PlanPriority = "medium"
     estimated_minutes: int = Field(default=30, alias="estimatedMinutes", ge=1, le=1440)
     source: PlanSource = "manual"
+    source_key: str = Field(default="", alias="sourceKey")
+    refined_task: RefinedTask | None = Field(default=None, alias="refinedTask")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -116,6 +177,7 @@ class PlanUpdate(BaseModel):
     priority: PlanPriority | None = None
     estimated_minutes: int | None = Field(default=None, alias="estimatedMinutes", ge=1, le=1440)
     source: PlanSource | None = None
+    source_key: str | None = Field(default=None, alias="sourceKey")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -130,6 +192,9 @@ class PlanOut(BaseModel):
     priority: PlanPriority
     estimated_minutes: int = Field(alias="estimatedMinutes")
     source: PlanSource
+    source_key: str = Field(default="", alias="sourceKey")
+    refined_task: RefinedTask | None = Field(default=None, alias="refinedTask")
+    refined_task_updated_at: str | None = Field(default=None, alias="refinedTaskUpdatedAt")
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
 
@@ -295,6 +360,34 @@ class GoalPlanOut(BaseModel):
     error_type: str | None = Field(default=None, alias="errorType")
     error_message: str | None = Field(default=None, alias="errorMessage")
     base_url_host: str | None = Field(default=None, alias="baseUrlHost")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class RefineTaskRequest(BaseModel):
+    goal: str = ""
+    task_title: str = Field(alias="taskTitle", min_length=1)
+    task_description: str = Field(default="", alias="taskDescription")
+    date: str = ""
+    available_minutes: int | None = Field(default=None, alias="availableMinutes", ge=1)
+    user_constraints: list[str] = Field(default_factory=list, alias="userConstraints")
+    retrieved_sources: list[RagSource] = Field(default_factory=list, alias="retrievedSources")
+    output_language: Literal["zh", "en"] = Field(default="zh", alias="outputLanguage")
+    refinement_instruction: str = Field(default="", alias="refinementInstruction")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("task_title")
+    @classmethod
+    def _task_title_required(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("taskTitle cannot be empty")
+        return cleaned
+
+
+class PlanRefinedTaskUpdate(BaseModel):
+    refined_task: RefinedTask = Field(alias="refinedTask")
 
     model_config = ConfigDict(populate_by_name=True)
 

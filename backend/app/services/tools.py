@@ -15,6 +15,11 @@ AGENT_TOOLS = [
         "parameters": {"user_id": "local user id"},
     },
     {
+        "name": "enrich_with_model_knowledge",
+        "description": "Add model knowledge enrichment without web search or writes.",
+        "parameters": {"goal": "target goal", "triggerReason": "why enrichment was triggered"},
+    },
+    {
         "name": "propose_tasks",
         "description": "Preview calendar tasks without writing them to the calendar.",
         "parameters": {"goal": "target goal", "date": "YYYY-MM-DD", "preferences": "preference context"},

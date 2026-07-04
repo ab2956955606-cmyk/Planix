@@ -1,6 +1,8 @@
 import type {
   AgentRunRequest,
   AgentRuntimeEvent,
+  AiMaterialDraft,
+  AiMaterialDraftRequest,
   AiSettings,
   AiSettingsInput,
   AiSettingsTestResult,
@@ -16,6 +18,8 @@ import type {
   PlannerTask,
   RagDocument,
   RagDocumentInput,
+  RefinedTask,
+  RefineTaskRequest,
   ReplanApplyPayload
 } from '../types';
 import { invoke } from '@tauri-apps/api/core';
@@ -327,15 +331,19 @@ export async function testAiSettings(): Promise<AiSettingsTestResult> {
 type BackendPlan = {
   id: string; date: string; time: string; content: string; done: boolean;
   result: string; priority: 'low' | 'medium' | 'high'; estimatedMinutes: number;
-  source: 'manual' | 'ai'; createdAt: string; updatedAt: string;
+  source: 'manual' | 'ai'; sourceKey?: string; refinedTask?: RefinedTask | null;
+  refinedTaskUpdatedAt?: string | null; createdAt: string; updatedAt: string;
 };
 
-export type PlanPatch = Partial<Pick<Plan, 'time' | 'title' | 'done' | 'completion' | 'source'>>;
+export type PlanPatch = Partial<Pick<Plan, 'time' | 'title' | 'done' | 'completion' | 'source' | 'sourceKey'>>;
 
 function fromBackendPlan(plan: BackendPlan): Plan {
   return {
     id: plan.id, time: plan.time, title: plan.content,
     done: plan.done, completion: plan.result ?? '', source: plan.source,
+    sourceKey: plan.sourceKey ?? '',
+    refinedTask: plan.refinedTask ?? null,
+    refinedTaskUpdatedAt: plan.refinedTaskUpdatedAt ?? null,
   };
 }
 
@@ -347,6 +355,8 @@ function toBackendPlan(date: string, plan: Plan) {
   return {
     date, time: plan.time, content: plan.title, done: plan.done,
     result: plan.completion, source: plan.source ?? 'manual',
+    sourceKey: plan.sourceKey ?? '',
+    refinedTask: plan.refinedTask ?? undefined,
     priority: 'medium', estimatedMinutes: 30,
   };
 }
@@ -364,13 +374,27 @@ export async function createPlan(date: string, plan: Plan): Promise<Plan> {
 export async function updatePlan(id: string, patch: PlanPatch): Promise<Plan> {
   const saved = await callApi<BackendPlan>('PATCH', `/api/plans/${id}`, {
     time: patch.time, content: patch.title, done: patch.done,
-    result: patch.completion, source: patch.source,
+    result: patch.completion, source: patch.source, sourceKey: patch.sourceKey,
   });
+  return fromBackendPlan(saved);
+}
+
+export async function savePlanRefinedTask(id: string, refinedTask: RefinedTask): Promise<Plan> {
+  const saved = await callApi<BackendPlan>('PATCH', `/api/plans/${id}/refined-task`, { refinedTask }, 60000);
+  return fromBackendPlan(saved);
+}
+
+export async function deletePlanRefinedTask(id: string): Promise<Plan> {
+  const saved = await callApi<BackendPlan>('DELETE', `/api/plans/${id}/refined-task`, undefined, 45000);
   return fromBackendPlan(saved);
 }
 
 export async function deletePlan(id: string): Promise<void> {
   await callApi<void>('DELETE', `/api/plans/${id}`);
+}
+
+export async function clearAllPlans(): Promise<{ deleted: number }> {
+  return callApi<{ deleted: number }>('DELETE', '/api/plans/all', undefined, 60000);
 }
 
 // ═══ Month Notes ═══
@@ -392,6 +416,10 @@ export async function fetchRagDocuments(): Promise<RagDocument[]> {
 
 export async function createRagDocument(payload: RagDocumentInput): Promise<RagDocument> {
   return callApi<RagDocument>('POST', '/api/rag/documents', payload, 45000);
+}
+
+export async function createAiMaterialDraft(payload: AiMaterialDraftRequest): Promise<AiMaterialDraft> {
+  return callApi<AiMaterialDraft>('POST', '/api/materials/ai-draft', payload, 60000);
 }
 
 function validateUploadFile(file: File): void {
@@ -461,6 +489,10 @@ export async function deleteRagDocument(id: string): Promise<void> {
 
 export async function createGoalPlan(payload: Omit<AiPayload, 'data'>): Promise<GoalPlanResponse> {
   return callApi<GoalPlanResponse>('POST', '/api/planning/goal-plan', payload, 80000);
+}
+
+export async function refineTask(payload: RefineTaskRequest): Promise<RefinedTask> {
+  return callApi<RefinedTask>('POST', '/api/planning/refine-task', payload, 60000);
 }
 
 export async function createDailyReview(payload: Pick<AiPayload, 'date' | 'goal' | 'preferences' | 'data'>): Promise<DailyReviewResponse> {

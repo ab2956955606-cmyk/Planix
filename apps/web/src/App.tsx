@@ -7,17 +7,20 @@ import { SettingsPage } from './pages/SettingsPage';
 import { RivaShell } from './shell/RivaShell';
 import { useAppRoute } from './shell/useAppRoute';
 import {
+  clearAllPlans as clearAllRemotePlans,
   createPlan as createRemotePlan,
   deletePlan as deleteRemotePlan,
+  deletePlanRefinedTask,
   fetchAiSettings,
   fetchMonthNote,
   fetchPlans,
   saveRemoteMonthNote,
+  savePlanRefinedTask,
   updatePlan as updateRemotePlan
 } from './lib/api';
 import { loadLanguage, saveLanguage, useI18n } from './i18n';
 import { ensureDay, loadData, loadMonthNote, loadPreferences, saveData, saveMonthNote, savePreferences } from './lib/storage';
-import type { AiSettings, AppData, AppliedPlan, InspectorLog, InspectorSnapshot, Language, Plan, PlannerTask } from './types';
+import type { AiSettings, AppData, AppliedPlan, GoalPlanResponse, GoalPlanTask, InspectorLog, InspectorSnapshot, Language, Plan, RefinedTask } from './types';
 import { monthKey, todayISO } from './utils/date';
 
 function createId(): string {
@@ -26,6 +29,35 @@ function createId(): string {
 
 function getYearMonth(date: Date): { year: number; month: number } {
   return { year: date.getFullYear(), month: date.getMonth() + 1 };
+}
+
+function normalizeGoalTaskDate(dueDate: string | null | undefined, fallbackDate: string): string {
+  if (typeof dueDate !== 'string') return fallbackDate;
+  const trimmed = dueDate.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const prefix = trimmed.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(prefix) ? prefix : fallbackDate;
+}
+
+function stableKeyPart(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\u4e00-\u9fff-]/gi, '').slice(0, 48);
+}
+
+function buildGoalTaskSourceKey(
+  goalPlan: GoalPlanResponse,
+  milestoneIndex: number,
+  taskIndex: number,
+  task: GoalPlanTask
+): string {
+  const base = goalPlan.id
+    ? `goal-plan:${goalPlan.id}`
+    : `goal-plan:${stableKeyPart(goalPlan.structuredPlan?.goalTitle || goalPlan.summary)}:${stableKeyPart(task.title)}:${task.dueDate || 'no-date'}`;
+  return `${base}:m${milestoneIndex}:t${taskIndex}`;
+}
+
+function defaultGoalTaskTime(index: number): string {
+  const times = ['09:00', '14:30', '20:30'];
+  return times[index % times.length];
 }
 
 export function App() {
@@ -142,17 +174,33 @@ export function App() {
     updateDay(date, (plans) => plans.map((plan) => (plan.id === localId ? remotePlan : plan)));
   }
 
-  function persistCreatedPlans(date: string, plans: Plan[]) {
-    void Promise.all(plans.map((plan) => createRemotePlan(date, plan)))
-      .then((savedPlans) => {
-        updateDay(date, (currentPlans) =>
-          currentPlans.map((plan) => {
-            const index = plans.findIndex((localPlan) => localPlan.id === plan.id);
-            return index >= 0 ? savedPlans[index] : plan;
-          })
-        );
-      })
-      .catch(() => undefined);
+  function upsertPlan(date: string, remotePlan: Plan) {
+    updateDay(date, (plans) => {
+      const exists = plans.some((plan) => plan.id === remotePlan.id);
+      if (exists) return plans.map((plan) => (plan.id === remotePlan.id ? remotePlan : plan));
+      return [...plans, remotePlan].sort((left, right) => left.time.localeCompare(right.time));
+    });
+  }
+
+  function removePlanFromDate(date: string, planId: string) {
+    updateDay(date, (plans) => plans.filter((plan) => plan.id !== planId));
+  }
+
+  function findPlanById(planId: string): { date: string; plan: Plan } | null {
+    for (const [date, day] of Object.entries(data)) {
+      const plan = day.plans.find((item) => item.id === planId);
+      if (plan) return { date, plan };
+    }
+    return null;
+  }
+
+  function findPlanBySourceKey(sourceKey: string): { date: string; plan: Plan } | null {
+    if (!sourceKey) return null;
+    for (const [date, day] of Object.entries(data)) {
+      const plan = day.plans.find((item) => item.sourceKey === sourceKey);
+      if (plan) return { date, plan };
+    }
+    return null;
   }
 
   function addPlan() {
@@ -165,12 +213,76 @@ export function App() {
     setDraft('');
   }
 
-  function applyAiTasks(tasks: PlannerTask[]) {
-    if (!tasks.length) return;
-    const date = selectedDate;
-    const plans = tasks.map((task) => ({ id: createId(), time: task.time || '09:00', title: task.title, done: false, completion: task.reason, source: 'ai' as const }));
-    updateDay(date, (currentPlans) => [...currentPlans, ...plans]);
-    persistCreatedPlans(date, plans);
+  async function createOrUpdateGoalPlanTask(input: {
+    date: string;
+    time: string;
+    title: string;
+    sourceKey: string;
+    refinedTask?: RefinedTask | null;
+  }): Promise<'created' | 'updated'> {
+    const bySourceKey = findPlanBySourceKey(input.sourceKey);
+    const byFallback = ensureDay(data, input.date).plans.find((plan) => plan.source === 'ai' && plan.title === input.title);
+    const existing = bySourceKey ?? (byFallback ? { date: input.date, plan: byFallback } : null);
+
+    if (existing) {
+      let currentPlan = existing.plan;
+      const currentDate = existing.date;
+      if (input.sourceKey && currentPlan.sourceKey !== input.sourceKey) {
+        currentPlan = await updateRemotePlan(currentPlan.id, { sourceKey: input.sourceKey });
+        upsertPlan(currentDate, currentPlan);
+      }
+      if (input.refinedTask) {
+        currentPlan = await savePlanRefinedTask(currentPlan.id, input.refinedTask);
+        upsertPlan(currentDate, currentPlan);
+      }
+      return 'updated';
+    }
+
+    const localPlan: Plan = {
+      id: createId(),
+      time: input.time,
+      title: input.title,
+      done: false,
+      completion: '',
+      source: 'ai',
+      sourceKey: input.sourceKey,
+      refinedTask: input.refinedTask ?? null
+    };
+    updateDay(input.date, (plans) => [...plans, localPlan]);
+    const saved = await createRemotePlan(input.date, localPlan);
+    replacePlan(input.date, localPlan.id, saved);
+    return 'created';
+  }
+
+  async function applyGoalPlanToCalendar(goalPlan: GoalPlanResponse): Promise<{ created: number; updated: number; failed: number; otherDates: boolean }> {
+    const structured = goalPlan.structuredPlan;
+    if (!structured) return { created: 0, updated: 0, failed: 0, otherDates: false };
+    let created = 0;
+    let updated = 0;
+    let failed = 0;
+    let sequence = 0;
+    const targetDates = new Set<string>();
+    for (const [milestoneIndex, milestone] of structured.milestones.entries()) {
+      for (const [taskIndex, task] of milestone.tasks.entries()) {
+        const targetDate = normalizeGoalTaskDate(task.dueDate, selectedDate);
+        targetDates.add(targetDate);
+        const sourceKey = buildGoalTaskSourceKey(goalPlan, milestoneIndex, taskIndex, task);
+        try {
+          const result = await createOrUpdateGoalPlanTask({
+            date: targetDate,
+            time: defaultGoalTaskTime(sequence),
+            title: task.title,
+            sourceKey
+          });
+          if (result === 'created') created += 1;
+          else updated += 1;
+        } catch {
+          failed += 1;
+        }
+        sequence += 1;
+      }
+    }
+    return { created, updated, failed, otherDates: Array.from(targetDates).some((date) => date !== selectedDate) };
   }
 
   function applyRemotePlans(plans: AppliedPlan[]) {
@@ -193,6 +305,83 @@ export function App() {
       }
       return next;
     });
+  }
+
+  async function saveRefinedPlan(planId: string, refinedTask: RefinedTask, planDate = selectedDate): Promise<Plan> {
+    const saved = await savePlanRefinedTask(planId, refinedTask);
+    const actual = findPlanById(planId);
+    upsertPlan(actual?.date ?? planDate, saved);
+    return saved;
+  }
+
+  async function deleteRefinedPlan(planId: string, planDate = selectedDate): Promise<Plan> {
+    const saved = await deletePlanRefinedTask(planId);
+    const actual = findPlanById(planId);
+    upsertPlan(actual?.date ?? planDate, saved);
+    return saved;
+  }
+
+  async function createOrUpdateRefinedPlan(input: {
+    date: string;
+    title: string;
+    sourceKey: string;
+    refinedTask: RefinedTask;
+  }): Promise<Plan> {
+    const targetDate = normalizeGoalTaskDate(input.date, selectedDate);
+    const bySourceKey = findPlanBySourceKey(input.sourceKey);
+    const byFallback = ensureDay(data, targetDate).plans.find((plan) => plan.source === 'ai' && plan.title === input.title);
+    const existing = bySourceKey ?? (byFallback ? { date: targetDate, plan: byFallback } : null);
+    if (existing) {
+      if (input.sourceKey && existing.plan.sourceKey !== input.sourceKey) {
+        const withSourceKey = await updateRemotePlan(existing.plan.id, { sourceKey: input.sourceKey });
+        upsertPlan(existing.date, withSourceKey);
+      }
+      const saved = await savePlanRefinedTask(existing.plan.id, input.refinedTask);
+      upsertPlan(existing.date, saved);
+      return saved;
+    }
+    const localPlan: Plan = {
+      id: createId(),
+      time: '09:00',
+      title: input.title,
+      done: false,
+      completion: '',
+      source: 'ai',
+      sourceKey: input.sourceKey,
+      refinedTask: input.refinedTask
+    };
+    updateDay(targetDate, (plans) => [...plans, localPlan]);
+    const saved = await createRemotePlan(targetDate, localPlan);
+    replacePlan(targetDate, localPlan.id, saved);
+    return saved;
+  }
+
+  async function clearDayPlans(date: string): Promise<{ deleted: number; failed: number }> {
+    const plans = [...ensureDay(data, date).plans];
+    let deleted = 0;
+    let failed = 0;
+    for (const plan of plans) {
+      try {
+        await deleteRemotePlan(plan.id);
+        removePlanFromDate(date, plan.id);
+        deleted += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { deleted, failed };
+  }
+
+  async function clearAllPlans(): Promise<{ deleted: number }> {
+    const result = await clearAllRemotePlans();
+    setData((current) => {
+      const next: AppData = {};
+      for (const [date, day] of Object.entries(current)) {
+        next[date] = { ...day, plans: [] };
+      }
+      return next;
+    });
+    return result;
   }
 
   function selectToday() {
@@ -227,8 +416,10 @@ export function App() {
     date: selectedDate,
     preferences,
     onPreferencesChange: setPreferences,
-    onApplyTasks: applyAiTasks,
+    onApplyGoalPlanToCalendar: applyGoalPlanToCalendar,
     onReplanApplied: applyRemotePlans,
+    onCreateOrUpdateRefinedPlan: createOrUpdateRefinedPlan,
+    onDeletePlanRefinedTask: deleteRefinedPlan,
     onSettingsChange: setAiSettings,
     language,
     t
@@ -274,6 +465,8 @@ export function App() {
             saveMonthNote(key, value);
             void saveRemoteMonthNote(year, month, value).catch(() => undefined);
           }}
+          onClearSelectedDayPlans={clearDayPlans}
+          onClearAllPlans={clearAllPlans}
           onDraftChange={setDraft}
           onTimeChange={setTime}
           onAdd={addPlan}
@@ -292,6 +485,9 @@ export function App() {
             updateDay(selectedDate, (plans) => plans.map((plan) => plan.id === id ? { ...plan, completion: value } : plan));
             void updateRemotePlan(id, { completion: value }).catch(() => undefined);
           }}
+          preferences={preferences}
+          onSavePlanRefinedTask={saveRefinedPlan}
+          onDeletePlanRefinedTask={deleteRefinedPlan}
           t={t}
         />
       )}

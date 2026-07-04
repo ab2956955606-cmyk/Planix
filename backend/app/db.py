@@ -176,6 +176,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "documents", "summary", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "planning_goals", "structured_plan_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_goals", "sources_json", "TEXT NOT NULL DEFAULT '[]'")
+    ensure_column(conn, "plans", "refined_task_json", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "plans", "refined_task_updated_at", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "plans", "source_key", "TEXT NOT NULL DEFAULT ''")
     conn.execute(
         """
         INSERT INTO document_chunks_fts(chunk_id, document_id, title, content)

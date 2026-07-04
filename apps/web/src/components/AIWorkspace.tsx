@@ -12,7 +12,8 @@ import {
   Settings,
   Sparkles,
   Trash2,
-  UploadCloud
+  UploadCloud,
+  X
 } from 'lucide-react';
 import type {
   AiSettings,
@@ -20,13 +21,16 @@ import type {
   AppliedPlan,
   AppData,
   DailyReviewResponse,
+  GoalPlanTask,
   GoalPlanResponse,
   MemoryCacheStats,
   MemoryResetResult,
+  Plan,
   PlannerResponse,
   PlannerTask,
   RagDocument,
   RagSource,
+  RefinedTask,
   Language,
   StructuredGoalPlan
 } from '../types';
@@ -35,6 +39,7 @@ import {
   ApiNetworkError,
   applyReplanTasks,
   askMaterials,
+  createAiMaterialDraft,
   createDailyReview,
   createGoalPlan,
   createRagDocument,
@@ -52,8 +57,11 @@ import {
   saveAiSettings,
   saveMemory,
   testAiSettings,
+  refineTask,
   uploadRagDocument
 } from '../lib/api';
+import { refineTaskErrorText } from '../lib/refineTaskErrors';
+import { RefinedTaskPreview } from './RefinedTaskPreview';
 
 type WorkspaceSection = 'all' | 'notes' | 'goals' | 'settings';
 type MemoryResetAction = 'preferences' | 'history' | 'runtime' | 'planning' | 'all';
@@ -64,8 +72,10 @@ interface AIWorkspaceProps {
   preferences: string;
   section?: WorkspaceSection;
   onPreferencesChange: (value: string) => void;
-  onApplyTasks: (tasks: PlannerTask[]) => void;
+  onApplyGoalPlanToCalendar: (plan: GoalPlanResponse) => Promise<{ created: number; updated: number; failed: number; otherDates: boolean }>;
   onReplanApplied: (plans: AppliedPlan[]) => void;
+  onCreateOrUpdateRefinedPlan: (input: { date: string; title: string; sourceKey: string; refinedTask: RefinedTask }) => Promise<Plan>;
+  onDeletePlanRefinedTask: (planId: string, date?: string) => Promise<Plan>;
   onSettingsChange?: (settings: AiSettings) => void;
   language: Language;
   t: (key: string) => string;
@@ -106,6 +116,28 @@ function isTimeoutLikeError(error: unknown): boolean {
   return /timeout|timed out|deadline|abort/i.test(message);
 }
 
+function normalizeGoalTaskDate(dueDate: string | null | undefined, fallbackDate: string): string {
+  if (typeof dueDate !== 'string') return fallbackDate;
+  const trimmed = dueDate.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const prefix = trimmed.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(prefix) ? prefix : fallbackDate;
+}
+
+function stableKeyPart(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\u4e00-\u9fff-]/gi, '').slice(0, 48);
+}
+
+function goalTaskSourceKey(goalPlan: GoalPlanResponse, taskKey: string, task: GoalPlanTask): string {
+  const match = /^(\d+)-(\d+)-/.exec(taskKey);
+  const milestoneIndex = match?.[1] ?? '0';
+  const taskIndex = match?.[2] ?? '0';
+  const base = goalPlan.id
+    ? `goal-plan:${goalPlan.id}`
+    : `goal-plan:${stableKeyPart(goalPlan.structuredPlan?.goalTitle || goalPlan.summary)}:${stableKeyPart(task.title)}:${task.dueDate || 'no-date'}`;
+  return `${base}:m${milestoneIndex}:t${taskIndex}`;
+}
+
 export function AIWorkspace(props: AIWorkspaceProps) {
   const {
     data,
@@ -113,8 +145,10 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     preferences,
     section = 'all',
     onPreferencesChange,
-    onApplyTasks,
+    onApplyGoalPlanToCalendar,
     onReplanApplied,
+    onCreateOrUpdateRefinedPlan,
+    onDeletePlanRefinedTask,
     onSettingsChange,
     language,
     t
@@ -129,12 +163,20 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   const [materials, setMaterials] = useState('');
   const [docTitle, setDocTitle] = useState('');
   const [docContent, setDocContent] = useState('');
+  const [materialDraftTopic, setMaterialDraftTopic] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [documents, setDocuments] = useState<RagDocument[]>([]);
   const [documentStatus, setDocumentStatus] = useState('');
   const [goalPlan, setGoalPlan] = useState<GoalPlanResponse | null>(null);
   const [goalStatus, setGoalStatus] = useState('');
+  const [refinedTasksById, setRefinedTasksById] = useState<Record<string, RefinedTask>>({});
+  const [refiningTaskIds, setRefiningTaskIds] = useState<Record<string, boolean>>({});
+  const [refineTaskErrors, setRefineTaskErrors] = useState<Record<string, string>>({});
+  const [goalTaskRefinementInputs, setGoalTaskRefinementInputs] = useState<Record<string, string>>({});
+  const [refinedGoalPlanRefsByKey, setRefinedGoalPlanRefsByKey] = useState<Record<string, { id: string; date: string }>>({});
+  const [deletingGoalTaskKeys, setDeletingGoalTaskKeys] = useState<Record<string, boolean>>({});
+  const [bulkRefiningGoalTasks, setBulkRefiningGoalTasks] = useState(false);
   const [dailyReview, setDailyReview] = useState<DailyReviewResponse | null>(null);
   const [utilityResult, setUtilityResult] = useState<PlannerResponse | null>(null);
   const [loading, setLoading] = useState('');
@@ -263,6 +305,33 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     }
   }
 
+  async function generateMaterialDraft() {
+    const query = materialDraftTopic.trim();
+    setDocumentStatus('');
+    if (!query) {
+      setDocumentStatus(t('legacy.aiMaterialDraftRequired'));
+      return;
+    }
+    if (query.length > 200) {
+      setDocumentStatus(t('legacy.aiMaterialDraftTooLong'));
+      return;
+    }
+    setLoading('material-draft');
+    try {
+      const draft = await createAiMaterialDraft({
+        query,
+        outputLanguage: language === 'en-US' ? 'en' : 'zh'
+      });
+      setDocTitle(draft.title);
+      setDocContent(draft.content);
+      setDocumentStatus(t('legacy.aiMaterialDraftSuccess'));
+    } catch {
+      setDocumentStatus(t('legacy.aiMaterialDraftError'));
+    } finally {
+      setLoading('');
+    }
+  }
+
   async function runGoalPlan() {
     const trimmedGoal = goal.trim();
     setGoalStatus('');
@@ -272,6 +341,13 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     }
     setLoading('goal');
     setUtilityResult(null);
+    setRefinedTasksById({});
+    setRefiningTaskIds({});
+    setRefineTaskErrors({});
+    setGoalTaskRefinementInputs({});
+    setRefinedGoalPlanRefsByKey({});
+    setDeletingGoalTaskKeys({});
+    setBulkRefiningGoalTasks(false);
     try {
       const plan = await createGoalPlan({ goal: trimmedGoal, deadline, dailyHours, materials, preferences, date, outputLanguage: language });
       setGoalPlan(plan);
@@ -292,6 +368,156 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       }
     } finally {
       setLoading('');
+    }
+  }
+
+  async function refineGoalTask(taskKey: string, task: GoalPlanTask, options: { skipExisting?: boolean } = {}) {
+    if (!goalPlan) return;
+    if (options.skipExisting && refinedTasksById[taskKey]) return;
+    setRefiningTaskIds((current) => ({ ...current, [taskKey]: true }));
+    setRefineTaskErrors((current) => {
+      const next = { ...current };
+      delete next[taskKey];
+      return next;
+    });
+    let refined: RefinedTask;
+    try {
+      refined = await refineTask({
+        goal: goalPlan.structuredPlan?.goalTitle || goal,
+        taskTitle: task.title,
+        taskDescription: task.description,
+        date: task.dueDate || date,
+        availableMinutes: task.estimatedMinutes,
+        userConstraints: [preferences].filter(Boolean),
+        retrievedSources: goalPlan.sources ?? [],
+        outputLanguage: language === 'en-US' ? 'en' : 'zh',
+        refinementInstruction: goalTaskRefinementInputs[taskKey] ?? ''
+      });
+    } catch (err) {
+      setRefineTaskErrors((current) => ({
+        ...current,
+        [taskKey]: `${t('legacy.refineTaskGenerateFailed')}: ${refineTaskErrorText(err, t)}`
+      }));
+      setRefiningTaskIds((current) => {
+        const next = { ...current };
+        delete next[taskKey];
+        return next;
+      });
+      return;
+    }
+
+    try {
+      const targetDate = normalizeGoalTaskDate(task.dueDate, date);
+      const savedPlan = await onCreateOrUpdateRefinedPlan({
+        date: targetDate,
+        title: task.title,
+        sourceKey: goalTaskSourceKey(goalPlan, taskKey, task),
+        refinedTask: refined
+      });
+      setRefinedTasksById((current) => ({ ...current, [taskKey]: savedPlan.refinedTask ?? refined }));
+      setRefinedGoalPlanRefsByKey((current) => ({ ...current, [taskKey]: { id: savedPlan.id, date: targetDate } }));
+    } catch (err) {
+      setRefineTaskErrors((current) => ({
+        ...current,
+        [taskKey]: `${t('legacy.refineTaskSaveFailed')}: ${refineTaskErrorText(err, t)}`
+      }));
+    } finally {
+      setRefiningTaskIds((current) => {
+        const next = { ...current };
+        delete next[taskKey];
+        return next;
+      });
+    }
+  }
+
+  async function refineAllGoalTasks() {
+    if (!goalPlan?.structuredPlan || bulkRefiningGoalTasks) return;
+    const candidates = goalPlan.structuredPlan.milestones.flatMap((milestone, milestoneIndex) =>
+      milestone.tasks.map((task, taskIndex) => ({
+        key: `${milestoneIndex}-${taskIndex}-${task.title}`,
+        task
+      }))
+    ).filter((item) => !refinedTasksById[item.key] && !refiningTaskIds[item.key]);
+    if (!candidates.length) return;
+    setBulkRefiningGoalTasks(true);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < candidates.length) {
+        const current = candidates[cursor];
+        cursor += 1;
+        await refineGoalTask(current.key, current.task, { skipExisting: true });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(2, candidates.length) }, worker));
+    setBulkRefiningGoalTasks(false);
+  }
+
+  async function applyGoalPlanToCalendar() {
+    if (!goalPlan?.structuredPlan) {
+      setGoalStatus(t('legacy.noGoalTasksToWrite'));
+      return;
+    }
+    setLoading('apply-goal-calendar');
+    setGoalStatus(t('legacy.writingToCalendar'));
+    try {
+      const result = await onApplyGoalPlanToCalendar(goalPlan);
+      const hasSuccessfulWrites = result.created + result.updated > 0;
+      let status = '';
+      if (result.failed === 0) {
+        status = `${t('legacy.calendarWriteSuccess')}: ${t('legacy.createdCount')} ${result.created}, ${t('legacy.updatedCount')} ${result.updated}, ${t('legacy.failedCount')} ${result.failed}`;
+      } else if (hasSuccessfulWrites) {
+        status = `${t('legacy.calendarWritePartial')}, ${t('legacy.failedCount')} ${result.failed}`;
+      } else {
+        status = t('legacy.calendarWriteFailedDetailed');
+      }
+      if (result.otherDates && status !== t('legacy.calendarWriteFailedDetailed')) {
+        status = `${status}。${t('legacy.goalTasksWrittenToOtherDates')}`;
+      }
+      setGoalStatus(status);
+      return;
+    } catch {
+      setGoalStatus(t('legacy.calendarWriteFailedDetailed'));
+    } finally {
+      setLoading('');
+    }
+  }
+
+  async function deleteGoalTaskRefinement(taskKey: string) {
+    const planRef = refinedGoalPlanRefsByKey[taskKey];
+    if (!planRef) {
+      setRefinedTasksById((current) => {
+        const next = { ...current };
+        delete next[taskKey];
+        return next;
+      });
+      return;
+    }
+    setDeletingGoalTaskKeys((current) => ({ ...current, [taskKey]: true }));
+    setRefineTaskErrors((current) => {
+      const next = { ...current };
+      delete next[taskKey];
+      return next;
+    });
+    try {
+      await onDeletePlanRefinedTask(planRef.id, planRef.date);
+      setRefinedTasksById((current) => {
+        const next = { ...current };
+        delete next[taskKey];
+        return next;
+      });
+      setRefinedGoalPlanRefsByKey((current) => {
+        const next = { ...current };
+        delete next[taskKey];
+        return next;
+      });
+    } catch (err) {
+      setRefineTaskErrors((current) => ({ ...current, [taskKey]: refineTaskErrorText(err, t) }));
+    } finally {
+      setDeletingGoalTaskKeys((current) => {
+        const next = { ...current };
+        delete next[taskKey];
+        return next;
+      });
     }
   }
 
@@ -563,12 +789,15 @@ export function AIWorkspace(props: AIWorkspaceProps) {
           docTitle={docTitle}
           docContent={docContent}
           uploadFile={uploadFile}
+          materialDraftTopic={materialDraftTopic}
           fileInputKey={fileInputKey}
           documentStatus={documentStatus}
           loading={loading}
           setDocTitle={setDocTitle}
           setDocContent={setDocContent}
+          setMaterialDraftTopic={setMaterialDraftTopic}
           setUploadFile={setUploadFile}
+          generateMaterialDraft={generateMaterialDraft}
           saveMaterial={saveMaterial}
           uploadMaterial={uploadMaterial}
           removeMaterial={removeMaterial}
@@ -590,13 +819,23 @@ export function AIWorkspace(props: AIWorkspaceProps) {
           loading={loading}
           goalStatus={goalStatus}
           goalPlan={goalPlan}
+          refinedTasksById={refinedTasksById}
+          refiningTaskIds={refiningTaskIds}
+          refineTaskErrors={refineTaskErrors}
+          goalTaskRefinementInputs={goalTaskRefinementInputs}
+          setGoalTaskRefinementInput={(taskKey, value) => setGoalTaskRefinementInputs((current) => ({ ...current, [taskKey]: value }))}
+          deletingGoalTaskKeys={deletingGoalTaskKeys}
+          bulkRefiningGoalTasks={bulkRefiningGoalTasks}
           setGoal={setGoal}
           setDeadline={setDeadline}
           setDailyHours={setDailyHours}
           onPreferencesChange={onPreferencesChange}
           setMaterials={setMaterials}
           runGoalPlan={runGoalPlan}
-          onApplyTasks={onApplyTasks}
+          onRefineTask={refineGoalTask}
+          onRefineAllTasks={refineAllGoalTasks}
+          onDeleteRefinement={deleteGoalTaskRefinement}
+          onApplyGoalPlanToCalendar={applyGoalPlanToCalendar}
           t={t}
         />
       )}
@@ -655,13 +894,16 @@ function MaterialLibrary(props: {
   documents: RagDocument[];
   docTitle: string;
   docContent: string;
+  materialDraftTopic: string;
   uploadFile: File | null;
   fileInputKey: number;
   documentStatus: string;
   loading: string;
   setDocTitle: (value: string) => void;
   setDocContent: (value: string) => void;
+  setMaterialDraftTopic: (value: string) => void;
   setUploadFile: (value: File | null) => void;
+  generateMaterialDraft: () => void;
   saveMaterial: () => void;
   uploadMaterial: () => void;
   removeMaterial: (id: string) => void;
@@ -671,13 +913,16 @@ function MaterialLibrary(props: {
     documents,
     docTitle,
     docContent,
+    materialDraftTopic,
     uploadFile,
     fileInputKey,
     documentStatus,
     loading,
     setDocTitle,
     setDocContent,
+    setMaterialDraftTopic,
     setUploadFile,
+    generateMaterialDraft,
     saveMaterial,
     uploadMaterial,
     removeMaterial,
@@ -728,6 +973,20 @@ function MaterialLibrary(props: {
           <span>{t('legacy.materialContent')}</span>
           <textarea value={docContent} onChange={(event) => setDocContent(event.target.value)} placeholder={t('legacy.materialContentPlaceholder')} />
         </label>
+      </div>
+      <div className="ai-material-draft">
+        <div>
+          <span>{t('legacy.aiMaterialDraft')}</span>
+          <input
+            value={materialDraftTopic}
+            onChange={(event) => setMaterialDraftTopic(event.target.value)}
+            placeholder={t('legacy.aiMaterialDraftPlaceholder')}
+          />
+        </div>
+        <button onClick={generateMaterialDraft} disabled={loading === 'material-draft'}>
+          <Sparkles size={16} />
+          {loading === 'material-draft' ? t('legacy.aiMaterialDraftLoading') : t('legacy.generateMaterialDraft')}
+        </button>
       </div>
       {documentStatus && <p className="inline-status">{documentStatus}</p>}
       <div className="material-list">
@@ -786,13 +1045,23 @@ function GoalPlanner(props: {
   loading: string;
   goalStatus: string;
   goalPlan: GoalPlanResponse | null;
+  refinedTasksById: Record<string, RefinedTask>;
+  refiningTaskIds: Record<string, boolean>;
+  refineTaskErrors: Record<string, string>;
+  goalTaskRefinementInputs: Record<string, string>;
+  setGoalTaskRefinementInput: (taskKey: string, value: string) => void;
+  deletingGoalTaskKeys: Record<string, boolean>;
+  bulkRefiningGoalTasks: boolean;
   setGoal: (value: string) => void;
   setDeadline: (value: string) => void;
   setDailyHours: (value: number) => void;
   onPreferencesChange: (value: string) => void;
   setMaterials: (value: string) => void;
   runGoalPlan: () => void;
-  onApplyTasks: (tasks: PlannerTask[]) => void;
+  onRefineTask: (taskKey: string, task: GoalPlanTask) => void;
+  onRefineAllTasks: () => void;
+  onDeleteRefinement: (taskKey: string) => void;
+  onApplyGoalPlanToCalendar: () => void;
   t: (key: string) => string;
 }) {
   const {
@@ -804,13 +1073,23 @@ function GoalPlanner(props: {
     loading,
     goalStatus,
     goalPlan,
+    refinedTasksById,
+    refiningTaskIds,
+    refineTaskErrors,
+    goalTaskRefinementInputs,
+    setGoalTaskRefinementInput,
+    deletingGoalTaskKeys,
+    bulkRefiningGoalTasks,
     setGoal,
     setDeadline,
     setDailyHours,
     onPreferencesChange,
     setMaterials,
     runGoalPlan,
-    onApplyTasks,
+    onRefineTask,
+    onRefineAllTasks,
+    onDeleteRefinement,
+    onApplyGoalPlanToCalendar,
     t
   } = props;
 
@@ -847,9 +1126,24 @@ function GoalPlanner(props: {
       </div>
       {loading === 'goal' && <div className="empty-state">{t('legacy.loading')}</div>}
       {goalStatus && <p className="inline-status">{goalStatus}</p>}
-      {goalPlan && <GoalPlanView plan={goalPlan} t={t} />}
-      <button className="apply-button" onClick={() => onApplyTasks(goalPlan?.tasks ?? [])} disabled={!goalPlan?.tasks.length}>
-        {goalPlan?.tasks.length ? t('legacy.applyTasks') : t('legacy.noAiTasks')}
+      {goalPlan && (
+        <GoalPlanView
+          plan={goalPlan}
+          refinedTasksById={refinedTasksById}
+          refiningTaskIds={refiningTaskIds}
+          refineTaskErrors={refineTaskErrors}
+          goalTaskRefinementInputs={goalTaskRefinementInputs}
+          setGoalTaskRefinementInput={setGoalTaskRefinementInput}
+          deletingGoalTaskKeys={deletingGoalTaskKeys}
+          bulkRefiningGoalTasks={bulkRefiningGoalTasks}
+          onRefineTask={onRefineTask}
+          onRefineAllTasks={onRefineAllTasks}
+          onDeleteRefinement={onDeleteRefinement}
+          t={t}
+        />
+      )}
+      <button className="apply-button" onClick={onApplyGoalPlanToCalendar} disabled={!goalPlan?.structuredPlan || loading === 'apply-goal-calendar'}>
+        {goalPlan?.structuredPlan ? t('legacy.writeToCalendar') : t('legacy.noGoalTasksToWrite')}
       </button>
     </div>
   );
@@ -1132,12 +1426,54 @@ function ModelSettings(props: {
   );
 }
 
-function GoalPlanView({ plan, t }: { plan: GoalPlanResponse; t: (key: string) => string }) {
+function GoalPlanView(props: {
+  plan: GoalPlanResponse;
+  refinedTasksById: Record<string, RefinedTask>;
+  refiningTaskIds: Record<string, boolean>;
+  refineTaskErrors: Record<string, string>;
+  goalTaskRefinementInputs: Record<string, string>;
+  setGoalTaskRefinementInput: (taskKey: string, value: string) => void;
+  deletingGoalTaskKeys: Record<string, boolean>;
+  bulkRefiningGoalTasks: boolean;
+  onRefineTask: (taskKey: string, task: GoalPlanTask) => void;
+  onRefineAllTasks: () => void;
+  onDeleteRefinement: (taskKey: string) => void;
+  t: (key: string) => string;
+}) {
+  const {
+    plan,
+    refinedTasksById,
+    refiningTaskIds,
+    refineTaskErrors,
+    goalTaskRefinementInputs,
+    setGoalTaskRefinementInput,
+    deletingGoalTaskKeys,
+    bulkRefiningGoalTasks,
+    onRefineTask,
+    onRefineAllTasks,
+    onDeleteRefinement,
+    t
+  } = props;
   return (
     <div className="result-view">
       <h3>{plan.summary}</h3>
       {plan.provider && <p><strong>{plan.provider}</strong> / {plan.model}</p>}
-      {plan.structuredPlan ? <StructuredGoalPlanView plan={plan.structuredPlan} t={t} /> : null}
+      {plan.structuredPlan ? (
+        <StructuredGoalPlanView
+          plan={plan.structuredPlan}
+          refinedTasksById={refinedTasksById}
+          refiningTaskIds={refiningTaskIds}
+          refineTaskErrors={refineTaskErrors}
+          goalTaskRefinementInputs={goalTaskRefinementInputs}
+          setGoalTaskRefinementInput={setGoalTaskRefinementInput}
+          deletingGoalTaskKeys={deletingGoalTaskKeys}
+          bulkRefiningGoalTasks={bulkRefiningGoalTasks}
+          onRefineTask={onRefineTask}
+          onRefineAllTasks={onRefineAllTasks}
+          onDeleteRefinement={onDeleteRefinement}
+          t={t}
+        />
+      ) : null}
       {!plan.structuredPlan && plan.phases.map((phase) => <p key={phase.title}><strong>{phase.title}</strong>: {phase.detail}</p>)}
       <SourceList sources={plan.sources ?? []} title={t('legacy.referencedSources')} t={t} />
       <h3>{t('legacy.todayTasks')}</h3>
@@ -1146,7 +1482,40 @@ function GoalPlanView({ plan, t }: { plan: GoalPlanResponse; t: (key: string) =>
   );
 }
 
-function StructuredGoalPlanView({ plan, t }: { plan: StructuredGoalPlan; t: (key: string) => string }) {
+function StructuredGoalPlanView(props: {
+  plan: StructuredGoalPlan;
+  refinedTasksById: Record<string, RefinedTask>;
+  refiningTaskIds: Record<string, boolean>;
+  refineTaskErrors: Record<string, string>;
+  goalTaskRefinementInputs: Record<string, string>;
+  setGoalTaskRefinementInput: (taskKey: string, value: string) => void;
+  deletingGoalTaskKeys: Record<string, boolean>;
+  bulkRefiningGoalTasks: boolean;
+  onRefineTask: (taskKey: string, task: GoalPlanTask) => void;
+  onRefineAllTasks: () => void;
+  onDeleteRefinement: (taskKey: string) => void;
+  t: (key: string) => string;
+}) {
+  const {
+    plan,
+    refinedTasksById,
+    refiningTaskIds,
+    refineTaskErrors,
+    goalTaskRefinementInputs,
+    setGoalTaskRefinementInput,
+    deletingGoalTaskKeys,
+    bulkRefiningGoalTasks,
+    onRefineTask,
+    onRefineAllTasks,
+    onDeleteRefinement,
+    t
+  } = props;
+  const hasRefinableTasks = plan.milestones.some((milestone, milestoneIndex) =>
+    milestone.tasks.some((task, taskIndex) => {
+      const taskKey = `${milestoneIndex}-${taskIndex}-${task.title}`;
+      return !refinedTasksById[taskKey] && !refiningTaskIds[taskKey];
+    })
+  );
   return (
     <div className="structured-plan">
       <div className="structured-plan-head">
@@ -1154,7 +1523,13 @@ function StructuredGoalPlanView({ plan, t }: { plan: StructuredGoalPlan; t: (key
           <span>{t('legacy.structuredGoal')}</span>
           <strong>{plan.goalTitle}</strong>
         </div>
-        <em>{plan.durationDays} {t('legacy.days')}</em>
+        <div className="structured-plan-actions">
+          <em>{plan.durationDays} {t('legacy.days')}</em>
+          <button type="button" onClick={onRefineAllTasks} disabled={!hasRefinableTasks || bulkRefiningGoalTasks}>
+            <Sparkles size={14} />
+            {bulkRefiningGoalTasks ? t('legacy.refiningAllTasks') : t('legacy.refineAllTasks')}
+          </button>
+        </div>
       </div>
       <p>{plan.goalDescription}</p>
       <div className="milestone-list">
@@ -1168,17 +1543,69 @@ function StructuredGoalPlanView({ plan, t }: { plan: StructuredGoalPlan; t: (key
               </div>
             </div>
             <div className="milestone-tasks">
-              {milestone.tasks.map((task) => (
-                <div className="milestone-task" key={`${milestone.title}-${task.title}`}>
-                  <div>
-                    <strong>{task.title}</strong>
-                    <p>{task.description}</p>
+              {milestone.tasks.map((task, taskIndex) => {
+                const taskKey = `${index}-${taskIndex}-${task.title}`;
+                const refined = refinedTasksById[taskKey];
+                const isRefining = Boolean(refiningTaskIds[taskKey]);
+                const error = refineTaskErrors[taskKey];
+                return (
+                  <div className="milestone-task" key={taskKey}>
+                    <div className="milestone-task-main">
+                      <div>
+                        <strong>{task.title}</strong>
+                        <p>{task.description}</p>
+                      </div>
+                      <span>{task.estimatedMinutes}m</span>
+                      <em className={`priority ${task.priority}`}>{t(`legacy.priority${capitalize(task.priority)}`)}</em>
+                      {task.dueDate ? <time>{task.dueDate}</time> : null}
+                    </div>
+                    <div className="plan-refinement-box">
+                      <label>
+                        <span>{t('legacy.refinementInstruction')}</span>
+                        <div className="refinement-input-wrap">
+                          <textarea
+                            value={goalTaskRefinementInputs[taskKey] ?? ''}
+                            onChange={(event) => setGoalTaskRefinementInput(taskKey, event.target.value)}
+                            placeholder={t('legacy.goalRefinementInstructionPlaceholder')}
+                          />
+                          {(goalTaskRefinementInputs[taskKey] ?? '').trim() && (
+                            <button
+                              type="button"
+                              className="refinement-clear-button"
+                              onClick={() => setGoalTaskRefinementInput(taskKey, '')}
+                              aria-label={t('legacy.clearRefinementInstruction')}
+                              title={t('legacy.clearRefinementInstruction')}
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                        </div>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => onRefineTask(taskKey, task)}
+                        disabled={isRefining}
+                      >
+                        <Sparkles size={14} />
+                        {isRefining
+                          ? t('legacy.refiningTask')
+                          : refined
+                            ? t('legacy.refineAgain')
+                            : t('legacy.refineTask')}
+                      </button>
+                    </div>
+                    {error && <p className="inline-status error">{error}</p>}
+                    {refined && (
+                      <RefinedTaskPreview
+                        refinedTask={refined}
+                        deleting={Boolean(deletingGoalTaskKeys[taskKey])}
+                        onDelete={() => onDeleteRefinement(taskKey)}
+                        t={t}
+                      />
+                    )}
                   </div>
-                  <span>{task.estimatedMinutes}m</span>
-                  <em className={`priority ${task.priority}`}>{t(`legacy.priority${capitalize(task.priority)}`)}</em>
-                  {task.dueDate ? <time>{task.dueDate}</time> : null}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </article>
         ))}

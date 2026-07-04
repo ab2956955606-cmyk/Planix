@@ -97,6 +97,104 @@ describe('agentFlowStore', () => {
     expect(serialized).toContain('structuredPlan');
   });
 
+  it('keeps model knowledge decision metadata from search_materials tool calls', () => {
+    agentFlowActions.resetFlow();
+
+    agentFlowActions.applyRuntimeEvent({
+      runId: 'runtime-model-decision',
+      sequence: 1,
+      type: 'tool',
+      nodeId: 'tool-materials',
+      nodeType: 'tool',
+      title: 'search_materials',
+      status: 'done',
+      toolCall: {
+        name: 'search_materials',
+        input: {
+          query: '我去新疆旅游',
+          modelKnowledgeDecision: {
+            shouldEnrich: true,
+            triggerReason: 'keyword_mismatch',
+            localSourceCount: 3,
+            relevantSourceCount: 0,
+            matchedKeywords: [],
+            missingKeywords: ['新疆', '旅游']
+          }
+        },
+        output: [{ title: 'Python notes' }],
+        latencyMs: 18,
+        writeMode: 'readonly'
+      }
+    });
+
+    const node = getAgentFlowSnapshot().nodes[0];
+    expect(node.toolCall?.modelKnowledgeDecision?.shouldEnrich).toBe(true);
+    expect(node.toolCall?.modelKnowledgeDecision?.triggerReason).toBe('keyword_mismatch');
+    expect(node.toolCall?.modelKnowledgeDecision?.missingKeywords).toEqual(['新疆', '旅游']);
+  });
+
+  it('keeps not-triggered model knowledge decisions without requiring enrichment nodes', () => {
+    agentFlowActions.resetFlow();
+
+    agentFlowActions.applyRuntimeEvent({
+      runId: 'runtime-model-skip',
+      sequence: 1,
+      type: 'tool',
+      nodeId: 'tool-materials',
+      nodeType: 'tool',
+      title: 'search_materials',
+      status: 'done',
+      toolCall: {
+        name: 'search_materials',
+        input: { query: '新疆旅游' },
+        output: {
+          modelKnowledgeDecision: {
+            shouldEnrich: false,
+            triggerReason: null,
+            localSourceCount: 2,
+            relevantSourceCount: 2,
+            matchedKeywords: ['新疆', '旅游'],
+            missingKeywords: []
+          }
+        },
+        latencyMs: 13,
+        writeMode: 'readonly'
+      }
+    });
+
+    const snapshot = getAgentFlowSnapshot();
+    expect(snapshot.nodes).toHaveLength(1);
+    expect(snapshot.nodes[0].toolCall?.modelKnowledgeDecision?.shouldEnrich).toBe(false);
+    expect(snapshot.nodes[0].toolCall?.modelKnowledgeDecision?.matchedKeywords).toEqual(['新疆', '旅游']);
+  });
+
+  it('keeps model knowledge call source type for degraded trace status', () => {
+    agentFlowActions.resetFlow();
+
+    agentFlowActions.applyRuntimeEvent({
+      runId: 'runtime-model-called',
+      sequence: 1,
+      type: 'tool',
+      nodeId: 'tool-model-knowledge',
+      nodeType: 'tool',
+      title: '大模型知识补全',
+      status: 'done',
+      toolCall: {
+        name: 'enrich_with_model_knowledge',
+        input: { triggerReason: 'insufficient_local_sources' },
+        output: {
+          title: '游泳入门知识',
+          sourceType: 'local_knowledge_template'
+        },
+        latencyMs: 24,
+        writeMode: 'readonly'
+      }
+    });
+
+    const node = getAgentFlowSnapshot().nodes[0];
+    expect(node.toolCall?.raw?.output).toMatchObject({ sourceType: 'local_knowledge_template' });
+  });
+
   it('shows explicit fallback notice in local demo mode', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('document', { documentElement: { lang: 'zh-CN' } });

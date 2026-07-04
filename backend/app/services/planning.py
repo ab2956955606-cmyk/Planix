@@ -5,6 +5,8 @@ from datetime import timedelta
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from ..db import get_conn, load_memory
 from ..errors import bad_request
 from ..schemas import (
@@ -16,6 +18,8 @@ from ..schemas import (
     PlanCreate,
     PlanOut,
     PlannerTask,
+    RefinedTask,
+    RefineTaskRequest,
     ReplanApplyRequest,
     ReplanTask,
     StructuredGoalPlan,
@@ -189,6 +193,110 @@ def _plan_to_dict(plan: PlanOut) -> dict[str, object]:
     return plan.model_dump(by_alias=True)
 
 
+def _positive_minutes(value: object, fallback: int = 60) -> int:
+    try:
+        minutes = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+    return minutes if minutes > 0 else fallback
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _refined_task_from_parsed(parsed: object, payload: RefineTaskRequest) -> RefinedTask:
+    if not isinstance(parsed, dict):
+        raise ValueError("refined task output must be a JSON object")
+    available_minutes = _positive_minutes(payload.available_minutes, 60)
+    data = {
+        "title": str(parsed.get("title") or "").strip(),
+        "objective": str(parsed.get("objective") or "").strip(),
+        "estimatedMinutes": _positive_minutes(parsed.get("estimatedMinutes") or parsed.get("estimated_minutes"), available_minutes),
+        "steps": _string_list(parsed.get("steps")),
+        "checklist": _string_list(parsed.get("checklist")),
+        "acceptanceCriteria": _string_list(parsed.get("acceptanceCriteria") or parsed.get("acceptance_criteria")),
+        "deliverable": str(parsed.get("deliverable") or "").strip(),
+        "risks": _string_list(parsed.get("risks")),
+        "fallbackTips": _string_list(parsed.get("fallbackTips") or parsed.get("fallback_tips")),
+        "mode": "llm",
+    }
+    return RefinedTask(**data)
+
+
+def _local_refined_task(payload: RefineTaskRequest, *, fallback_reason: str, error_type: str | None = None) -> RefinedTask:
+    minutes = _positive_minutes(payload.available_minutes, 60)
+    title = payload.task_title.strip()
+    description = payload.task_description.strip()
+    instruction = payload.refinement_instruction.strip()
+    is_english = payload.output_language == "en"
+    if is_english:
+        objective = description or f"Turn {title} into one concrete, finishable work session."
+        if instruction:
+            objective = f"{objective} Extra refinement request: {instruction}"
+        return RefinedTask(
+            title=title,
+            objective=objective,
+            estimatedMinutes=minutes,
+            steps=[
+                f"Spend the first 10 minutes clarifying what {title} must produce.",
+                "Work through the smallest practical example or exercise before expanding the scope.",
+                "Record the result, open questions, and the next smallest follow-up action.",
+            ],
+            checklist=[
+                "The task has a visible output.",
+                "The next action is clear if more work is needed.",
+            ],
+            acceptanceCriteria=[
+                "You can explain what was completed and point to the saved output.",
+            ],
+            deliverable=f"A short note or file that captures the result of {title}.",
+            risks=[
+                "The task may stay too broad if you do not define a concrete output first.",
+            ],
+            fallbackTips=[
+                "If stuck, reduce the task to a 15-minute practice step.",
+                "If information is missing, write the missing question before continuing.",
+            ],
+            mode="local_fallback",
+            fallbackReason=fallback_reason,
+            errorType=error_type,
+        )
+    objective = description or f"把“{title}”拆成一次可以完成的具体执行任务。"
+    if instruction:
+        objective = f"{objective} 额外细化要求：{instruction}"
+    return RefinedTask(
+        title=title,
+        objective=objective,
+        estimatedMinutes=minutes,
+        steps=[
+            f"先用 10 分钟明确“{title}”今天要产出的结果。",
+            "完成一个最小可执行练习或样例，先做出来再扩展细节。",
+            "记录完成内容、卡点和下一步最小行动。",
+        ],
+        checklist=[
+            "已经留下一个可检查的输出物。",
+            "如果还要继续，下一步行动已经写清楚。",
+        ],
+        acceptanceCriteria=[
+            "能说明本次完成了什么，并能指向保存下来的输出。",
+        ],
+        deliverable=f"一份关于“{title}”的结果记录、练习文件或检查清单。",
+        risks=[
+            "如果一开始不定义产出物，任务容易停留在泛泛学习。",
+        ],
+        fallbackTips=[
+            "卡住时，把任务缩小成 15 分钟内能完成的一步。",
+            "缺资料时，先写下具体问题，再决定是否查资料或请教他人。",
+        ],
+        mode="local_fallback",
+        fallbackReason=fallback_reason,
+        errorType=error_type,
+    )
+
+
 class PlanningService:
     def __init__(self):
         self.rag = RagService()
@@ -332,6 +440,73 @@ class PlanningService:
             errorType=error_type,
             errorMessage=error_message,
             baseUrlHost=base_url_host,
+        )
+
+    def refine_task(self, payload: RefineTaskRequest) -> RefinedTask:
+        if payload.date:
+            _parse_date(payload.date)
+        llm_client = LlmClient()
+        source_payload = [source.model_dump(by_alias=True) for source in payload.retrieved_sources[:4]]
+        llm_result, llm_error = llm_client.complete(
+            "planning_refine_task",
+            (
+                "You are a task refinement assistant. Return strict JSON only. "
+                "No markdown, no code fences, no commentary, no extra keys. "
+                'Required shape: {"title":"...","objective":"...","estimatedMinutes":60,'
+                '"steps":["...","...","..."],"checklist":["...","..."],'
+                '"acceptanceCriteria":["..."],"deliverable":"...","risks":[],"fallbackTips":[]}. '
+                "Refine only the selected task, not the whole goal plan. "
+                "Make the result concrete enough for one work session. "
+                "The output must use the requested outputLanguage: zh means Simplified Chinese; en means English. "
+                "Respect availableMinutes when provided. If refinementInstruction is present, combine it with "
+                "taskTitle, taskDescription, sources, and constraints; do not ignore the original task and do not "
+                "use the instruction alone. If refinementInstruction is empty, refine from the task content only. "
+                "Do not write data or claim the task was saved."
+            ),
+            _dump(
+                {
+                    "goal": payload.goal,
+                    "taskTitle": payload.task_title,
+                    "taskDescription": payload.task_description,
+                    "date": payload.date,
+                    "availableMinutes": payload.available_minutes,
+                    "userConstraints": payload.user_constraints,
+                    "retrievedSources": source_payload,
+                    "outputLanguage": payload.output_language,
+                    "refinementInstruction": payload.refinement_instruction,
+                }
+            ),
+            max_tokens=1800,
+            temperature=0.2,
+            timeout_seconds=min(max(llm_client.settings.timeout_seconds, 30), 60),
+            response_format_json=True,
+        )
+
+        parsed = _json_object(llm_result.content) if llm_result else None
+        if parsed:
+            try:
+                return _refined_task_from_parsed(parsed, payload)
+            except (ValidationError, ValueError):
+                return _local_refined_task(
+                    payload,
+                    fallback_reason="llm_error",
+                    error_type="invalid_model_output",
+                )
+
+        if llm_result and not parsed:
+            return _local_refined_task(
+                payload,
+                fallback_reason="llm_error",
+                error_type="invalid_model_output",
+            )
+        if llm_client.settings.provider == "mock":
+            return _local_refined_task(payload, fallback_reason="mock_provider")
+        if not llm_client.settings.has_api_key:
+            return _local_refined_task(payload, fallback_reason="missing_api_key")
+        return _local_refined_task(
+            payload,
+            fallback_reason="llm_error",
+            error_type=_safe_goal_error_type(llm_error.error_type if llm_error else "unknown"),
         )
 
     def create_daily_review(self, payload: DailyReviewRequest) -> DailyReviewOut:

@@ -1,13 +1,15 @@
 import { AIWorkspace } from '../components/AIWorkspace';
-import type { AppliedPlan, AppData, Language, PlannerTask } from '../types';
+import type { AppliedPlan, AppData, GoalPlanResponse, Language, Plan, RefinedTask } from '../types';
 
 interface GoalsPageProps {
   data: AppData;
   date: string;
   preferences: string;
   onPreferencesChange: (value: string) => void;
-  onApplyTasks: (tasks: PlannerTask[]) => void;
+  onApplyGoalPlanToCalendar: (plan: GoalPlanResponse) => Promise<{ created: number; updated: number; failed: number; otherDates: boolean }>;
   onReplanApplied: (plans: AppliedPlan[]) => void;
+  onCreateOrUpdateRefinedPlan: (input: { date: string; title: string; sourceKey: string; refinedTask: RefinedTask }) => Promise<Plan>;
+  onDeletePlanRefinedTask: (planId: string, date?: string) => Promise<Plan>;
   language: Language;
   t: (key: string) => string;
 }

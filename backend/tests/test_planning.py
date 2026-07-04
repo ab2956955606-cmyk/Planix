@@ -16,6 +16,19 @@ def _goal_payload() -> dict:
     }
 
 
+def _refine_payload() -> dict:
+    return {
+        "goal": "Learn Python for AI applications",
+        "taskTitle": "Practice Python conditionals and loops",
+        "taskDescription": "Build a small command-line exercise with if/else and for loops.",
+        "date": "2026-07-04",
+        "availableMinutes": 60,
+        "userConstraints": ["project-driven"],
+        "retrievedSources": [],
+        "outputLanguage": "en",
+    }
+
+
 def _settings(
     *,
     provider: str = "deepseek",
@@ -33,6 +46,12 @@ def _settings(
         timeout_seconds=timeout_seconds,
         updated_at="",
     )
+
+
+def _count_table(table: str) -> int:
+    with get_conn() as conn:
+        row = conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
+    return int(row["count"])
 
 
 def test_goal_plan_returns_and_persists_structured_mock_result(client):
@@ -557,3 +576,150 @@ def test_replan_apply_writes_ai_plans(client):
 
     listed = client.get("/api/plans", params={"date": "2026-07-02"}).json()
     assert [item["id"] for item in listed] == [created[0]["id"]]
+
+
+def test_refine_task_returns_local_fallback_without_key(client):
+    response = client.post("/api/planning/refine-task", json=_refine_payload())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "local_fallback"
+    assert body["fallbackReason"] == "missing_api_key"
+    assert body["title"] == _refine_payload()["taskTitle"]
+    assert body["estimatedMinutes"] == 60
+    assert len(body["steps"]) >= 3
+    assert len(body["checklist"]) >= 2
+    assert len(body["acceptanceCriteria"]) >= 1
+    assert body["deliverable"]
+
+
+def test_refine_task_requires_task_title(client):
+    payload = _refine_payload()
+    payload["taskTitle"] = "   "
+
+    response = client.post("/api/planning/refine-task", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_refine_task_llm_success_returns_valid_refinement(client, monkeypatch):
+    class SuccessClient:
+        settings = _settings()
+
+        def complete(self, *args, **kwargs):
+            return (
+                LlmResult(
+                    content=json.dumps(
+                        {
+                            "title": "Practice Python conditionals and loops",
+                            "objective": "Build confidence using if/else and loops in a small CLI exercise.",
+                            "estimatedMinutes": 55,
+                            "steps": [
+                                "Review if/else syntax with one tiny example.",
+                                "Write a loop that checks each item in a list.",
+                                "Combine both into a command-line scoring script.",
+                            ],
+                            "checklist": [
+                                "The script runs without syntax errors.",
+                                "At least two branches and one loop are used.",
+                            ],
+                            "acceptanceCriteria": [
+                                "The user can run the script and see different outputs for different inputs.",
+                            ],
+                            "deliverable": "A saved python_practice.py file.",
+                            "risks": ["Skipping the runnable example would make the task too abstract."],
+                            "fallbackTips": ["If stuck, start with a hard-coded list before adding input."],
+                        }
+                    ),
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                ),
+                None,
+            )
+
+    monkeypatch.setattr(planning_module, "LlmClient", lambda: SuccessClient())
+
+    response = client.post("/api/planning/refine-task", json=_refine_payload())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "llm"
+    assert body["fallbackReason"] is None
+    assert body["errorType"] is None
+    assert body["estimatedMinutes"] == 55
+    assert len(body["steps"]) == 3
+
+
+def test_refine_task_invalid_json_falls_back(client, monkeypatch):
+    class InvalidJsonClient:
+        settings = _settings()
+
+        def complete(self, *args, **kwargs):
+            return LlmResult(content="not json", provider="deepseek", model="deepseek-v4-flash"), None
+
+    monkeypatch.setattr(planning_module, "LlmClient", lambda: InvalidJsonClient())
+
+    response = client.post("/api/planning/refine-task", json=_refine_payload())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "local_fallback"
+    assert body["fallbackReason"] == "llm_error"
+    assert body["errorType"] == "invalid_model_output"
+
+
+def test_refine_task_missing_required_fields_falls_back(client, monkeypatch):
+    class TooShortClient:
+        settings = _settings()
+
+        def complete(self, *args, **kwargs):
+            return (
+                LlmResult(
+                    content=json.dumps(
+                        {
+                            "title": "",
+                            "objective": "",
+                            "estimatedMinutes": -5,
+                            "steps": ["Only one step"],
+                            "checklist": ["Only one check"],
+                            "acceptanceCriteria": [],
+                            "deliverable": "",
+                            "risks": [],
+                            "fallbackTips": [],
+                        }
+                    ),
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                ),
+                None,
+            )
+
+    monkeypatch.setattr(planning_module, "LlmClient", lambda: TooShortClient())
+
+    response = client.post("/api/planning/refine-task", json=_refine_payload())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "local_fallback"
+    assert body["fallbackReason"] == "llm_error"
+    assert body["errorType"] == "invalid_model_output"
+    assert body["estimatedMinutes"] == 60
+    assert len(body["steps"]) >= 3
+
+
+def test_refine_task_does_not_write_formal_data(client):
+    before = {
+        "plans": _count_table("plans"),
+        "planning_goals": _count_table("planning_goals"),
+        "documents": _count_table("documents"),
+    }
+
+    response = client.post("/api/planning/refine-task", json=_refine_payload())
+
+    after = {
+        "plans": _count_table("plans"),
+        "planning_goals": _count_table("planning_goals"),
+        "documents": _count_table("documents"),
+    }
+    assert response.status_code == 200
+    assert after == before

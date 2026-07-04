@@ -158,4 +158,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.
 
 ## Documentation Maintenance
 
-Update `README.md`, `AGENTS.md`, and `CLAUDE.md` whenever architecture, version, routes, UI shell, API behavior, database behavior, environment variables, AI strategy, packaging, release artifacts, screenshots, or portfolio positioning changes.
+Every completed implementation must update `README.md`, `AGENTS.md`, and `CLAUDE.md` before final reporting. Include relevant behavior, API/database changes, phase boundaries, and verification notes; do not record secrets, local API keys, or machine-specific credentials.
+
+Update these three files whenever architecture, version, routes, UI shell, API behavior, database behavior, environment variables, AI strategy, packaging, release artifacts, screenshots, or portfolio positioning changes.
+
+Current Calendar behavior includes a `Note` area on the Calendar panel, selected-day plan clearing, and full calendar plan clearing. Clearing plans deletes Calendar `plans` and their task refinements only; it must not delete notes/materials, Goals planning history, AI settings, documents, or API keys.

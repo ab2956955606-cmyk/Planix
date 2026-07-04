@@ -6,6 +6,21 @@ export type AppRoute = 'dashboard' | 'calendar' | 'notes' | 'goals' | 'settings'
 export type AgentFlowNodeType = 'input' | 'reasoning' | 'tool' | 'observation' | 'output';
 export type AgentFlowStatus = 'pending' | 'running' | 'done' | 'error';
 
+export type ModelKnowledgeTriggerReason =
+  | 'forced_by_user'
+  | 'insufficient_local_sources'
+  | 'keyword_mismatch'
+  | 'low_local_relevance';
+
+export interface ModelKnowledgeDecision {
+  shouldEnrich: boolean;
+  triggerReason?: ModelKnowledgeTriggerReason | null;
+  localSourceCount?: number;
+  relevantSourceCount?: number;
+  matchedKeywords?: string[];
+  missingKeywords?: string[];
+}
+
 export interface AgentToolCall {
   name: string;
   input: string;
@@ -13,6 +28,8 @@ export interface AgentToolCall {
   latencyMs: number;
   expanded: boolean;
   writeMode?: 'readonly' | 'preview';
+  modelKnowledgeDecision?: ModelKnowledgeDecision;
+  raw?: AgentRuntimeToolCall;
 }
 
 export interface AgentFlowDiff {
@@ -35,9 +52,12 @@ export interface AgentFlowNode {
 export interface AgentRunRequest {
   input: string;
   date: string;
-  preferences?: string;
+  preferences?: string | Record<string, unknown>;
   materials?: string;
   data?: Record<string, unknown>;
+  options?: {
+    forceModelKnowledge?: boolean;
+  };
 }
 
 export interface AgentRuntimeToolCall {
@@ -46,6 +66,11 @@ export interface AgentRuntimeToolCall {
   output?: unknown;
   latencyMs?: number;
   writeMode: 'readonly' | 'preview';
+  modelKnowledgeDecision?: ModelKnowledgeDecision;
+  raw?: {
+    input?: unknown;
+    output?: unknown;
+  };
 }
 
 export interface AgentRuntimeEvent {
@@ -92,6 +117,9 @@ export interface Plan {
   done: boolean;
   completion: string;
   source?: 'manual' | 'ai';
+  sourceKey?: string;
+  refinedTask?: RefinedTask | null;
+  refinedTaskUpdatedAt?: string | null;
 }
 
 export interface AppliedPlan extends Plan {
@@ -172,6 +200,19 @@ export interface RagDocumentInput {
   sourceType?: string;
 }
 
+export interface AiMaterialDraftRequest {
+  query: string;
+  outputLanguage?: 'zh' | 'en';
+}
+
+export interface AiMaterialDraft {
+  title: string;
+  content: string;
+  summary: string;
+  sourceType: 'model_knowledge' | 'local_knowledge_template';
+  caveat?: string;
+}
+
 export interface GoalPlanResponse {
   id: string;
   mode: 'mock' | 'llm';
@@ -186,6 +227,33 @@ export interface GoalPlanResponse {
   errorType?: string;
   errorMessage?: string;
   baseUrlHost?: string;
+}
+
+export interface RefineTaskRequest {
+  goal: string;
+  taskTitle: string;
+  taskDescription?: string;
+  date?: string;
+  availableMinutes?: number;
+  userConstraints?: string[];
+  retrievedSources?: RagSource[];
+  outputLanguage?: 'zh' | 'en';
+  refinementInstruction?: string;
+}
+
+export interface RefinedTask {
+  title: string;
+  objective: string;
+  estimatedMinutes: number;
+  steps: string[];
+  checklist: string[];
+  acceptanceCriteria: string[];
+  deliverable: string;
+  risks: string[];
+  fallbackTips: string[];
+  mode: 'llm' | 'local_fallback';
+  fallbackReason?: string;
+  errorType?: string;
 }
 
 export interface DailyReviewResponse {

@@ -18,6 +18,7 @@ export function DashboardPage(props: DashboardPageProps) {
   const { date, plans, preferences, inspector, onAgentStatusChange, onLog, t } = props;
   const [prompt, setPrompt] = useState('');
   const [output, setOutput] = useState(t('dashboard.outputReady'));
+  const [forceModelKnowledge, setForceModelKnowledge] = useState(false);
   const doneCount = plans.filter((plan) => plan.done).length;
   const pendingCount = plans.length - doneCount;
 
@@ -32,6 +33,9 @@ export function DashboardPage(props: DashboardPageProps) {
         input: value,
         date,
         preferences,
+        options: {
+          forceModelKnowledge
+        },
         data: {
           [date]: { plans }
         }
@@ -72,10 +76,21 @@ export function DashboardPage(props: DashboardPageProps) {
           </div>
           <div className="prompt-console">
             <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t('dashboard.promptPlaceholder')} />
-            <button onClick={runAgent} disabled={!prompt.trim()}>
-              <Send size={17} />
-              {t('dashboard.runAgent')}
-            </button>
+            <div className="prompt-actions">
+              <button
+                type="button"
+                className={`model-knowledge-toggle ${forceModelKnowledge ? 'active' : ''}`}
+                onClick={() => setForceModelKnowledge((value) => !value)}
+                aria-pressed={forceModelKnowledge}
+              >
+                <BrainCircuit size={17} />
+                {t('dashboard.forceModelKnowledge')}
+              </button>
+              <button onClick={runAgent} disabled={!prompt.trim()}>
+                <Send size={17} />
+                {t('dashboard.runAgent')}
+              </button>
+            </div>
           </div>
           <div className="agent-output">
             <span>{t('dashboard.outputTitle')}</span>

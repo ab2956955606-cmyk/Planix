@@ -1,6 +1,15 @@
 from fastapi import APIRouter
 
-from ..schemas import DailyReviewOut, DailyReviewRequest, GoalPlanOut, GoalPlanRequest, PlanOut, ReplanApplyRequest
+from ..schemas import (
+    DailyReviewOut,
+    DailyReviewRequest,
+    GoalPlanOut,
+    GoalPlanRequest,
+    PlanOut,
+    RefinedTask,
+    RefineTaskRequest,
+    ReplanApplyRequest,
+)
 from ..services.planning import PlanningService
 
 router = APIRouter(prefix="/api/planning", tags=["planning"])
@@ -16,6 +25,11 @@ def create_goal_plan(payload: GoalPlanRequest) -> GoalPlanOut:
 @router.post("/daily-review", response_model=DailyReviewOut)
 def create_daily_review(payload: DailyReviewRequest) -> DailyReviewOut:
     return planning.create_daily_review(payload)
+
+
+@router.post("/refine-task", response_model=RefinedTask)
+def refine_task(payload: RefineTaskRequest) -> RefinedTask:
+    return planning.refine_task(payload)
 
 
 @router.get("/daily-review", response_model=DailyReviewOut)

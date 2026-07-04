@@ -1,6 +1,6 @@
 import { CalendarPanel } from '../components/CalendarPanel';
 import { PlanList } from '../components/PlanList';
-import type { AppData, Language, Plan } from '../types';
+import type { AppData, Language, Plan, RefinedTask } from '../types';
 
 interface CalendarPageProps {
   lang: Language;
@@ -14,12 +14,17 @@ interface CalendarPageProps {
   onViewDateChange: (date: Date) => void;
   onSelectDate: (date: string) => void;
   onMonthNoteChange: (value: string) => void;
+  onClearSelectedDayPlans: (date: string) => Promise<{ deleted: number; failed: number }>;
+  onClearAllPlans: () => Promise<{ deleted: number }>;
   onDraftChange: (value: string) => void;
   onTimeChange: (value: string) => void;
   onAdd: () => void;
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
   onCompletionChange: (id: string, value: string) => void;
+  preferences: string;
+  onSavePlanRefinedTask: (planId: string, refinedTask: RefinedTask) => Promise<Plan>;
+  onDeletePlanRefinedTask: (planId: string) => Promise<Plan>;
   t: (key: string) => string;
 }
 
@@ -36,12 +41,17 @@ export function CalendarPage(props: CalendarPageProps) {
     onViewDateChange,
     onSelectDate,
     onMonthNoteChange,
+    onClearSelectedDayPlans,
+    onClearAllPlans,
     onDraftChange,
     onTimeChange,
     onAdd,
     onToggle,
     onDelete,
     onCompletionChange,
+    preferences,
+    onSavePlanRefinedTask,
+    onDeletePlanRefinedTask,
     t
   } = props;
 
@@ -56,6 +66,8 @@ export function CalendarPage(props: CalendarPageProps) {
         onViewDateChange={onViewDateChange}
         onSelectDate={onSelectDate}
         onMonthNoteChange={onMonthNoteChange}
+        onClearSelectedDayPlans={onClearSelectedDayPlans}
+        onClearAllPlans={onClearAllPlans}
         t={t}
       />
       <PlanList
@@ -70,6 +82,9 @@ export function CalendarPage(props: CalendarPageProps) {
         onToggle={onToggle}
         onDelete={onDelete}
         onCompletionChange={onCompletionChange}
+        preferences={preferences}
+        onSavePlanRefinedTask={onSavePlanRefinedTask}
+        onDeletePlanRefinedTask={onDeletePlanRefinedTask}
         t={t}
       />
     </section>

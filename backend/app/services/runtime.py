@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from ..db import get_conn, load_memory
 from ..schemas import AgentRunRequest, GoalPlanRequest, StructuredGoalPlan
+from .model_knowledge import enrich_with_model_knowledge
 from .plans import list_plans
 from .planning import PlanningService
 from .rag import RagService
@@ -18,6 +19,38 @@ from .structured_goal_plan import build_local_structured_plan, derive_planner_ta
 
 NodeType = str
 NodeStatus = str
+MIN_LOCAL_SOURCES = 2
+MIN_RELEVANT_SOURCES = 2
+MIN_CORE_KEYWORD_HITS = 1
+GENERIC_WEAK_KEYWORDS = {
+    "安全",
+    "计划",
+    "学习",
+    "项目",
+    "练习",
+    "目标",
+    "建议",
+    "方法",
+    "步骤",
+    "安排",
+    "时间",
+    "基础",
+    "入门",
+    "risk",
+    "plan",
+    "learn",
+    "learning",
+    "project",
+    "practice",
+    "goal",
+    "tips",
+    "method",
+    "steps",
+    "schedule",
+    "time",
+    "basic",
+    "beginner",
+}
 
 
 @dataclass(frozen=True)
@@ -100,9 +133,12 @@ class RuntimeContextPack:
     history_memory: RuntimeHistoryMemory
     today_plans: list[dict[str, object]]
     materials: list[dict[str, object]]
+    model_knowledge_materials: list[dict[str, object]]
     output_language: str
     raw_materials: str
     payload_data: dict[str, Any]
+    force_model_knowledge: bool
+    model_knowledge_decision: dict[str, object] = field(default_factory=dict)
 
     def memory_output(self) -> dict[str, object]:
         return {
@@ -118,6 +154,8 @@ class RuntimeContextPack:
             "historyMemory": self.history_memory.to_dict(),
             "todayPlans": self.today_plans,
             "materials": self.materials,
+            "modelKnowledgeMaterials": self.model_knowledge_materials,
+            "modelKnowledgeDecision": self.model_knowledge_decision,
             "outputLanguage": self.output_language,
         }
 
@@ -205,12 +243,13 @@ class MemorySystem:
 
     def get_context(self, payload: AgentRunRequest) -> RuntimeContextPack:
         saved_preferences = load_memory()
-        preference_memory = _merge_preference_memory(payload.preferences, saved_preferences)
+        payload_preferences = _preference_text(payload.preferences)
+        preference_memory = _merge_preference_memory(payload_preferences, saved_preferences)
         output_language = str(preference_memory.output_language or "zh")
-        explicit_constraints = _extract_constraints(" ".join([payload.input, payload.preferences]))
+        explicit_constraints = _extract_constraints(" ".join([payload.input, payload_preferences]))
         history_memory = _build_history_memory(
             goal=payload.input,
-            payload_preferences=payload.preferences,
+            payload_preferences=payload_preferences,
             saved_preferences=saved_preferences,
             recent_runs=self.repository.recent_summaries(),
             explicit_constraints=explicit_constraints,
@@ -223,9 +262,11 @@ class MemorySystem:
             history_memory=history_memory,
             today_plans=[],
             materials=[],
+            model_knowledge_materials=[],
             output_language=output_language if output_language in {"zh", "en"} else "zh",
             raw_materials=payload.materials[:3000],
             payload_data=payload.data,
+            force_model_knowledge=bool(getattr(payload.options, "force_model_knowledge", False)),
         )
 
 
@@ -272,7 +313,7 @@ class RuntimePlanner:
 
 
 class ToolRouter:
-    allowed_tools = {"search_materials", "get_today_plans", "get_memory", "propose_tasks"}
+    allowed_tools = {"search_materials", "get_today_plans", "get_memory", "enrich_with_model_knowledge", "propose_tasks"}
 
     def route(self, step: RuntimeStep) -> dict[str, object] | None:
         if not step.tool_name or step.tool_name not in self.allowed_tools:
@@ -304,8 +345,38 @@ class RuntimeToolExecutor:
             limit = _int_param(params.get("topK"), 3, minimum=1, maximum=8)
             query = build_material_search_query(context)
             context.materials = [source.model_dump(by_alias=True) for source in self.rag.retrieve(query, limit=limit)]
-            tool_call["input"] = {"query": query, "topK": limit}
+            decision = decide_model_knowledge_enrichment(
+                context.goal,
+                context.materials,
+                context.force_model_knowledge,
+            )
+            context.model_knowledge_decision = decision
+            tool_call["input"] = {"query": query, "topK": limit, "modelKnowledgeDecision": decision}
             return context.materials
+        if name == "enrich_with_model_knowledge":
+            trigger_reason = str(params.get("triggerReason") or "insufficient_local_sources")
+            decision = params.get("decision") if isinstance(params.get("decision"), dict) else context.model_knowledge_decision
+            summary = build_memory_context_summary(
+                context.goal,
+                context.preference_memory,
+                context.history_memory,
+                context.today_plans,
+            )
+            result = enrich_with_model_knowledge(
+                goal=context.goal,
+                output_language=context.output_language,
+                memory_context_summary=summary,
+                trigger_reason=trigger_reason,
+            )
+            material = _model_knowledge_material_for_context(result)
+            context.model_knowledge_materials = [*context.model_knowledge_materials, material]
+            tool_call["input"] = {
+                "goal": context.goal,
+                "triggerReason": trigger_reason,
+                "decision": decision,
+                "memoryContextSummary": summary,
+            }
+            return result
         if name == "propose_tasks":
             summary = build_memory_context_summary(
                 context.goal,
@@ -328,12 +399,15 @@ class RuntimeToolExecutor:
                 context.goal,
                 date=context.date,
                 daily_hours=daily_hours,
-                source_count=len(context.materials),
+                source_count=len([*context.materials, *context.model_knowledge_materials]),
             )
             tasks = [task.model_dump(by_alias=True) for task in plan.tasks] or [
                 task.model_dump(by_alias=True) for task in derive_planner_tasks(structured_plan)
             ]
-            sources = [source.model_dump(by_alias=True) for source in plan.sources] or context.materials
+            sources = [source.model_dump(by_alias=True) for source in plan.sources] or [
+                *context.materials,
+                *context.model_knowledge_materials,
+            ]
             tool_call["input"] = {
                 "goal": context.goal,
                 "date": context.date,
@@ -397,39 +471,23 @@ class RuntimeOrchestrator:
 
             tool_outputs: list[dict[str, object]] = []
             for step in steps[1:]:
-                routed = self.router.route(step)
-                if not routed:
-                    continue
-                yield stream.encode(
-                    stream.make_event(
-                        "node",
-                        nodeId=step.id,
-                        nodeType="tool",
-                        title=step.title,
-                        content="",
-                        status="running",
+                yield from self._execute_tool_step(stream, step, context, tool_outputs)
+                if step.tool_name == "search_materials":
+                    decision = context.model_knowledge_decision or decide_model_knowledge_enrichment(
+                        context.goal,
+                        context.materials,
+                        context.force_model_knowledge,
                     )
-                )
-                start = time.perf_counter()
-                output = self.tool_executor.execute(routed, context)
-                latency_ms = max(1, int((time.perf_counter() - start) * 1000))
-                tool_call = {
-                    **routed,
-                    "output": output,
-                    "latencyMs": latency_ms,
-                }
-                tool_outputs.append(tool_call)
-                yield stream.encode(
-                    stream.make_event(
-                        "tool",
-                        nodeId=step.id,
-                        nodeType="tool",
-                        title=step.title,
-                        status="done",
-                        toolCall=tool_call,
-                    )
-                )
-                yield stream.encode(stream.make_event("status", nodeId=step.id, status="done"))
+                    if decision.get("shouldEnrich"):
+                        trigger_reason = str(decision.get("triggerReason") or "insufficient_local_sources")
+                        enrich_step = RuntimeStep(
+                            id="tool-model-knowledge",
+                            node_type="tool",
+                            title="大模型知识补全",
+                            tool_name="enrich_with_model_knowledge",
+                            tool_input={"triggerReason": trigger_reason, "decision": decision},
+                        )
+                        yield from self._execute_tool_step(stream, enrich_step, context, tool_outputs)
 
             observation = self._observation(tool_outputs)
             yield stream.encode(
@@ -498,6 +556,47 @@ class RuntimeOrchestrator:
         )
         for chunk in _chunk_text(rendered):
             yield chunk
+
+    def _execute_tool_step(
+        self,
+        stream: StreamEngine,
+        step: RuntimeStep,
+        context: RuntimeContextPack,
+        tool_outputs: list[dict[str, object]],
+    ) -> Iterator[str]:
+        routed = self.router.route(step)
+        if not routed:
+            return
+        yield stream.encode(
+            stream.make_event(
+                "node",
+                nodeId=step.id,
+                nodeType="tool",
+                title=step.title,
+                content="",
+                status="running",
+            )
+        )
+        start = time.perf_counter()
+        output = self.tool_executor.execute(routed, context)
+        latency_ms = max(1, int((time.perf_counter() - start) * 1000))
+        tool_call = {
+            **routed,
+            "output": output,
+            "latencyMs": latency_ms,
+        }
+        tool_outputs.append(tool_call)
+        yield stream.encode(
+            stream.make_event(
+                "tool",
+                nodeId=step.id,
+                nodeType="tool",
+                title=step.title,
+                status="done",
+                toolCall=tool_call,
+            )
+        )
+        yield stream.encode(stream.make_event("status", nodeId=step.id, status="done"))
 
     def _observation(self, tool_outputs: list[dict[str, object]]) -> str:
         readonly = len([item for item in tool_outputs if item.get("writeMode") == "readonly"])
@@ -832,39 +931,113 @@ def _relevance_to_goal(goal: str, title: str, summary: str) -> str:
 
 
 def _goal_direct_terms(goal: str) -> list[str]:
-    text = str(goal or "")
-    lower = text.lower()
-    terms = [item for item in re.findall(r"[a-zA-Z][a-zA-Z0-9_+-]{1,}", lower) if len(item) >= 2]
-    domain_terms: list[str] = []
-    if any(token in text for token in ("游泳", "蛙泳", "漂浮", "换气", "水性")):
-        domain_terms.extend(["游泳", "蛙泳", "漂浮", "换气", "水性"])
-    if any(token in text for token in ("滑雪", "雪板", "犁式", "平行转弯")):
-        domain_terms.extend(["滑雪", "雪板", "犁式", "平行转弯"])
-    if "python" in lower or "编程" in text:
-        domain_terms.extend(["python", "编程"])
-    if "ai" in lower or "人工智能" in text or "实习" in text:
-        domain_terms.extend(["ai", "人工智能", "实习"])
-    if not domain_terms and text.strip():
-        domain_terms.append(_truncate_text(text, 24))
-    return _dedupe([*domain_terms, *terms])
+    groups = _goal_keyword_groups(goal)
+    return _dedupe([*groups["coreKeywords"], *groups["expandedKeywords"]])
 
 
 def _goal_search_terms(goal: str) -> list[str]:
+    groups = _goal_keyword_groups(goal)
+    expanded = groups["expandedKeywords"]
+    if any(token in expanded for token in ("蛙泳", "漂浮", "换气", "水性练习")):
+        return ["游泳入门", "蛙泳", "漂浮", "换气", "水性练习"]
+    if any(token in expanded for token in ("行程", "景点", "交通", "住宿")):
+        return ["旅行行程", "景点", "交通", "住宿", "预算", "安全"]
+    if any(token in expanded for token in ("实验", "反应", "方程式")):
+        return ["化学基础", "实验安全", "反应", "方程式"]
+    if any(token.lower() == "python" for token in groups["coreKeywords"]):
+        return ["Python", "语法", "项目实战", "数据处理"]
+    if any(token in expanded for token in ("AI 应用", "实习准备", "项目作品集")):
+        return ["AI 应用", "实习准备", "项目作品集"]
+    return expanded[:4]
+
+
+def _goal_keyword_groups(goal: str) -> dict[str, list[str]]:
     text = str(goal or "")
     lower = text.lower()
+    core: list[str] = []
+    expanded: list[str] = []
+
+    if any(token in text for token in ("新疆", "喀纳斯", "伊犁", "乌鲁木齐", "吐鲁番")):
+        core.append("新疆")
+    if any(token in text for token in ("旅游", "旅行", "出游", "行程", "景点")) or "travel" in lower:
+        core.append("旅游")
+        expanded.extend(["行程", "景点", "交通", "住宿", "预算", "安全"])
+    if "新疆" in core:
+        expanded.extend(["天山", "喀纳斯", "伊犁", "乌鲁木齐", "吐鲁番"])
     if any(token in text for token in ("游泳", "蛙泳", "漂浮", "换气", "水性")):
-        return ["游泳入门", "蛙泳", "漂浮", "换气", "水性练习"]
+        core.append("游泳")
+        expanded.extend(["漂浮", "换气", "水性", "水性练习", "蛙泳", "安全"])
+    if any(token in text for token in ("滑雪", "雪板", "犁式", "平行转弯")):
+        core.append("滑雪")
+        expanded.extend(["雪板", "犁式", "平行转弯", "雪道安全"])
     if "python" in lower:
-        return ["Python", "语法", "项目实战", "数据处理"]
+        core.append("python")
+        expanded.extend(["编程", "代码", "项目", "练习", "基础语法", "数据处理"])
+    if "化学" in text:
+        core.append("化学")
+        expanded.extend(["元素", "反应", "实验", "方程式", "有机", "无机", "酸碱", "分子", "原子"])
+    if "考研" in text or "英语" in text:
+        if "英语" in text:
+            core.append("英语")
+        expanded.extend(["词汇", "阅读", "写作", "真题", "复习"])
+    if "短视频" in text or "账号" in text:
+        core.append("短视频")
+        expanded.extend(["选题", "脚本", "拍摄", "剪辑", "发布", "复盘"])
     if "ai" in lower or "人工智能" in text or "实习" in text:
-        return ["AI 应用", "实习准备", "项目作品集"]
-    return []
+        if "ai" in lower:
+            core.append("ai")
+        if "人工智能" in text:
+            core.append("人工智能")
+        if "实习" in text:
+            core.append("实习")
+        expanded.extend(["AI 应用", "实习准备", "项目作品集"])
+
+    english_terms = [item for item in re.findall(r"[a-zA-Z][a-zA-Z0-9_+-]{1,}", lower) if len(item) >= 2]
+    core.extend(term for term in english_terms if term not in GENERIC_WEAK_KEYWORDS)
+    if not core:
+        core.extend(_fallback_goal_core_keywords(text))
+    return {
+        "coreKeywords": _dedupe([item for item in core if item]),
+        "expandedKeywords": _dedupe([item for item in expanded if item]),
+    }
+
+
+def _fallback_goal_core_keywords(text: str) -> list[str]:
+    cleaned = _clean_text(text)
+    if not cleaned:
+        return []
+    chunks = re.findall(r"[\u4e00-\u9fff]{2,}", cleaned)
+    stop_parts = (
+        "我要",
+        "我想",
+        "帮我",
+        "请",
+        "制定",
+        "规划",
+        "学习",
+        "学会",
+        "一个",
+        "一下",
+        "计划",
+    )
+    result: list[str] = []
+    for chunk in chunks:
+        value = chunk
+        for stop in stop_parts:
+            value = value.replace(stop, "")
+        if len(value) >= 2 and value not in GENERIC_WEAK_KEYWORDS:
+            result.append(_truncate_text(value, 12))
+    return result[:3] or [_truncate_text(cleaned, 16)]
 
 
 def _goal_domain(text: str) -> str:
     value = str(text or "").lower()
+    if any(token in value for token in ("新疆", "旅游", "旅行", "行程", "景点", "喀纳斯", "伊犁", "乌鲁木齐", "吐鲁番")):
+        return "travel"
     if any(token in value for token in ("游泳", "蛙泳", "漂浮", "换气", "水性", "滑雪", "雪板", "犁式", "平行转弯")):
         return "sport_skill"
+    if any(token in value for token in ("化学", "元素", "反应", "实验", "方程式", "有机", "无机", "酸碱", "分子", "原子")):
+        return "chemistry"
     if any(token in value for token in ("python", "编程", "代码", "fastapi", "javascript", "react")):
         return "programming"
     if any(token in value for token in ("ai", "人工智能", "大模型", "实习", "rag", "agent")):
@@ -918,6 +1091,8 @@ def _planning_materials(context: RuntimeContextPack) -> str:
         {
             "rawMaterials": context.raw_materials,
             "retrievedSources": context.materials,
+            "modelKnowledgeMaterials": context.model_knowledge_materials,
+            "modelKnowledgeDecision": context.model_knowledge_decision,
             "contextPack": context.to_dict(),
         },
         ensure_ascii=False,
@@ -928,6 +1103,123 @@ def _runtime_fallback_reason(value: str | None) -> str | None:
     if value == "mock_provider":
         return "local_provider"
     return value
+
+
+def _preference_text(value: str | dict[str, Any]) -> str:
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value or "")
+
+
+def decide_model_knowledge_enrichment(
+    goal: str,
+    local_sources: list[dict[str, object]],
+    force_model_knowledge: bool = False,
+) -> dict[str, object]:
+    keywords = _goal_keyword_groups(goal)
+    core_keywords = keywords["coreKeywords"]
+    expanded_keywords = keywords["expandedKeywords"]
+    matched_keywords: list[str] = []
+    relevant_source_count = 0
+    core_keyword_hits = 0
+    strong_expanded_hits = 0
+
+    for source in local_sources:
+        source_matches = _source_keyword_matches(source, core_keywords, expanded_keywords)
+        matched_keywords.extend(source_matches["matched"])
+        core_keyword_hits += len(source_matches["core"])
+        strong_expanded_hits += len(source_matches["strongExpanded"])
+        if source_matches["isRelevant"]:
+            relevant_source_count += 1
+
+    matched_keywords = _dedupe(matched_keywords)
+    missing_keywords = [
+        keyword
+        for keyword in [*core_keywords, *expanded_keywords]
+        if keyword not in matched_keywords and keyword not in GENERIC_WEAK_KEYWORDS
+    ][:8]
+    local_source_count = len(local_sources)
+    trigger_reason: str | None = None
+    should_enrich = False
+
+    if force_model_knowledge:
+        should_enrich = True
+        trigger_reason = "forced_by_user"
+    elif local_source_count < MIN_LOCAL_SOURCES:
+        should_enrich = True
+        trigger_reason = "insufficient_local_sources"
+    elif core_keyword_hits == 0 and strong_expanded_hits == 0:
+        should_enrich = True
+        trigger_reason = "keyword_mismatch"
+    elif core_keyword_hits < MIN_CORE_KEYWORD_HITS or relevant_source_count < MIN_RELEVANT_SOURCES:
+        should_enrich = True
+        trigger_reason = "low_local_relevance"
+
+    return {
+        "shouldEnrich": should_enrich,
+        "triggerReason": trigger_reason,
+        "localSourceCount": local_source_count,
+        "relevantSourceCount": relevant_source_count,
+        "matchedKeywords": matched_keywords[:12],
+        "missingKeywords": missing_keywords,
+    }
+
+
+def _source_keyword_matches(
+    source: dict[str, object],
+    core_keywords: list[str],
+    expanded_keywords: list[str],
+) -> dict[str, object]:
+    text = _source_search_text(source)
+    core_matches = [keyword for keyword in core_keywords if _keyword_in_text(keyword, text)]
+    expanded_matches = [keyword for keyword in expanded_keywords if _keyword_in_text(keyword, text)]
+    weak_matches = [keyword for keyword in GENERIC_WEAK_KEYWORDS if _keyword_in_text(keyword, text)]
+    strong_expanded = [keyword for keyword in expanded_matches if keyword not in GENERIC_WEAK_KEYWORDS]
+    is_relevant = bool(core_matches) or len(strong_expanded) >= 2
+    return {
+        "core": _dedupe(core_matches),
+        "strongExpanded": _dedupe(strong_expanded),
+        "matched": _dedupe([*core_matches, *strong_expanded, *weak_matches]),
+        "isRelevant": is_relevant,
+    }
+
+
+def _source_search_text(source: dict[str, object]) -> str:
+    values = [
+        source.get("title"),
+        source.get("summary"),
+        source.get("chunk"),
+        source.get("snippet"),
+        source.get("content"),
+        source.get("description"),
+    ]
+    return _clean_text(" ".join(str(value or "") for value in values)).lower()
+
+
+def _keyword_in_text(keyword: str, text: str) -> bool:
+    value = str(keyword or "").strip().lower()
+    return bool(value and value in text)
+
+
+def _model_knowledge_material_for_context(output: dict[str, object]) -> dict[str, object]:
+    title = str(output.get("title") or "大模型知识补全")
+    summary = str(output.get("summary") or "")
+    suggestions = output.get("suggestions")
+    if isinstance(suggestions, list) and suggestions:
+        suggestion_text = "；".join(str(item) for item in suggestions[:5])
+        chunk = f"{summary} 建议：{suggestion_text}".strip()
+    else:
+        chunk = summary
+    return {
+        "documentId": "model-knowledge",
+        "title": title,
+        "chunk": chunk,
+        "score": float(output.get("relevance") or 0.68),
+        "chunkIndex": 0,
+        "sourceType": output.get("sourceType") or "model_knowledge",
+        "triggerReason": output.get("triggerReason"),
+        "caveat": output.get("caveat"),
+    }
 
 
 def _tool_output_list(tool_outputs: list[dict[str, object]], name: str) -> list[Any]:
@@ -941,7 +1233,14 @@ def _tool_output_list(tool_outputs: list[dict[str, object]], name: str) -> list[
 
 def _sources_from_tool_outputs(tool_outputs: list[dict[str, object]]) -> list[dict[str, Any]]:
     sources = _tool_output_list(tool_outputs, "search_materials")
-    return [source for source in sources if isinstance(source, dict)]
+    result = [source for source in sources if isinstance(source, dict)]
+    for item in tool_outputs:
+        if item.get("name") != "enrich_with_model_knowledge":
+            continue
+        output = item.get("output")
+        if isinstance(output, dict):
+            result.append(_model_knowledge_material_for_context(output))
+    return result
 
 
 def _proposal_from_tool_outputs(tool_outputs: list[dict[str, object]]) -> dict[str, Any] | None:

@@ -1,7 +1,15 @@
 from fastapi import APIRouter
 
-from ..schemas import PlanCreate, PlanOut, PlanUpdate
-from ..services.plans import create_plan, delete_plan, list_plans, update_plan
+from ..schemas import PlanCreate, PlanOut, PlanRefinedTaskUpdate, PlanUpdate
+from ..services.plans import (
+    create_plan,
+    delete_all_plans,
+    delete_plan,
+    delete_plan_refined_task,
+    list_plans,
+    save_plan_refined_task,
+    update_plan,
+)
 
 router = APIRouter(prefix="/api/plans", tags=["plans"])
 
@@ -19,6 +27,21 @@ def post_plan(payload: PlanCreate) -> PlanOut:
 @router.patch("/{plan_id}", response_model=PlanOut)
 def patch_plan(plan_id: str, payload: PlanUpdate) -> PlanOut:
     return update_plan(plan_id, payload)
+
+
+@router.patch("/{plan_id}/refined-task", response_model=PlanOut)
+def patch_plan_refined_task(plan_id: str, payload: PlanRefinedTaskUpdate) -> PlanOut:
+    return save_plan_refined_task(plan_id, payload)
+
+
+@router.delete("/{plan_id}/refined-task", response_model=PlanOut)
+def remove_plan_refined_task(plan_id: str) -> PlanOut:
+    return delete_plan_refined_task(plan_id)
+
+
+@router.delete("/all")
+def remove_all_plans() -> dict[str, int]:
+    return {"deleted": delete_all_plans()}
 
 
 @router.delete("/{plan_id}", status_code=204)

@@ -522,8 +522,42 @@ select:focus {
 .workflow-head,
 .settings-title {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
+}
+
+.section-action-button {
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: rgba(109, 94, 246, 0.2);
+  color: #ddd6fe;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.note-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.section-action-button.danger {
+  background: rgba(220, 38, 38, 0.16);
+  color: #fecaca;
 }
 
 .panel-head h2,
@@ -563,6 +597,12 @@ select:focus {
   gap: 10px;
 }
 
+.prompt-actions {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
 .prompt-console textarea {
   min-height: 112px;
   padding: 12px;
@@ -580,6 +620,19 @@ select:focus {
   border-radius: 10px;
   background: #6d5ef6;
   color: #ffffff;
+}
+
+.prompt-console .model-knowledge-toggle {
+  background: rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+.prompt-console .model-knowledge-toggle.active {
+  background: rgba(109, 94, 246, 0.22);
+  color: #ffffff;
+  border-color: rgba(109, 94, 246, 0.55);
+  box-shadow: 0 0 18px rgba(109, 94, 246, 0.22);
 }
 
 .agent-output {
@@ -855,6 +908,82 @@ select:focus {
 .tool-call-detail {
   display: grid;
   gap: 8px;
+}
+
+.model-knowledge-status {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(109, 94, 246, 0.22);
+  background: rgba(109, 94, 246, 0.08);
+}
+
+.model-knowledge-status.triggered,
+.model-knowledge-status.called {
+  border-color: rgba(109, 94, 246, 0.36);
+  box-shadow: inset 0 0 18px rgba(109, 94, 246, 0.08);
+}
+
+.model-knowledge-status.idle {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.model-knowledge-status.degraded {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.model-knowledge-status.failed {
+  border-color: rgba(255, 69, 58, 0.38);
+  background: rgba(255, 69, 58, 0.08);
+}
+
+.model-knowledge-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #dbeafe;
+}
+
+.model-knowledge-status-head span {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.model-knowledge-status-head strong {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(109, 94, 246, 0.16);
+  color: #ffffff;
+  font-size: 11px;
+}
+
+.model-knowledge-status-grid {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr);
+  gap: 6px 10px;
+  align-items: start;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.model-knowledge-status-grid span {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.model-knowledge-status-grid b {
+  color: #e2e8f0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .tool-call-detail span,
@@ -1287,6 +1416,75 @@ select:focus {
   overflow-wrap: anywhere;
 }
 
+.plan-refinement-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(11, 15, 23, 0.42);
+}
+
+.plan-refinement-box label {
+  display: grid;
+  gap: 5px;
+}
+
+.plan-refinement-box span {
+  color: #a5b4fc;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.plan-refinement-box textarea {
+  min-height: 42px;
+  padding: 9px;
+  resize: vertical;
+}
+
+.refinement-input-wrap {
+  position: relative;
+}
+
+.refinement-input-wrap textarea {
+  width: 100%;
+  padding-right: 36px;
+}
+
+.refinement-clear-button {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 24px;
+  min-height: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 7px;
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+}
+
+.plan-refinement-box button {
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: rgba(8, 145, 178, 0.16);
+  color: #bae6fd;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.plan-refinement-box .refinement-clear-button {
+  width: 24px;
+  min-height: 24px;
+  height: 24px;
+  padding: 0;
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+}
+
 .completion-box textarea {
   min-height: 58px;
   padding: 10px;
@@ -1469,6 +1667,42 @@ select:focus {
   color: #64748b;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.ai-material-draft {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(109, 94, 246, 0.22);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.ai-material-draft div {
+  display: grid;
+  gap: 6px;
+}
+
+.ai-material-draft span {
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ai-material-draft input {
+  min-height: 42px;
+  padding: 10px 12px;
+}
+
+.ai-material-draft button {
+  justify-content: center;
+  min-height: 42px;
+  align-self: end;
+  padding: 0 13px;
+  border-radius: 10px;
+  background: #6d5ef6;
+  color: #ffffff;
 }
 
 .memory-management {
@@ -1666,6 +1900,23 @@ select:focus {
   font-size: 16px;
 }
 
+.structured-plan-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.structured-plan-actions button {
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: rgba(109, 94, 246, 0.18);
+  color: #ddd6fe;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .milestone-list {
   display: grid;
   gap: 10px;
@@ -1716,19 +1967,99 @@ select:focus {
 
 .milestone-task {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
-  align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 10px;
   border-radius: 10px;
   background: rgba(11, 15, 23, 0.52);
 }
 
-.milestone-task > span,
+.milestone-task-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.milestone-task-main > span,
 .milestone-task time {
   color: #67e8f9;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.refine-task-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(103, 232, 249, 0.28);
+  border-radius: 8px;
+  background: rgba(8, 145, 178, 0.12);
+  color: #bae6fd;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.refine-task-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.refined-task-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(103, 232, 249, 0.16);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.refined-task-panel-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: start;
+  gap: 10px;
+}
+
+.refined-task-delete {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.refined-task-summary,
+.refined-task-section {
+  display: grid;
+  gap: 5px;
+}
+
+.refined-task-summary span,
+.refined-task-section strong {
+  color: #a5b4fc;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.refined-task-summary p,
+.refined-task-section p,
+.refined-task-section li {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.refined-task-summary strong {
+  color: #67e8f9;
+  font-size: 12px;
+}
+
+.refined-task-section ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
 }
 
 .priority {
@@ -1850,6 +2181,7 @@ select:focus {
   }
 
   .prompt-console,
+  .ai-material-draft,
   .ai-grid,
   .settings-grid,
   .inspector-panel,
@@ -1876,12 +2208,18 @@ select:focus {
   }
 
   .structured-plan-head,
-  .milestone-task {
+  .milestone-task-main,
+  .plan-refinement-box {
     grid-template-columns: 1fr;
   }
 
   .structured-plan-head {
     display: grid;
+  }
+
+  .structured-plan-actions {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .milestone-task {

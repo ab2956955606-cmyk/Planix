@@ -8,6 +8,10 @@ The current focus is **Phase 3.5: Planning Intelligence + Grounded RAG**. The go
 
 The project is fully named Planix across frontend, backend, desktop, sidecar, installer, database path, environment variables, and documentation.
 
+## Documentation Maintenance
+
+Every completed implementation must update `README.md`, `AGENTS.md`, and `CLAUDE.md` before final reporting. Record relevant behavior, API/database changes, phase boundaries, and verification notes, but never record secrets, local API keys, Authorization headers, or machine-specific credentials.
+
 ## Stack
 
 - `apps/web`: React 18 + TypeScript + Vite
@@ -101,7 +105,7 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - `apps/web/src/components/agent/flow/AgentFlowTrace.tsx`: Agent execution observability panel
 - `apps/web/src/store/agentFlowStore.ts`: Runtime event consumer with demo fallback
 - `apps/web/src/components/AIWorkspace.tsx`: Notes, Goals, and Settings feature sections
-- `apps/web/src/components/CalendarPanel.tsx`: calendar and month note UI
+- `apps/web/src/components/CalendarPanel.tsx`: calendar, note UI, selected-day clearing, and full calendar plan clearing
 - `apps/web/src/components/PlanList.tsx`: daily task UI
 - `apps/web/src/lib/api.ts`: API and Tauri IPC proxy client
 - `apps/desktop/src-tauri/src/main.rs`: Tauri startup, sidecar lifecycle, health preflight, IPC proxy

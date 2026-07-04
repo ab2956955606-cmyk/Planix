@@ -1,6 +1,12 @@
 import { useSyncExternalStore } from 'react';
 import { runAgentRuntime } from '../lib/api';
-import type { AgentFlowNode, AgentRunRequest, AgentRuntimeEvent, AgentRuntimeToolCall } from '../types';
+import type {
+  AgentFlowNode,
+  AgentRunRequest,
+  AgentRuntimeEvent,
+  AgentRuntimeToolCall,
+  ModelKnowledgeDecision
+} from '../types';
 
 type AgentFlowState = {
   nodes: AgentFlowNode[];
@@ -303,7 +309,9 @@ function runtimeToolToFlowTool(toolCall: AgentRuntimeToolCall) {
     output: runtimeToolOutputToText(toolCall),
     latencyMs: toolCall.latencyMs ?? 0,
     expanded: true,
-    writeMode: toolCall.writeMode
+    writeMode: toolCall.writeMode,
+    modelKnowledgeDecision: extractModelKnowledgeDecision(toolCall),
+    raw: toolCall
   };
 }
 
@@ -357,6 +365,38 @@ function formatProposalToolOutput(output: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function extractModelKnowledgeDecision(toolCall: AgentRuntimeToolCall): ModelKnowledgeDecision | undefined {
+  const candidates = [
+    toolCall.modelKnowledgeDecision,
+    isRecord(toolCall.output) ? toolCall.output.modelKnowledgeDecision : undefined,
+    isRecord(toolCall.input) ? toolCall.input.modelKnowledgeDecision : undefined,
+    isRecord(toolCall.raw?.output) ? toolCall.raw.output.modelKnowledgeDecision : undefined,
+    isRecord(toolCall.raw?.input) ? toolCall.raw.input.modelKnowledgeDecision : undefined
+  ];
+  for (const candidate of candidates) {
+    if (!isRecord(candidate) || typeof candidate.shouldEnrich !== 'boolean') continue;
+    return {
+      shouldEnrich: candidate.shouldEnrich,
+      triggerReason: typeof candidate.triggerReason === 'string'
+        ? candidate.triggerReason as ModelKnowledgeDecision['triggerReason']
+        : null,
+      localSourceCount: numberOrUndefined(candidate.localSourceCount),
+      relevantSourceCount: numberOrUndefined(candidate.relevantSourceCount),
+      matchedKeywords: stringArrayOrUndefined(candidate.matchedKeywords),
+      missingKeywords: stringArrayOrUndefined(candidate.missingKeywords)
+    };
+  }
+  return undefined;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stringArrayOrUndefined(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : undefined;
 }
 
 function ensureRuntimeRun(event: AgentRuntimeEvent): boolean {
