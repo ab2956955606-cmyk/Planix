@@ -22,6 +22,7 @@ The project is fully named Planix across frontend, backend, desktop, sidecar, in
 - AI client: DeepSeek-first OpenAI-compatible client with local structured fallback
 - Planning: `StructuredGoalPlan` schema in `backend/app/schemas.py`, helper logic in `backend/app/services/structured_goal_plan.py`
 - Runtime: `/api/runtime/run` streams NDJSON events from Planner, Memory, Tool Router, Stream Engine, and Runtime Orchestrator
+- Maintenance: `/api/settings/ai-memory-cache/*` and related Settings maintenance endpoints clear AI memory/cache without touching formal user data
 - RAG: SQLite FTS5/BM25, not Chroma/FAISS
 - Sidecar: FastAPI packaged with PyInstaller as `planix-api.exe`
 
@@ -140,8 +141,29 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - `propose_tasks` returns preview-only `structuredPlan`, tasks, sources, diagnostics, and `memoryContextSummary`.
 - `propose_tasks` must not write to `plans`, Goals, Calendar, or Notes; automatic writes are reserved for a later confirmed phase.
 - `structuredPlan` drives Runtime preview and final output rendering.
+- Runtime must clean Context Pack history before retrieval and planning. `historyMemory.recentProgress` should be compressed to `{ title, summary, relevanceToGoal }` objects, `search_materials.input.query` should be short and goal-focused, and `memoryContextSummary` should never include full historical Markdown.
+- Medium-relevance history can inform the memory summary, but should not enter material search unless it shares clear goal-domain keywords.
 - Rust `stream_agent_runtime` must remain a thin pass-through bridge.
 - If true LLM streaming is unavailable, do not split a completed LLM response into fake token chunks; use Runtime step events plus final output or local structured fallback.
+
+## Settings Maintenance
+
+Settings has a "Memory & Runtime Data" maintenance area backed by these endpoints:
+
+- `GET /api/settings/ai-memory-cache/stats`
+- `DELETE /api/settings/memory/preferences`
+- `DELETE /api/settings/memory/history`
+- `DELETE /api/settings/runtime/runs`
+- `DELETE /api/settings/planning/history`
+- `DELETE /api/settings/ai-memory-cache`
+
+Rules:
+
+- Clearing preference memory only removes Runtime preference memory and must not alter API Key, provider, model, or Base URL.
+- Clearing history memory only clears `agent_runs.output_summary`; it does not delete `agent_runs` or `agent_events`.
+- Clearing Runtime runs deletes `agent_events` before `agent_runs`.
+- Clearing planning history deletes `planning_goals`, which is planning history/cache only.
+- All maintenance actions must preserve formal `plans`, Calendar, Notes, documents, and AI settings.
 
 ## Verification Commands
 

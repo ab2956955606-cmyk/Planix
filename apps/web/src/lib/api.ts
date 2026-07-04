@@ -9,6 +9,8 @@ import type {
   DailyReviewResponse,
   GoalPlanResponse,
   Language,
+  MemoryCacheStats,
+  MemoryResetResult,
   Plan,
   PlannerResponse,
   PlannerTask,
@@ -534,6 +536,30 @@ export async function saveMemory(preferences: string): Promise<void> {
   } catch {
     return;
   }
+}
+
+export async function fetchMemoryCacheStats(): Promise<MemoryCacheStats> {
+  return callApi<MemoryCacheStats>('GET', '/api/settings/ai-memory-cache/stats');
+}
+
+export async function clearPreferenceMemory(): Promise<MemoryResetResult> {
+  return callApi<MemoryResetResult>('DELETE', '/api/settings/memory/preferences');
+}
+
+export async function clearHistoryMemory(): Promise<MemoryResetResult> {
+  return callApi<MemoryResetResult>('DELETE', '/api/settings/memory/history');
+}
+
+export async function clearRuntimeRuns(): Promise<MemoryResetResult> {
+  return callApi<MemoryResetResult>('DELETE', '/api/settings/runtime/runs');
+}
+
+export async function clearPlanningHistory(): Promise<MemoryResetResult> {
+  return callApi<MemoryResetResult>('DELETE', '/api/settings/planning/history');
+}
+
+export async function clearAiMemoryCache(): Promise<MemoryResetResult> {
+  return callApi<MemoryResetResult>('DELETE', '/api/settings/ai-memory-cache');
 }
 
 export async function evaluatePlanner(payload: AiPayload): Promise<PlannerResponse> {

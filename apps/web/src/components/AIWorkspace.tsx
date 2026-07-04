@@ -21,6 +21,8 @@ import type {
   AppData,
   DailyReviewResponse,
   GoalPlanResponse,
+  MemoryCacheStats,
+  MemoryResetResult,
   PlannerResponse,
   PlannerTask,
   RagDocument,
@@ -40,7 +42,13 @@ import {
   evaluatePlanner,
   fetchAiSettings,
   fetchDailyReview,
+  fetchMemoryCacheStats,
   fetchRagDocuments,
+  clearAiMemoryCache,
+  clearHistoryMemory,
+  clearPlanningHistory,
+  clearPreferenceMemory,
+  clearRuntimeRuns,
   saveAiSettings,
   saveMemory,
   testAiSettings,
@@ -48,6 +56,7 @@ import {
 } from '../lib/api';
 
 type WorkspaceSection = 'all' | 'notes' | 'goals' | 'settings';
+type MemoryResetAction = 'preferences' | 'history' | 'runtime' | 'planning' | 'all';
 
 interface AIWorkspaceProps {
   data: AppData;
@@ -134,6 +143,10 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   const [settingsStatus, setSettingsStatus] = useState('');
   const [settingsBusy, setSettingsBusy] = useState<'save' | 'test' | 'clear' | ''>('');
   const [reviewStatus, setReviewStatus] = useState('');
+  const [memoryStats, setMemoryStats] = useState<MemoryCacheStats | null>(null);
+  const [memoryResetResult, setMemoryResetResult] = useState<MemoryResetResult | null>(null);
+  const [memoryResetStatus, setMemoryResetStatus] = useState('');
+  const [memoryResetBusy, setMemoryResetBusy] = useState<MemoryResetAction | ''>('');
 
   const payload = { goal, deadline, dailyHours, materials, preferences, date, data };
   const showSettings = section === 'all' || section === 'settings';
@@ -187,6 +200,19 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       .then(setDailyReview)
       .catch(() => setDailyReview(null));
   }, [date]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    void refreshMemoryStats();
+  }, [showSettings]);
+
+  async function refreshMemoryStats() {
+    try {
+      setMemoryStats(await fetchMemoryCacheStats());
+    } catch {
+      setMemoryStats(null);
+    }
+  }
 
   async function saveMaterial() {
     const content = docContent.trim();
@@ -298,6 +324,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       if (action === 'eval') setUtilityResult(await evaluatePlanner(payload));
       if (action === 'memory') {
         await saveMemory(preferences);
+        await refreshMemoryStats();
         setUtilityResult({ summary: t('legacy.saved') });
       }
     } finally {
@@ -450,6 +477,38 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     }
   }
 
+  async function runMemoryReset(action: MemoryResetAction) {
+    const stats = memoryStats ?? await fetchMemoryCacheStats().catch(() => null);
+    const confirmText = memoryResetConfirmText(action, stats, t);
+    if (!window.confirm(confirmText)) return;
+
+    const calls: Record<MemoryResetAction, () => Promise<MemoryResetResult>> = {
+      preferences: clearPreferenceMemory,
+      history: clearHistoryMemory,
+      runtime: clearRuntimeRuns,
+      planning: clearPlanningHistory,
+      all: clearAiMemoryCache
+    };
+    setMemoryResetBusy(action);
+    setMemoryResetStatus('');
+    try {
+      const result = await calls[action]();
+      setMemoryResetResult(result);
+      setMemoryStats(result.after);
+      setMemoryResetStatus(memoryResetStatusText(action, result, t));
+    } catch (err) {
+      if (err instanceof ApiNetworkError) {
+        setMemoryResetStatus(err.message || t('legacy.backendConnectionFailed'));
+      } else if (err instanceof ApiHttpError) {
+        setMemoryResetStatus(`${t('legacy.memoryResetFailed')} (${err.status})`);
+      } else {
+        setMemoryResetStatus(t('legacy.memoryResetFailed'));
+      }
+    } finally {
+      setMemoryResetBusy('');
+    }
+  }
+
   return (
     <section className="surface ai-panel">
       <div className="section-head">
@@ -476,13 +535,24 @@ export function AIWorkspace(props: AIWorkspaceProps) {
             t={t}
           />
           {section === 'settings' && (
-            <PreferenceCard
-              preferences={preferences}
-              onPreferencesChange={onPreferencesChange}
-              onSave={() => runUtility('memory')}
-              saving={loading === 'memory'}
-              t={t}
-            />
+            <>
+              <PreferenceCard
+                preferences={preferences}
+                onPreferencesChange={onPreferencesChange}
+                onSave={() => runUtility('memory')}
+                saving={loading === 'memory'}
+                t={t}
+              />
+              <MemoryDataManagement
+                stats={memoryStats}
+                result={memoryResetResult}
+                status={memoryResetStatus}
+                busy={memoryResetBusy}
+                onRefresh={refreshMemoryStats}
+                onReset={runMemoryReset}
+                t={t}
+              />
+            </>
           )}
         </>
       )}
@@ -837,6 +907,118 @@ function PreferenceCard(props: {
       </label>
     </div>
   );
+}
+
+function MemoryDataManagement(props: {
+  stats: MemoryCacheStats | null;
+  result: MemoryResetResult | null;
+  status: string;
+  busy: MemoryResetAction | '';
+  onRefresh: () => void;
+  onReset: (action: MemoryResetAction) => void;
+  t: (key: string) => string;
+}) {
+  const { stats, result, status, busy, onRefresh, onReset, t } = props;
+  const rows: Array<[string, number | string]> = [
+    [t('legacy.memoryStatPreferences'), stats?.preferenceMemory ?? '-'],
+    [t('legacy.memoryStatHistory'), stats?.historySummaries ?? '-'],
+    [t('legacy.memoryStatAgentRuns'), stats?.agentRuns ?? '-'],
+    [t('legacy.memoryStatAgentEvents'), stats?.agentEvents ?? '-'],
+    [t('legacy.memoryStatPlanningGoals'), stats?.planningGoals ?? '-'],
+    [t('legacy.memoryStatPlans'), stats?.plans ?? '-']
+  ];
+  const actions: Array<{ action: MemoryResetAction; label: string; danger?: boolean }> = [
+    { action: 'preferences', label: t('legacy.clearPreferenceMemory') },
+    { action: 'history', label: t('legacy.clearHistoryMemory') },
+    { action: 'runtime', label: t('legacy.clearRuntimeRuns') },
+    { action: 'planning', label: t('legacy.clearPlanningHistory') },
+    { action: 'all', label: t('legacy.clearAiMemoryCache'), danger: true }
+  ];
+
+  return (
+    <div className="workflow-card memory-management">
+      <div className="workflow-head">
+        <div>
+          <span>{t('legacy.memoryDataManagement')}</span>
+          <strong>{t('legacy.memoryDataManagementHint')}</strong>
+        </div>
+        <button onClick={onRefresh} disabled={Boolean(busy)}><RotateCcw size={16} />{t('legacy.refreshStats')}</button>
+      </div>
+      <div className="memory-stats-grid">
+        {rows.map(([label, value]) => (
+          <div className="memory-stat" key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+      <p className="field-hint">{t('legacy.memoryDataPreservedHint')}</p>
+      <div className="settings-actions memory-actions">
+        {actions.map((item) => (
+          <button
+            key={item.action}
+            className={item.danger ? 'danger-action' : undefined}
+            onClick={() => onReset(item.action)}
+            disabled={Boolean(busy)}
+          >
+            <Trash2 size={16} />
+            {busy === item.action ? t('legacy.clearingMemory') : item.label}
+          </button>
+        ))}
+      </div>
+      {status && <p className="inline-status">{status}</p>}
+      {result && (
+        <div className="memory-reset-result">
+          <span>{t('legacy.memoryResetDeleted')}</span>
+          <code>{formatMemoryResetCounts(result)}</code>
+          <span>{t('legacy.memoryResetPlansPreserved')}: {result.before.plans} → {result.after.plans}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function memoryResetConfirmText(action: MemoryResetAction, stats: MemoryCacheStats | null, t: (key: string) => string): string {
+  const countLines = stats
+    ? [
+        `${t('legacy.memoryStatPreferences')}: ${stats.preferenceMemory}`,
+        `${t('legacy.memoryStatHistory')}: ${stats.historySummaries}`,
+        `${t('legacy.memoryStatAgentRuns')}: ${stats.agentRuns}`,
+        `${t('legacy.memoryStatAgentEvents')}: ${stats.agentEvents}`,
+        `${t('legacy.memoryStatPlanningGoals')}: ${stats.planningGoals}`,
+        `${t('legacy.memoryStatPlans')}: ${stats.plans}`
+      ].join('\n')
+    : t('legacy.memoryStatsUnavailable');
+  const messageByAction: Record<MemoryResetAction, string> = {
+    preferences: t('legacy.confirmClearPreferenceMemory'),
+    history: t('legacy.confirmClearHistoryMemory'),
+    runtime: t('legacy.confirmClearRuntimeRuns'),
+    planning: t('legacy.confirmClearPlanningHistory'),
+    all: t('legacy.confirmClearAiMemoryCache')
+  };
+  return `${messageByAction[action]}\n\n${countLines}`;
+}
+
+function memoryResetStatusText(action: MemoryResetAction, result: MemoryResetResult, t: (key: string) => string): string {
+  const labelByAction: Record<MemoryResetAction, string> = {
+    preferences: t('legacy.clearPreferenceMemory'),
+    history: t('legacy.clearHistoryMemory'),
+    runtime: t('legacy.clearRuntimeRuns'),
+    planning: t('legacy.clearPlanningHistory'),
+    all: t('legacy.clearAiMemoryCache')
+  };
+  return `${labelByAction[action]} · ${t('legacy.memoryResetSuccess')} · ${t('legacy.memoryResetPlansPreserved')}: ${result.before.plans} → ${result.after.plans}`;
+}
+
+function formatMemoryResetCounts(result: MemoryResetResult): string {
+  if (result.steps) {
+    return Object.entries(result.steps)
+      .map(([step, values]) => `${step}: ${Object.entries(values).map(([key, value]) => `${key}=${value}`).join(', ')}`)
+      .join(' | ');
+  }
+  return Object.entries(result.deleted)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(', ');
 }
 
 function ModelSettings(props: {

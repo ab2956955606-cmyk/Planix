@@ -1471,6 +1471,57 @@ select:focus {
   line-height: 1.45;
 }
 
+.memory-management {
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.memory-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.memory-stat {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 10px;
+  background: rgba(26, 34, 50, 0.7);
+}
+
+.memory-stat span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.memory-stat strong {
+  color: #f8fafc;
+  font-size: 18px;
+}
+
+.memory-actions .danger-action {
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(127, 29, 29, 0.3);
+  color: #fecaca;
+}
+
+.memory-reset-result {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(34, 197, 94, 0.08);
+  color: #bbf7d0;
+  font-size: 12px;
+}
+
+.memory-reset-result code {
+  overflow-wrap: anywhere;
+  color: #e2e8f0;
+  white-space: normal;
+}
+
 .ai-grid .wide,
 .field-stack.wide {
   grid-column: 1 / -1;

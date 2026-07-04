@@ -59,17 +59,34 @@ class RuntimePreferenceMemory:
 
 
 @dataclass
+class RuntimeRecentProgress:
+    title: str
+    summary: str
+    relevance_to_goal: str = "low"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "title": self.title,
+            "summary": self.summary,
+            "relevanceToGoal": self.relevance_to_goal,
+        }
+
+
+@dataclass
 class RuntimeHistoryMemory:
     long_term_goals: list[str] = field(default_factory=list)
     active_projects: list[str] = field(default_factory=list)
-    recent_progress: list[str] = field(default_factory=list)
+    recent_progress: list[RuntimeRecentProgress | str] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "longTermGoals": self.long_term_goals,
             "activeProjects": self.active_projects,
-            "recentProgress": self.recent_progress,
+            "recentProgress": [
+                item.to_dict() if isinstance(item, RuntimeRecentProgress) else _recent_progress_from_text("", str(item)).to_dict()
+                for item in self.recent_progress
+            ],
             "constraints": self.constraints,
         }
 
@@ -192,6 +209,7 @@ class MemorySystem:
         output_language = str(preference_memory.output_language or "zh")
         explicit_constraints = _extract_constraints(" ".join([payload.input, payload.preferences]))
         history_memory = _build_history_memory(
+            goal=payload.input,
             payload_preferences=payload.preferences,
             saved_preferences=saved_preferences,
             recent_runs=self.repository.recent_summaries(),
@@ -241,7 +259,7 @@ class RuntimePlanner:
                 node_type="tool",
                 title="search_materials",
                 tool_name="search_materials",
-                tool_input={"query": _build_search_query(context), "topK": 3},
+                tool_input={"query": build_material_search_query(context), "topK": 3},
             ),
             RuntimeStep(
                 id="tool-propose",
@@ -284,12 +302,17 @@ class RuntimeToolExecutor:
             return context.today_plans
         if name == "search_materials":
             limit = _int_param(params.get("topK"), 3, minimum=1, maximum=8)
-            query = _build_search_query(context)
+            query = build_material_search_query(context)
             context.materials = [source.model_dump(by_alias=True) for source in self.rag.retrieve(query, limit=limit)]
             tool_call["input"] = {"query": query, "topK": limit}
             return context.materials
         if name == "propose_tasks":
-            summary = build_memory_context_summary(context.preference_memory, context.history_memory, context.today_plans)
+            summary = build_memory_context_summary(
+                context.goal,
+                context.preference_memory,
+                context.history_memory,
+                context.today_plans,
+            )
             daily_hours = max(context.preference_memory.daily_available_minutes, 30) / 60
             plan = self.planning.create_goal_plan(
                 GoalPlanRequest(
@@ -487,6 +510,7 @@ class RuntimeOrchestrator:
 
 
 def build_memory_context_summary(
+    goal: str,
     preference_memory: RuntimePreferenceMemory,
     history_memory: RuntimeHistoryMemory,
     today_plans: list[dict[str, object]],
@@ -507,11 +531,22 @@ def build_memory_context_summary(
     if history_memory.active_projects:
         parts.append(f"活跃项目：{'；'.join(history_memory.active_projects[:3])}。")
     if history_memory.recent_progress:
-        parts.append(f"近期进展：{'；'.join(history_memory.recent_progress[:2])}。")
+        relevant = [
+            _ensure_recent_progress_item(item, goal)
+            for item in history_memory.recent_progress
+        ]
+        high_items = [item.title for item in relevant if item.relevance_to_goal == "high"]
+        medium_items = [item.title for item in relevant if item.relevance_to_goal == "medium"]
+        if high_items:
+            parts.append(f"相关历史：{'；'.join(high_items[:2])}。")
+        elif medium_items:
+            parts.append("近期有同类学习记录，可参考分阶段练习方式。")
+        else:
+            parts.append("近期历史与当前目标相关性较低。")
     if history_memory.constraints:
         parts.append(f"约束：{'；'.join(history_memory.constraints[:3])}。")
     parts.append(f"今日已有 {len(today_plans)} 项计划。")
-    return "".join(parts)
+    return _truncate_text("".join(parts), 500)
 
 
 def _merge_preference_memory(payload_preferences: str, saved_preferences: str) -> RuntimePreferenceMemory:
@@ -623,12 +658,15 @@ def _preference_fields_from_text(text: str) -> dict[str, object]:
 
 def _build_history_memory(
     *,
+    goal: str,
     payload_preferences: str,
     saved_preferences: str,
     recent_runs: list[str],
     explicit_constraints: list[str],
 ) -> RuntimeHistoryMemory:
-    merged = RuntimeHistoryMemory(recent_progress=recent_runs[:3])
+    merged = RuntimeHistoryMemory(
+        recent_progress=[_recent_progress_from_text(goal, item) for item in recent_runs[:3]]
+    )
     for raw_text in (saved_preferences, payload_preferences):
         parsed = _json_dict(raw_text)
         if not parsed:
@@ -638,12 +676,14 @@ def _build_history_memory(
             continue
         merged.long_term_goals.extend(_string_list(source.get("longTermGoals") or source.get("long_term_goals")))
         merged.active_projects.extend(_string_list(source.get("activeProjects") or source.get("active_projects")))
-        merged.recent_progress.extend(_string_list(source.get("recentProgress") or source.get("recent_progress")))
+        merged.recent_progress.extend(
+            _recent_progress_list(goal, source.get("recentProgress") or source.get("recent_progress"))
+        )
         merged.constraints.extend(_string_list(source.get("constraints")))
     merged.constraints.extend(item for item in explicit_constraints if item not in merged.constraints)
     merged.long_term_goals = _dedupe(merged.long_term_goals)[:5]
     merged.active_projects = _dedupe(merged.active_projects)[:5]
-    merged.recent_progress = _dedupe(merged.recent_progress)[:5]
+    merged.recent_progress = _dedupe_recent_progress(merged.recent_progress)[:5]
     merged.constraints = _dedupe(merged.constraints)[:6]
     return merged
 
@@ -656,11 +696,14 @@ def _today_plans_from_context(context: RuntimeContextPack) -> list[dict[str, obj
     return [plan.model_dump(by_alias=True) for plan in list_plans(context.date)]
 
 
-def _build_search_query(context: RuntimeContextPack) -> str:
+def build_material_search_query(context: RuntimeContextPack) -> str:
     preference = context.preference_memory
     history = context.history_memory
+    recent = [_ensure_recent_progress_item(item, context.goal) for item in history.recent_progress]
+    high_titles = [item.title for item in recent if item.relevance_to_goal == "high"]
     parts = [
         context.goal,
+        *_goal_search_terms(context.goal),
         *context.explicit_constraints,
         preference.learning_style,
         preference.planning_style,
@@ -669,11 +712,183 @@ def _build_search_query(context: RuntimeContextPack) -> str:
         preference.raw_preference_text,
         *history.long_term_goals,
         *history.active_projects,
-        *history.recent_progress,
+        *high_titles,
         *history.constraints,
-        context.raw_materials,
+        _truncate_text(_clean_text(context.raw_materials), 80),
     ]
-    return " ".join(str(part).strip() for part in parts if str(part).strip())
+    return _truncate_by_priority(parts, 300, hard_limit=500)
+
+
+def _recent_progress_list(goal: str, value: object) -> list[RuntimeRecentProgress]:
+    if not isinstance(value, list):
+        return []
+    result: list[RuntimeRecentProgress] = []
+    for item in value:
+        if isinstance(item, dict):
+            text = " ".join(
+                str(item.get(key) or "")
+                for key in ("title", "summary", "content", "output", "description")
+            )
+            title = str(item.get("title") or _extract_title(text)).strip()
+            summary = str(item.get("summary") or _summarize_text(text)).strip()
+            relevance = str(item.get("relevanceToGoal") or item.get("relevance_to_goal") or "").strip()
+            if relevance not in {"high", "medium", "low"}:
+                relevance = _relevance_to_goal(goal, title, summary)
+            if title or summary:
+                result.append(
+                    RuntimeRecentProgress(
+                        title=_truncate_text(title or summary, 48),
+                        summary=_truncate_text(summary or title, 120),
+                        relevance_to_goal=relevance,
+                    )
+                )
+            continue
+        text = str(item).strip()
+        if text:
+            result.append(_recent_progress_from_text(goal, text))
+    return result
+
+
+def _recent_progress_from_text(goal: str, text: str) -> RuntimeRecentProgress:
+    title = _extract_title(text)
+    summary = _summarize_text(text)
+    return RuntimeRecentProgress(
+        title=title,
+        summary=summary,
+        relevance_to_goal=_relevance_to_goal(goal, title, summary),
+    )
+
+
+def _ensure_recent_progress_item(item: RuntimeRecentProgress | str, goal: str) -> RuntimeRecentProgress:
+    if isinstance(item, RuntimeRecentProgress):
+        if item.relevance_to_goal in {"high", "medium", "low"}:
+            return item
+        return RuntimeRecentProgress(
+            title=item.title,
+            summary=item.summary,
+            relevance_to_goal=_relevance_to_goal(goal, item.title, item.summary),
+        )
+    return _recent_progress_from_text(goal, str(item))
+
+
+def _dedupe_recent_progress(items: list[RuntimeRecentProgress | str]) -> list[RuntimeRecentProgress]:
+    seen: set[str] = set()
+    result: list[RuntimeRecentProgress] = []
+    for item in items:
+        current = _ensure_recent_progress_item(item, "")
+        key = f"{current.title}|{current.summary}"
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(current)
+    return result
+
+
+def _extract_title(text: str) -> str:
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            line = line.lstrip("#").strip()
+        return _truncate_text(_clean_text(line), 48)
+    return "历史记录"
+
+
+def _summarize_text(text: str) -> str:
+    cleaned = _clean_text(text)
+    if not cleaned:
+        return ""
+    title = _extract_title(text)
+    if cleaned.startswith(title):
+        cleaned = cleaned[len(title):].strip(" ：:-")
+    return _truncate_text(cleaned or title, 120)
+
+
+def _clean_text(text: str) -> str:
+    cleaned = re.sub(r"```.*?```", " ", str(text or ""), flags=re.S)
+    cleaned = re.sub(r"[#>*_`\[\]{}()]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    cleaned = _clean_text(text)
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _relevance_to_goal(goal: str, title: str, summary: str) -> str:
+    target = f"{title} {summary}".lower()
+    direct_terms = [term.lower() for term in _goal_direct_terms(goal)]
+    if any(term and term in target for term in direct_terms):
+        return "high"
+    goal_domain = _goal_domain(goal)
+    target_domain = _goal_domain(target)
+    if goal_domain and target_domain == goal_domain:
+        return "medium"
+    return "low"
+
+
+def _goal_direct_terms(goal: str) -> list[str]:
+    text = str(goal or "")
+    lower = text.lower()
+    terms = [item for item in re.findall(r"[a-zA-Z][a-zA-Z0-9_+-]{1,}", lower) if len(item) >= 2]
+    domain_terms: list[str] = []
+    if any(token in text for token in ("游泳", "蛙泳", "漂浮", "换气", "水性")):
+        domain_terms.extend(["游泳", "蛙泳", "漂浮", "换气", "水性"])
+    if any(token in text for token in ("滑雪", "雪板", "犁式", "平行转弯")):
+        domain_terms.extend(["滑雪", "雪板", "犁式", "平行转弯"])
+    if "python" in lower or "编程" in text:
+        domain_terms.extend(["python", "编程"])
+    if "ai" in lower or "人工智能" in text or "实习" in text:
+        domain_terms.extend(["ai", "人工智能", "实习"])
+    if not domain_terms and text.strip():
+        domain_terms.append(_truncate_text(text, 24))
+    return _dedupe([*domain_terms, *terms])
+
+
+def _goal_search_terms(goal: str) -> list[str]:
+    text = str(goal or "")
+    lower = text.lower()
+    if any(token in text for token in ("游泳", "蛙泳", "漂浮", "换气", "水性")):
+        return ["游泳入门", "蛙泳", "漂浮", "换气", "水性练习"]
+    if "python" in lower:
+        return ["Python", "语法", "项目实战", "数据处理"]
+    if "ai" in lower or "人工智能" in text or "实习" in text:
+        return ["AI 应用", "实习准备", "项目作品集"]
+    return []
+
+
+def _goal_domain(text: str) -> str:
+    value = str(text or "").lower()
+    if any(token in value for token in ("游泳", "蛙泳", "漂浮", "换气", "水性", "滑雪", "雪板", "犁式", "平行转弯")):
+        return "sport_skill"
+    if any(token in value for token in ("python", "编程", "代码", "fastapi", "javascript", "react")):
+        return "programming"
+    if any(token in value for token in ("ai", "人工智能", "大模型", "实习", "rag", "agent")):
+        return "career_ai"
+    return ""
+
+
+def _truncate_by_priority(parts: list[object], limit: int, *, hard_limit: int) -> str:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        cleaned = _clean_text(str(part or ""))
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        candidate = " ".join([*tokens, cleaned]).strip()
+        if len(candidate) <= limit:
+            tokens.append(cleaned)
+            continue
+        if not tokens:
+            tokens.append(_truncate_text(cleaned, limit))
+        break
+    query = " ".join(tokens).strip()
+    return _truncate_text(query, hard_limit)
 
 
 def _planning_preferences(context: RuntimeContextPack, summary: str) -> str:

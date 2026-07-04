@@ -252,3 +252,29 @@ export interface AiSettingsTestResult {
   statusCode?: number;
   detail?: string;
 }
+
+export interface MemoryCacheStats {
+  preferenceMemory: number;
+  historySummaries: number;
+  agentRuns: number;
+  agentEvents: number;
+  planningGoals: number;
+  plans: number;
+}
+
+export interface MemoryResetResult {
+  ok: boolean;
+  before: MemoryCacheStats;
+  after: MemoryCacheStats;
+  deleted: Record<string, number>;
+  steps?: Record<string, Record<string, number>>;
+  preserved: {
+    plans: boolean;
+    goals: boolean;
+    calendar: boolean;
+    notes: boolean;
+    documents: boolean;
+    aiSettings: boolean;
+  };
+  message: string;
+}

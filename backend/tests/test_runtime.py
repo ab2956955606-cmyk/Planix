@@ -186,6 +186,79 @@ def test_runtime_search_materials_query_uses_context_pack(client):
     assert "AI 应用实习" in query
 
 
+def test_runtime_cleans_history_before_material_search_and_planning(client):
+    long_histories = [
+        (
+            "hist-python",
+            "## Python 收支计算器长计划\n"
+            "每天学习Python核心语法，并将所学应用于构建个人收支计算器，"
+            "包含文件读写、异常处理、报表输出和命令行交互。" * 4,
+        ),
+        (
+            "hist-ai",
+            "## AI 应用实习长计划\n"
+            "围绕 FastAPI、RAG、Agent Runtime、作品集 README 和部署链路展开，"
+            "目标是准备 AI 应用开发实习。" * 4,
+        ),
+        (
+            "hist-ski",
+            "## 滑雪学习计划\n"
+            "练习犁式刹车、连续犁式转弯和平行转弯，提升雪道控制能力。" * 4,
+        ),
+    ]
+    with get_conn() as conn:
+        for run_id, summary in long_histories:
+            conn.execute(
+                """
+                INSERT INTO agent_runs(id, input, status, output_summary)
+                VALUES (?, ?, 'done', ?)
+                """,
+                (run_id, run_id, summary),
+            )
+
+    events = _stream_events(
+        client,
+        {
+            "input": "我要学游泳",
+            "date": "2026-07-03",
+            "preferences": json.dumps({"learningStyle": "项目驱动", "planningStyle": "具体可执行"}, ensure_ascii=False),
+            "materials": "",
+            "data": {},
+        },
+    )
+
+    memory_event = next(
+        event for event in events
+        if event["type"] == "tool" and event["toolCall"]["name"] == "get_memory"
+    )
+    recent = memory_event["toolCall"]["output"]["historyMemory"]["recentProgress"]
+    assert recent
+    assert {"title", "summary", "relevanceToGoal"} <= set(recent[0])
+    assert all(len(item["summary"]) <= 121 for item in recent)
+
+    material_event = next(
+        event for event in events
+        if event["type"] == "tool" and event["toolCall"]["name"] == "search_materials"
+    )
+    query = material_event["toolCall"]["input"]["query"]
+    assert len(query) <= 500
+    for token in ("我要学游泳", "游泳入门", "蛙泳", "漂浮", "换气", "水性练习", "项目驱动", "具体可执行"):
+        assert token in query
+    for leaked in ("Python 收支计算器", "AI 应用实习长计划", "犁式刹车", "平行转弯"):
+        assert leaked not in query
+
+    proposal_event = next(
+        event for event in events
+        if event["type"] == "tool" and event["toolCall"]["name"] == "propose_tasks"
+    )
+    summary = proposal_event["toolCall"]["output"]["memoryContextSummary"]
+    assert len(summary) <= 500
+    assert "近期有同类学习记录" in summary
+    assert "Python 收支计算器" not in summary
+    assert "AI 应用实习长计划" not in summary
+    assert "犁式刹车" not in summary
+
+
 def test_runtime_python_goal_returns_learning_plan(client):
     events = _stream_events(
         client,

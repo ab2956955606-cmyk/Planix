@@ -19,6 +19,8 @@ Allowed in this phase:
 - Save generated planning results to `planning_goals` as history/cache.
 - Show structured previews in Goals and Runtime Trace.
 - Render Runtime final output from the same `structuredPlan`.
+- Clean Runtime Context Pack history before retrieval and planning.
+- Provide Settings maintenance controls for AI memory/cache cleanup.
 
 Forbidden in this phase:
 
@@ -60,6 +62,8 @@ Forbidden in this phase:
 - Structured planning helper: `backend/app/services/structured_goal_plan.py`
 - Runtime route: `backend/app/routers/runtime.py`
 - Runtime service: `backend/app/services/runtime.py`
+- Settings maintenance route: `backend/app/routers/maintenance.py`
+- Settings maintenance service: `backend/app/services/maintenance.py`
 - SQLite setup: `backend/app/db.py`
 - Backend tests: `backend/tests`
 - Packaging scripts: `scripts`
@@ -112,12 +116,18 @@ There is no compatibility fallback for old names or old environment variables.
 - Runtime must build one internal Context Pack containing goal, explicit constraints, preference memory, history memory, today plans, materials, and output language.
 - Preference memory is separate from history memory and has higher planning priority.
 - `payload.preferences` must merge field-by-field with saved preferences; never overwrite the whole preference object when only one field is provided.
+- Runtime must clean history before retrieval and planning. Expose `historyMemory.recentProgress` as short `{ title, summary, relevanceToGoal }` objects; do not pass full Markdown, full historical output, or full `structuredPlan` blobs to `search_materials` or Planning prompts.
+- `search_materials.input.query` must stay short and goal-focused. For a swimming goal, it should contain swimming terms and preferences, not Python/AI internship/skiing long-form history.
+- `memoryContextSummary` must be deterministic, short, and safe for display.
 - `search_materials`, `get_today_plans`, and `get_memory` are read-only.
 - `get_memory` returns `preferenceMemory` and `historyMemory`; do not add a separate `get_preferences` tool.
 - `propose_tasks` may return structured task previews with `memoryContextSummary` but must not write to `plans`, Goals, Calendar, or Notes.
 - `structuredPlan` is the fact source; Runtime final output should be rendered from it.
 - `RuntimeOrchestrator` is the only component that coordinates Planner, Memory, Tool Router, and Stream Engine.
 - Rust/Tauri streaming bridge must stay a thin pass-through; do not put Runtime state or business logic in Rust.
+- Settings maintenance endpoints under `/api/settings/*` may clear AI memory/cache only. They must not delete formal `plans`, Calendar data, Notes/materials, documents, or AI settings.
+- `DELETE /api/settings/memory/history` clears only Runtime summary memory (`agent_runs.output_summary`), while `DELETE /api/settings/runtime/runs` deletes `agent_events` and `agent_runs`.
+- `DELETE /api/settings/planning/history` clears `planning_goals` only, which is planning history/cache.
 
 ## Commands
 
