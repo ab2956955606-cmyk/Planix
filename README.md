@@ -1,8 +1,6 @@
 # Planix
 
-![Planix demo](assets/readme/planix-demo.gif)
-
-[此处下载完整视频。](assets/readme/planix-demo.mp4)
+[点击此处下载完整演示视频](assets/readme/planix-demo.mp4)
 
 ![Planix Dashboard](assets/readme/planix-dashboard-cn.png)
 
