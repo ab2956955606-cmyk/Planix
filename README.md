@@ -31,7 +31,7 @@ Planix 面向学习、求职和长期目标管理场景。用户可以维护日�
 ## Features
 
 - Calendar and daily task management
-- Calendar note management with selected-day clearing and full calendar plan clearing; full clearing falls back to per-plan deletion if an older backend lacks `DELETE /api/plans/all`
+- Calendar note management with selected-day clearing and full calendar plan clearing; the clear buttons stay visible above the date grid, the calendar panel uses a compact month layout, and full clearing falls back to per-plan deletion if an older backend lacks `DELETE /api/plans/all`
 - Goal plan calendar writes show immediate writing, success, partial success, and failure feedback without touching completion notes
 - Structured goal planning with phases, tasks, estimated time, priority, due date, and review plan
 - Grounded RAG using local SQLite FTS5/BM25 sources
@@ -42,6 +42,8 @@ Planix 面向学习、求职和长期目标管理场景。用户可以维护日�
 - RIVA dashboard with Dashboard / Calendar / Notes / Goals / Settings routes
 - Agent Flow Trace connected to real Runtime NDJSON events
 - Dashboard Runtime proposals with a valid LLM or local fallback `structuredPlan` can be manually written to Calendar plans after preview; Runtime never writes Calendar automatically
+- Command Agent / P Mode minimalist shell: a Codex-like conversation page with a bottom command composer, default auto mode, a forced chat safety mode, and a forced workbench entry mode
+- P Mode folds completed Runtime execution chains by default with a lightweight arrow toggle, supports inline task refinement commands against the current hidden draft, and carries refined task details into Calendar writes without touching completion notes
 - Safe Runtime tools: read-only retrieval plus preview-only task proposals
 - Runtime Context Pack cleanup: compressed history summaries, short material search queries, and deterministic memory summaries
 - Settings maintenance tools for clearing AI preference memory, history summaries, Runtime records, and planning history/cache without deleting formal user data
@@ -136,6 +138,36 @@ Runtime safety rules:
 - `structuredPlan` is the fact source; final output is rendered from it so Trace, preview, and Output stay consistent.
 - If true LLM token streaming is unavailable, Planix does not fake it by splitting a completed LLM response. It still streams Runtime step/tool/status events and uses local structured fallback output when needed.
 
+## Command Agent / P Mode
+
+Phase 4 introduces a Codex-like `command` route. The P page intentionally stays minimal: it contains an Agent thread and a bottom command composer only. It must not show a fixed `P Workspace Preview` panel or persistent Calendar / Goals / Materials / Notes draft panes.
+
+Current Phase 4.1-4.6 behavior:
+
+- The left menu includes a visible P icon, and the top-left Planix `P` brand mark also acts as a P Mode entrypoint. Entering P Mode can switch the shell into P-only mode where only the P icon remains; collapsed menu states must still show the P letter rather than only a colored background.
+- The composer includes `+`, a forced chat toggle, a permission selector (`low`, `medium`, `high`), a forced workbench toggle, and a circular send button.
+- When no explicit hash route is provided, Planix opens `#/command` by default. The command composer uses normal bottom anchoring, starts at about two text rows, begins text input from the left edge, expands with input, and only scrolls internally after about five rows.
+- The P page keeps a Codex-like loose layout: empty state content sits slightly above center, the thread has breathing room, and no fixed workspace or draft panel is shown.
+- P Mode includes a hidden right-side conversation drawer. Hovering the right edge or clicking the top-right history icon reveals New chat, thread history, and per-thread deletion; this drawer manages conversations only and is not a workspace preview panel.
+- Default mode is `auto`: normal chat stays conversational, while a clear planning request hands off to the backend Runtime.
+- Forced chat mode is a safety lock: even planning, write, regenerate, or calendar instructions are treated as discussion and never execute.
+- Forced workbench mode treats input as a planning request and hands off to Dashboard Runtime.
+- `POST /api/command/chat` streams command NDJSON events, including compact Runtime progress, hidden draft creation, and summary events.
+- Phase 4.4 adds the draft control loop: users can ask to expand the current hidden `calendar_plan`, regenerate/modify it as a new version, or write it to Calendar from the P thread.
+- Phase 4.5 keeps context thread-local: recent user/assistant text from the current thread is passed into chat and planning so follow-up requests can reuse context, while a new chat starts with no prior thread memory.
+- After a planning request creates a valid hidden draft, P Mode now shows the compact summary and then automatically displays the full plan inline.
+- Runtime execution steps in P Mode are grouped into a collapsible inline execution chain. Completed chains default to collapsed, show a center arrow toggle, and can be expanded on click.
+- P Mode execution chains use a transparent, page-blended collapsed card rather than a gray trace block.
+- Users can say "细化任务", "细化计划", or "细化全部任务" in P Mode. The command refines the selected task when a title/number is clear; otherwise it refines every valid task in the current hidden `calendar_plan` draft.
+- P Mode stores refinement results inside `command_drafts.payload_json.refinements` and shows them as inline cards. Refining does not write Calendar by itself.
+- Calendar writes from P Mode use `command_actions`, `command_approvals`, and the shared permission matrix. Low permission requires an inline ApprovalCard; medium/high ordinary writes auto-run. Chat and approval write failures must surface the Calendar-specific error message instead of draft-save errors. Written plans use `command-draft:` source keys and never overwrite manual plans or `completion/result/done`.
+- Startup migrations must keep legacy Command tables compatible by adding `command_actions.draft_id`, `command_actions.error_message`, and `command_approvals.decision` when older local SQLite databases are opened.
+- Calendar writes from a refined P draft carry matching `refinedTask` payloads into `plans.refined_task_json` while still preserving `completion/result/done`.
+- P Mode still does not write Notes, Materials, Goals, Settings, or output snapshots, and it still does not show a fixed workspace/draft panel.
+- Calendar loads all plans for the visible month when the Calendar page opens or the month changes, so dates with plans are highlighted without first clicking each date.
+
+P Workspace is an internal draft and audit layer, not a foreground page layout. Future phases can expand regeneration, approval execution, and replay, but output must continue to appear as inline thread cards rather than a permanent workspace panel.
+
 ## AI Memory And Cache Maintenance
 
 Settings includes a "Memory & Runtime Data" maintenance area. It can clear AI preference memory, Runtime history summaries, Runtime run/event records, and planning history/cache. These actions are confirmation-gated and preserve formal user data.
@@ -225,10 +257,10 @@ release\Planix-v1.1.4-windows-x64.msi
 release\Planix-v1.1.4-windows-x64.sha256
 ```
 
-Latest local MSI generated on 2026-07-04 with:
+Latest local MSI generated on 2026-07-05 after replacing the Windows installer/app icon with the same gradient `P` brand mark used in the app shell:
 
 ```text
-SHA256 f0bfdfd0a5e7a3c8cba444c8ce7b8e57f22358192ed3096b42638a2255394766
+SHA256 6a25f460124508dd2db7a9d8f90137ea2e7074690eda3f62faabe6e47cf1787e
 ```
 
 Installed layout:

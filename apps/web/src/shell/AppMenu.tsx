@@ -7,6 +7,8 @@ interface AppMenuProps {
   onRouteChange: (route: AppRoute) => void;
   onLanguageChange: (language: Language) => void;
   onToday: () => void;
+  pOnlyMode?: boolean;
+  onCommandToggle: () => void;
   t: (key: string) => string;
 }
 
@@ -19,8 +21,24 @@ const items: Array<{ route: AppRoute; icon: typeof LayoutDashboard; labelKey: st
 ];
 
 export function AppMenu(props: AppMenuProps) {
-  const { route, language, onRouteChange, onLanguageChange, onToday, t } = props;
+  const { route, language, onRouteChange, onLanguageChange, onToday, pOnlyMode = false, onCommandToggle, t } = props;
   const isZh = language === 'zh-CN';
+  const commandActive = route === 'command';
+
+  if (pOnlyMode) {
+    return (
+      <aside className="app-menu p-only" aria-label={t('shell.navigation')}>
+        <button
+          className="command-nav-button active p-only-button"
+          onClick={onCommandToggle}
+          title={t('command.title')}
+          aria-label={t('command.title')}
+        >
+          <span className="command-letter-icon">P</span>
+        </button>
+      </aside>
+    );
+  }
 
   return (
     <aside className="app-menu" aria-label={t('shell.navigation')}>
@@ -32,7 +50,15 @@ export function AppMenu(props: AppMenuProps) {
 
       <div className="menu-panel">
         <div className="menu-brand">
-          <div className="brand-mark">P</div>
+          <button
+            className="brand-mark command-brand-button"
+            onClick={onCommandToggle}
+            title={t('command.title')}
+            aria-label={t('command.title')}
+            type="button"
+          >
+            P
+          </button>
           <div>
             <strong>{t('common.appName')}</strong>
             <span>{t('shell.productTagline')}</span>
@@ -51,6 +77,14 @@ export function AppMenu(props: AppMenuProps) {
         </div>
 
         <nav className="menu-nav">
+          <button
+            className={`command-nav-button ${commandActive ? 'active' : ''}`}
+            onClick={onCommandToggle}
+            aria-current={commandActive ? 'page' : undefined}
+          >
+            <span className="command-letter-icon">P</span>
+            <span>{t('command.title')}</span>
+          </button>
           {items.map((item) => {
             const Icon = item.icon;
             const active = route === item.route;

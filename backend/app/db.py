@@ -162,8 +162,98 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_agent_events_run_sequence
           ON agent_events(run_id, sequence);
+
+        CREATE TABLE IF NOT EXISTS command_threads (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS command_messages (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL DEFAULT '',
+          kind TEXT NOT NULL DEFAULT 'text',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(thread_id) REFERENCES command_threads(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_command_messages_thread_time
+          ON command_messages(thread_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS command_drafts (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'calendar_plan',
+          version INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'current',
+          title TEXT NOT NULL DEFAULT '',
+          summary TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          source_run_id TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(thread_id) REFERENCES command_threads(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_command_drafts_thread_status
+          ON command_drafts(thread_id, kind, status);
+
+        CREATE TABLE IF NOT EXISTS command_actions (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          draft_id TEXT NOT NULL DEFAULT '',
+          target TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          risk TEXT NOT NULL,
+          status TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          error_message TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(thread_id) REFERENCES command_threads(id) ON DELETE CASCADE,
+          FOREIGN KEY(draft_id) REFERENCES command_drafts(id) ON DELETE SET DEFAULT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_command_actions_thread_status
+          ON command_actions(thread_id, status, created_at);
+
+        CREATE TABLE IF NOT EXISTS command_approvals (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          action_id TEXT NOT NULL,
+          permission TEXT NOT NULL,
+          decision TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(thread_id) REFERENCES command_threads(id) ON DELETE CASCADE,
+          FOREIGN KEY(action_id) REFERENCES command_actions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_command_approvals_action
+          ON command_approvals(action_id, created_at);
+
         """
     )
+    ensure_column(conn, "command_messages", "kind", "TEXT NOT NULL DEFAULT 'text'")
+    ensure_column(conn, "command_messages", "payload_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "command_drafts", "source_run_id", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "command_actions", "draft_id", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "command_actions", "error_message", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "command_approvals", "decision", "TEXT NOT NULL DEFAULT 'pending'")
+    action_columns = {row["name"] for row in conn.execute("PRAGMA table_info(command_actions)").fetchall()}
+    if {"error", "error_message"} <= action_columns:
+        conn.execute(
+            """
+            UPDATE command_actions
+            SET error_message = error
+            WHERE error_message = '' AND error != ''
+            """
+        )
     ensure_column(conn, "ai_settings", "temperature", "REAL NOT NULL DEFAULT 0.3")
     ensure_column(conn, "ai_settings", "timeout_seconds", "INTEGER NOT NULL DEFAULT 40")
     ensure_column(conn, "ai_settings", "api_key_source", "TEXT NOT NULL DEFAULT 'legacy'")

@@ -92,6 +92,30 @@ def test_plan_refined_task_persists_and_deletes_without_touching_completion(clie
     assert deleted_plan["result"] == "Keep this completion text"
 
 
+def test_list_month_plans_returns_only_requested_month(client):
+    for plan_date, title in [
+        ("2026-06-30", "Previous month"),
+        ("2026-07-01", "First July plan"),
+        ("2026-07-18", "Second July plan"),
+        ("2026-08-01", "Next month"),
+    ]:
+        created = client.post(
+            "/api/plans",
+            json={"date": plan_date, "time": "09:00", "content": title},
+        )
+        assert created.status_code == 200
+
+    listed = client.get("/api/plans/month", params={"year": 2026, "month": 7})
+    assert listed.status_code == 200
+    body = listed.json()
+    assert [item["content"] for item in body] == ["First July plan", "Second July plan"]
+    assert {item["date"] for item in body} == {"2026-07-01", "2026-07-18"}
+
+    empty = client.get("/api/plans/month", params={"year": 2026, "month": 9})
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+
 def test_bad_refined_task_json_does_not_break_plan_listing(client):
     created = client.post(
         "/api/plans",

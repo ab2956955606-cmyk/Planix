@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import get_db_path
-from .routers import agent, health, maintenance, materials, month_notes, planning, plans, preferences, rag, runtime, settings
+from .routers import agent, command, health, maintenance, materials, month_notes, planning, plans, preferences, rag, runtime, settings
 
 APP_VERSION = "1.1.4"
 
@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    app.include_router(command.router)
     app.include_router(plans.router)
     app.include_router(month_notes.router)
     app.include_router(planning.router)

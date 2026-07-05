@@ -10,7 +10,7 @@ Current baseline: `1.1.4`.
 
 ## Current Phase
 
-Phase 3.5 is **Planning Intelligence + Grounded RAG**.
+Phase 4 has started with **Command Agent / P Mode**. The current P Mode implementation is Phase 4.6: Collapsed Execution Chain + Draft Task Refinement. Auto/workbench planning requests may run the existing backend Runtime and save a hidden `calendar_plan` draft; users can expand, regenerate/modify, refine tasks, or write the current draft to Calendar through P Mode permission handling. P Mode also has a hidden right-side conversation drawer for new chat, history, and thread deletion.
 
 Allowed in this phase:
 
@@ -21,11 +21,18 @@ Allowed in this phase:
 - Render Runtime final output from the same `structuredPlan`.
 - Clean Runtime Context Pack history before retrieval and planning.
 - Provide Settings maintenance controls for AI memory/cache cleanup.
+- Keep P Mode Codex-like: outputs appear as inline conversation cards, not as a fixed workspace preview panel.
+- Keep P Mode defaulting to `auto`: normal chat stays conversational, while clear planning requests may run Runtime and create hidden `calendar_plan` drafts.
+- Keep P Mode context thread-local: recent user/assistant text from the current thread may inform chat and planning, but new chats must not inherit prior thread context.
+- Let P Mode write Calendar plans only from the current hidden `calendar_plan` draft through `command_actions`, `command_approvals`, and PermissionGate.
+- Let P Mode refine tasks in the current hidden `calendar_plan` draft through the existing planning refinement service. Refinement results stay in the command draft until the user writes the plan to Calendar.
 
 Forbidden in this phase:
 
-- Auto-writing generated tasks to Calendar, Goals, Notes, or `plans`.
-- Adding Approval / WriteIntent.
+- Auto-writing generated tasks to Calendar from Runtime without an explicit P command.
+- Writing Goals, Notes, Materials, Settings, or non-Calendar data from P Mode.
+- Letting P Mode bypass `command_actions`, `command_approvals`, or PermissionGate for Calendar writes.
+- Turning P Workspace into a foreground layout panel or persistent Calendar/Goals/Materials/Notes draft area.
 - Changing `/api/runtime/run` event protocol.
 - Changing Tauri/MSI sidecar mechanics.
 
@@ -37,6 +44,8 @@ Forbidden in this phase:
 - i18n: `apps/web/src/i18n`, default `zh-CN`, supports `en-US`.
 - Agent observability: `apps/web/src/components/agent/flow` renders Runtime events as the Dashboard trace.
 - Agent flow state: `apps/web/src/store/agentFlowStore.ts`.
+- Command Agent UI: `apps/web/src/pages/CommandPage.tsx` and `apps/web/src/components/command`.
+- Command Agent state: `apps/web/src/stores/commandAgentStore.ts`.
 - Desktop shell: Tauri v2 in `apps/desktop`.
 - Backend: FastAPI in `backend/app`.
 - Database: SQLite with FTS5/BM25 for local RAG.
@@ -62,6 +71,8 @@ Forbidden in this phase:
 - Structured planning helper: `backend/app/services/structured_goal_plan.py`
 - Runtime route: `backend/app/routers/runtime.py`
 - Runtime service: `backend/app/services/runtime.py`
+- Command route: `backend/app/routers/command.py`
+- Command service: `backend/app/services/command_agent.py`
 - Settings maintenance route: `backend/app/routers/maintenance.py`
 - Settings maintenance service: `backend/app/services/maintenance.py`
 - SQLite setup: `backend/app/db.py`
@@ -96,6 +107,26 @@ There is no compatibility fallback for old names or old environment variables.
 - Goals should display `structuredPlan` when present while keeping legacy task apply flows based on `tasks`.
 - Goals calendar writes must show immediate writing feedback, a visible pressed/writing button state, and final created/updated/failed counts.
 - Dashboard Runtime proposals may be written to Calendar only after the user clicks `写入日历`; valid `llm` and `local_fallback` structuredPlan outputs are both writable, and Runtime execution itself must not auto-write Calendar data.
+- Command/P Mode must stay Codex-like and minimal: `CommandPage` contains the Agent thread and bottom composer only. Do not add a fixed `PWorkspacePanel` or persistent draft panels.
+- The top-left Planix `P` brand mark and the menu P entry both route to Command/P Mode; collapsed menu states must still show a visible P letter and should never leave only a colored background.
+- When no explicit hash route exists, the frontend should default to `#/command`. The P composer should use normal bottom anchoring while feeling spacious: start around two text rows, begin text from the left edge, grow with input, and scroll internally only after about five rows.
+- Keep the P page visually loose: empty state content should sit slightly above center, the thread should have breathing room, and no fixed workspace or draft panel should be introduced.
+- P Workspace is an internal draft/audit concept, not a foreground layout. Phase 4.4 may write hidden `calendar_plan` drafts and Calendar write actions only.
+- The right-side P conversation drawer is allowed for thread history and deletion only. It must not become a fixed workspace preview or persistent draft panel.
+- Command mode is a single `auto | chat | workbench` value. Do not represent it with separate boolean flags.
+- Auto mode is the P default. Normal chat stays text-only; `planning_request` runs backend Runtime and creates a compact hidden draft summary.
+- Auto/workbench planning should include current-thread context in the backend Runtime input so follow-up phrases like "帮我做个规划" can inherit the current topic. Do not include messages from other threads.
+- After a valid planning draft is created, P Mode should show the summary and the full plan inline by default.
+- Chat mode is a safety lock: it must not run Dashboard Runtime, create drafts, write Calendar data, or execute any instruction.
+- Workbench mode is a forced planning entry state and may run backend Runtime to create a hidden `calendar_plan` draft.
+- Command permission state is `low | medium | high`; low asks before writes/deletes, medium auto-runs ordinary writes but asks before deletes, high auto-runs ordinary writes/deletes while dangerous actions still require confirmation.
+- P Mode Calendar writes must come from the current hidden `calendar_plan` draft, use `command-draft:` source keys, never overwrite manual plans, and never overwrite `completion/result/done`.
+- P Mode Calendar writes may carry `refinedTask` values from `command_drafts.payload_json.refinements` into `plans.refined_task_json`; this must never be mixed into `completion/result/done`.
+- P Mode Calendar write failures, including approval execution failures, must show the Calendar-specific write error and must not fall back to draft-save failure wording.
+- Command table startup migrations must preserve old local SQLite data and add `command_actions.draft_id`, `command_actions.error_message`, and `command_approvals.decision` without destructive rebuilds.
+- P Mode Runtime execution cards should be grouped as one collapsible inline execution chain after output completes. The collapsed row should use a lightweight center arrow toggle, not a heavy gray trace panel. Do not reintroduce a fixed Trace panel in P Mode.
+- P Mode execution chain groups should blend into the page background instead of using a gray block.
+- Calendar month view should load all plans for the visible month so dates with plans are highlighted before the user clicks them.
 - Calendar full-plan clearing should prefer `DELETE /api/plans/all`; if an older backend returns 404, the frontend may fall back to deleting known plans one by one and must keep any failed deletions visible.
 - Settings model input is free text. The only built-in recommendations are `deepseek-v4-flash` and `deepseek-v4-pro`; do not restore legacy model display names.
 - Keep Agent Trace visually secondary to the Workspace; it must not replace the prompt input or dominate the Dashboard.
@@ -129,6 +160,9 @@ There is no compatibility fallback for old names or old environment variables.
 - `RuntimeOrchestrator` is the only component that coordinates Planner, Memory, Tool Router, and Stream Engine.
 - Rust/Tauri streaming bridge must stay a thin pass-through; do not put Runtime state or business logic in Rust.
 - Settings maintenance endpoints under `/api/settings/*` may clear AI memory/cache only. They must not delete formal `plans`, Calendar data, Notes/materials, documents, or AI settings.
+- Phase 4.6 command endpoints expose `POST /api/command/chat`, `POST /api/command/approve`, `GET /api/command/threads`, `GET /api/command/thread/{thread_id}`, and `DELETE /api/command/thread/{thread_id}`. They store `command_threads`, `command_messages`, hidden `command_drafts`, Calendar write `command_actions`, and `command_approvals`.
+- `refine_current_plan` is a command intent handled through `/api/command/chat`. It updates the current `command_drafts.payload_json.refinements`, emits inline refinement result cards, and does not write Calendar unless the user separately commands a Calendar write.
+- Do not register `/api/command/drafts` or use `command_outputs` until a later phase explicitly enables them.
 - `DELETE /api/settings/memory/history` clears only Runtime summary memory (`agent_runs.output_summary`), while `DELETE /api/settings/runtime/runs` deletes `agent_events` and `agent_runs`.
 - `DELETE /api/settings/planning/history` clears `planning_goals` only, which is planning history/cache.
 
@@ -159,7 +193,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-packaging-toolchain.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.1.4
 ```
 
-Latest local MSI generation record: `release\Planix-v1.1.4-windows-x64.msi` was regenerated on 2026-07-04 with SHA256 `f0bfdfd0a5e7a3c8cba444c8ce7b8e57f22358192ed3096b42638a2255394766`. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
+Latest local MSI generation record: `release\Planix-v1.1.4-windows-x64.msi` was regenerated on 2026-07-05 after replacing the Windows installer/app icon with the app shell gradient `P` brand mark. SHA256: `6a25f460124508dd2db7a9d8f90137ea2e7074690eda3f62faabe6e47cf1787e`. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
 
 ## Documentation Maintenance
 
@@ -167,4 +201,4 @@ Every completed implementation must update `README.md`, `AGENTS.md`, and `CLAUDE
 
 Update these three files whenever architecture, version, routes, UI shell, API behavior, database behavior, environment variables, AI strategy, packaging, release artifacts, screenshots, or portfolio positioning changes.
 
-Current Calendar behavior includes a `Note` area on the Calendar panel, selected-day plan clearing, and full calendar plan clearing. Clearing plans deletes Calendar `plans` and their task refinements only; it must not delete notes/materials, Goals planning history, AI settings, documents, or API keys.
+Current Calendar behavior includes a compact month layout, a `Note` area on the Calendar panel, selected-day plan clearing, and full calendar plan clearing. The two clearing buttons should remain visible above the date grid. Clearing plans deletes Calendar `plans` and their task refinements only; it must not delete notes/materials, Goals planning history, AI settings, documents, or API keys.

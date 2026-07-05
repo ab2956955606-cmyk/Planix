@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AppRoute } from '../types';
 
-const routes: AppRoute[] = ['dashboard', 'calendar', 'notes', 'goals', 'settings'];
-const defaultRoute: AppRoute = 'dashboard';
+const routes: AppRoute[] = ['dashboard', 'calendar', 'notes', 'goals', 'settings', 'command'];
+const defaultRoute: AppRoute = 'command';
 
 function readRouteFromHash(): AppRoute {
   const candidate = window.location.hash.replace(/^#\/?/, '').split('?')[0];

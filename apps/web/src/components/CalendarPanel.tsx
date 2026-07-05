@@ -112,6 +112,27 @@ export function CalendarPanel(props: CalendarPanelProps) {
             </button>
           </div>
         </div>
+        <div className="note-action-row calendar-maintenance-row">
+          <button
+            type="button"
+            className="section-action-button"
+            onClick={clearSelectedDayPlans}
+            disabled={!(data[selectedDate]?.plans ?? []).length || clearingSelected}
+          >
+            <Trash2 size={15} />
+            {clearingSelected ? t('legacy.clearingDayPlans') : t('legacy.clearSelectedDayPlans')}
+          </button>
+          <button
+            type="button"
+            className="section-action-button danger"
+            onClick={clearAllCalendarPlans}
+            disabled={clearingAll}
+          >
+            <Trash2 size={15} />
+            {clearingAll ? t('legacy.clearingAllPlans') : t('legacy.clearAllPlans')}
+          </button>
+        </div>
+        {clearStatus && <p className="inline-status calendar-clear-status">{clearStatus}</p>}
         <div className="weekday-grid">
           {weekdayLabels(lang).map((day) => <span key={day}>{day}</span>)}
         </div>
@@ -132,27 +153,6 @@ export function CalendarPanel(props: CalendarPanelProps) {
             </button>
           ))}
         </div>
-        <div className="note-action-row">
-          <button
-            type="button"
-            className="section-action-button"
-            onClick={clearSelectedDayPlans}
-            disabled={!(data[selectedDate]?.plans ?? []).length || clearingSelected}
-          >
-            <Trash2 size={15} />
-            {clearingSelected ? t('legacy.clearingDayPlans') : t('legacy.clearSelectedDayPlans')}
-          </button>
-          <button
-            type="button"
-            className="section-action-button danger"
-            onClick={clearAllCalendarPlans}
-            disabled={clearingAll}
-          >
-            <Trash2 size={15} />
-            {clearingAll ? t('legacy.clearingAllPlans') : t('legacy.clearAllPlans')}
-          </button>
-        </div>
-        {clearStatus && <p className="inline-status">{clearStatus}</p>}
         <label className="note-box">
           <span><NotebookPen size={16} />{t('legacy.monthNote')} · {monthKey(viewDate)}</span>
           <textarea value={monthNote} onChange={(event) => onMonthNoteChange(event.target.value)} placeholder={t('legacy.monthNotePlaceholder')} />

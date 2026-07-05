@@ -8,6 +8,10 @@ import type {
   AiSettingsTestResult,
   AppData,
   AppliedPlan,
+  CommandMode,
+  CommandPermission,
+  CommandThread,
+  CommandThreadSummary,
   DailyReviewResponse,
   GoalPlanResponse,
   Language,
@@ -63,6 +67,45 @@ type AgentRuntimeHandlers = {
   onError?: (error: Error) => void;
   onDone?: () => void;
 };
+
+export type CommandChatEvent =
+  | { type: 'thread'; threadId: string }
+  | { type: 'message'; message: unknown }
+  | { type: 'assistant_delta'; text?: string; content?: string }
+  | { type: 'runtime_started'; message: string }
+  | { type: 'runtime_event'; name: string; status: 'running' | 'success' | 'error'; summary?: string }
+  | { type: 'draft_created'; draftId: string; kind: 'calendar_plan'; version: number }
+  | { type: 'summary'; text: string; draftId?: string }
+  | { type: 'plan_detail'; draftId: string; version: number; title: string; structuredPlan: unknown }
+  | { type: 'refinement_started'; draftId: string; total: number }
+  | { type: 'refined_tasks_result'; draftId: string; total: number; succeeded: number; failed: number; items: unknown[]; errors?: unknown[] }
+  | { type: 'calendar_plan_preview'; actionId: string; draftId: string; title: string; plans: unknown[] }
+  | { type: 'approval_required'; actionId: string; draftId: string; permission: CommandPermission; risk: string; summary: string }
+  | { type: 'calendar_write_result'; actionId?: string; created: number; updated: number; failed: number; affectedDates?: string[]; errors?: string[]; plans?: unknown[] }
+  | { type: 'execution_result'; actionId?: string; status: 'success' | 'failed' | 'rejected'; text: string }
+  | { type: 'done'; threadId: string }
+  | { type: 'error'; error: string };
+
+export interface CommandChatPayload {
+  threadId?: string;
+  message: string;
+  mode: CommandMode;
+  permission: CommandPermission;
+  context?: Record<string, unknown>;
+}
+
+type CommandChatHandlers = {
+  onEvent: (event: CommandChatEvent) => void;
+  onError?: (error: Error) => void;
+  onDone?: () => void;
+};
+
+export class CommandStreamError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CommandStreamError';
+  }
+}
 
 async function tauriProxy<T>(method: string, path: string, body?: unknown): Promise<T> {
   let result: { status: number; body: string };
@@ -304,6 +347,80 @@ export async function runAgentRuntime(payload: AgentRunRequest, handlers: AgentR
   return runFetchAgentRuntime(payload, handlers);
 }
 
+function parseCommandLine(line: string, handlers: CommandChatHandlers) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  const event = JSON.parse(trimmed) as CommandChatEvent;
+  handlers.onEvent(event);
+  if (event.type === 'error') {
+    throw new CommandStreamError(event.error || 'Command 执行流中断，请重启后端服务后重试');
+  }
+}
+
+async function runFetchCommandStream(path: string, payload: unknown, handlers: CommandChatHandlers): Promise<void> {
+  const res = await fetch(apiUrl(path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail: unknown = undefined;
+    try { detail = await res.json(); } catch { /* ignore */ }
+    throw new ApiHttpError(res.status, detail);
+  }
+  if (!res.body) {
+    throw new ApiNetworkError('Command stream is not available');
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        parseCommandLine(line, handlers);
+      }
+    }
+    buffer += decoder.decode();
+    parseCommandLine(buffer, handlers);
+    handlers.onDone?.();
+  } catch (err) {
+    const error = err instanceof Error
+      ? err
+      : new CommandStreamError('Command 执行流中断，请重启后端服务后重试');
+    handlers.onError?.(error);
+    throw error;
+  }
+}
+
+export async function runCommandChat(payload: CommandChatPayload, handlers: CommandChatHandlers): Promise<void> {
+  return runFetchCommandStream('/api/command/chat', payload, handlers);
+}
+
+export async function approveCommandAction(
+  payload: { threadId?: string; actionId: string; decision: 'approve' | 'reject'; permission: CommandPermission },
+  handlers: CommandChatHandlers
+): Promise<void> {
+  return runFetchCommandStream('/api/command/approve', payload, handlers);
+}
+
+export async function fetchCommandThread(threadId: string): Promise<CommandThread> {
+  return callApi<CommandThread>('GET', `/api/command/thread/${encodeURIComponent(threadId)}`);
+}
+
+export async function listCommandThreads(limit = 50): Promise<CommandThreadSummary[]> {
+  return callApi<CommandThreadSummary[]>('GET', `/api/command/threads?limit=${encodeURIComponent(String(limit))}`);
+}
+
+export async function deleteCommandThread(threadId: string): Promise<void> {
+  return callApi<void>('DELETE', `/api/command/thread/${encodeURIComponent(threadId)}`);
+}
+
 // ═══ Health & Settings ═══
 
 export async function checkBackendHealth(): Promise<boolean> {
@@ -364,6 +481,11 @@ function toBackendPlan(date: string, plan: Plan) {
 export async function fetchPlans(date: string): Promise<Plan[]> {
   const plans = await callApi<BackendPlan[]>('GET', `/api/plans?date=${encodeURIComponent(date)}`);
   return plans.map(fromBackendPlan);
+}
+
+export async function fetchMonthPlans(year: number, month: number): Promise<AppliedPlan[]> {
+  const plans = await callApi<BackendPlan[]>('GET', `/api/plans/month?year=${year}&month=${month}`);
+  return plans.map(fromAppliedBackendPlan);
 }
 
 export async function createPlan(date: string, plan: Plan): Promise<Plan> {

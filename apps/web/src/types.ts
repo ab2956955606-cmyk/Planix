@@ -1,7 +1,7 @@
 export type Language = 'zh-CN' | 'en-US';
 export type Lang = Language;
 
-export type AppRoute = 'dashboard' | 'calendar' | 'notes' | 'goals' | 'settings';
+export type AppRoute = 'dashboard' | 'calendar' | 'notes' | 'goals' | 'settings' | 'command';
 
 export type AgentFlowNodeType = 'input' | 'reasoning' | 'tool' | 'observation' | 'output';
 export type AgentFlowStatus = 'pending' | 'running' | 'done' | 'error';
@@ -67,6 +67,52 @@ export interface CalendarWriteSummary {
   failed: number;
   affectedDates: string[];
   errors: string[];
+}
+
+export type CommandMode = 'auto' | 'chat' | 'workbench';
+export type CommandPermission = 'low' | 'medium' | 'high';
+export type PWorkspaceDraftKind = 'calendar_plan';
+export type PWorkspaceDraftStatus = 'current' | 'superseded' | 'written' | 'dismissed';
+
+export interface PWorkspaceDraft {
+  id: string;
+  threadId: string;
+  kind: PWorkspaceDraftKind;
+  version: number;
+  status: PWorkspaceDraftStatus;
+  title: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  sourceRunId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommandMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system' | 'card';
+  content: string;
+  kind?: string;
+  payload?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface CommandThread {
+  id: string;
+  title: string;
+  messages: CommandMessage[];
+  currentDraft?: PWorkspaceDraft | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommandThreadSummary {
+  id: string;
+  title: string;
+  messageCount: number;
+  currentDraftTitle?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AgentRunRequest {

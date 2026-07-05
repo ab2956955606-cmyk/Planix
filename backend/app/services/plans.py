@@ -1,6 +1,7 @@
 from datetime import date as date_type
 from datetime import datetime
 import json
+from calendar import monthrange
 from uuid import uuid4
 
 from ..db import get_conn
@@ -79,6 +80,28 @@ def list_plans(plan_date: str) -> list[PlanOut]:
             ORDER BY time ASC, created_at ASC
             """,
             (normalized_date,),
+        ).fetchall()
+    return [_to_plan(row) for row in rows]
+
+
+def list_month_plans(year: int, month: int) -> list[PlanOut]:
+    if month < 1 or month > 12:
+        raise bad_request("month must be between 1 and 12")
+    try:
+        start = date_type(year, month, 1)
+    except ValueError as exc:
+        raise bad_request("year and month must form a valid date") from exc
+    last_day = monthrange(year, month)[1]
+    end = date_type(year, month, last_day)
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM plans
+            WHERE date >= ? AND date <= ?
+            ORDER BY date ASC, time ASC, created_at ASC
+            """,
+            (start.isoformat(), end.isoformat()),
         ).fetchall()
     return [_to_plan(row) for row in rows]
 

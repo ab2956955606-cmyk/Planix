@@ -4,7 +4,7 @@
 
 Planix is a `v1.1.4` AI application portfolio project. It presents a RIVA-style AI OS Shell on the frontend and connects the Dashboard Agent Trace to a real backend Runtime stream while keeping planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
 
-The current focus is **Phase 3.5: Planning Intelligence + Grounded RAG**. The goal is to make Planix useful before the later Approval / WriteIntent phase: retrieve relevant materials, generate a strict structured plan, preview tasks, and render consistent output without automatically writing user data.
+The current focus has moved into **Phase 4: Command Agent / P Mode** while preserving the Phase 3.5/3.7 planning, Runtime, and Calendar write behavior. The active P Mode slice is Phase 4.6: Collapsed Execution Chain + Draft Task Refinement, with a minimal conversation thread, bottom composer, hidden calendar drafts, inline draft detail/regeneration, inline task refinement, permission-gated Calendar writing, and a hidden right-side conversation drawer.
 
 The project is fully named Planix across frontend, backend, desktop, sidecar, installer, database path, environment variables, and documentation.
 
@@ -17,11 +17,16 @@ Every completed implementation must update `README.md`, `AGENTS.md`, and `CLAUDE
 - `apps/web`: React 18 + TypeScript + Vite
 - `apps/web/src/shell`: Planix RIVA Shell, App Menu, Inspector, hash route
 - `apps/web/src/pages`: Dashboard, Calendar, Notes, Goals, Settings
+- `apps/web/src/pages/CommandPage.tsx`: minimal P Mode route
+- `apps/web/src/components/command`: command composer, permission popover, workbench toggle, and inline thread rendering
+- `apps/web/src/stores/commandAgentStore.ts`: P Mode frontend state for `auto | chat | workbench`, permission selection, thread history drawer, command streaming, runtime mini cards, draft cards, approval cards, and Calendar write result cards
 - `apps/web/src/components/agent/flow`: Agent Flow Trace observability UI
 - `apps/web/src/store/agentFlowStore.ts`: Runtime event to Trace state mapping
 - `apps/web/src/i18n`: `zh-CN` / `en-US` text system
 - `apps/desktop`: Tauri v2 desktop shell
 - `backend/app`: FastAPI backend
+- `backend/app/routers/command.py`: Phase 4.5 command chat, approval, thread list, thread replay, and thread deletion endpoints
+- `backend/app/services/command_agent.py`: command threads, messages, deterministic intent routing, thread-local context, Runtime handoff, hidden calendar draft creation, automatic inline plan detail, draft regeneration, draft task refinement, Calendar write actions, approval handling, LLM chat, and safe fallback text
 - SQLite: plans, month notes, planning goals, daily reviews, AI settings, local RAG documents, chunks, FTS5 index, AI run logs, agent runs, agent events
 - AI client: DeepSeek-first OpenAI-compatible client with local structured fallback
 - Planning: `StructuredGoalPlan` schema in `backend/app/schemas.py`, helper logic in `backend/app/services/structured_goal_plan.py`
@@ -102,10 +107,13 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - `apps/web/src/shell/AppMenu.tsx`: collapsible top-left menu and language switch
 - `apps/web/src/shell/InspectorPanel.tsx`: read-only Inspector snapshot UI
 - `apps/web/src/pages/DashboardPage.tsx`: Agent workspace and Runtime-triggered Trace entry
+- `apps/web/src/pages/CommandPage.tsx`: Codex-like P Mode command surface
+- `apps/web/src/components/command`: AgentThread, CommandComposer, PermissionPopover, WorkbenchToggle
+- `apps/web/src/stores/commandAgentStore.ts`: command thread UI state, permission state, workbench trigger, and inline write approval flow
 - `apps/web/src/components/agent/flow/AgentFlowTrace.tsx`: Agent execution observability panel
 - `apps/web/src/store/agentFlowStore.ts`: Runtime event consumer with demo fallback
 - `apps/web/src/components/AIWorkspace.tsx`: Notes, Goals, and Settings feature sections
-- `apps/web/src/components/CalendarPanel.tsx`: calendar, note UI, selected-day clearing, and full calendar plan clearing
+- `apps/web/src/components/CalendarPanel.tsx`: compact calendar, note UI, visible selected-day clearing, and full calendar plan clearing
 - `apps/web/src/components/PlanList.tsx`: daily task UI
 - `apps/web/src/lib/api.ts`: API and Tauri IPC proxy client
 - `apps/desktop/src-tauri/src/main.rs`: Tauri startup, sidecar lifecycle, health preflight, IPC proxy
@@ -114,6 +122,9 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - `backend/app/services/structured_goal_plan.py`: structured planning normalization and markdown rendering
 - `backend/app/routers/runtime.py`: NDJSON Runtime endpoint
 - `backend/app/services/runtime.py`: Planner, Memory, Tool Router, Stream Engine, Runtime Orchestrator
+- `backend/app/routers/command.py`: P Mode command endpoints
+- `backend/app/services/command_agent.py`: command persistence and NDJSON chat fallback
+- `backend/app/services/permission_gate.py`: low / medium / high approval matrix
 
 ## Frontend Constraints
 
@@ -129,6 +140,26 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Goals should render `structuredPlan` when present and keep old task-apply behavior based on legacy `tasks`.
 - Goals calendar writes should show immediate writing feedback, visible pressed/writing button styling, and final created/updated/failed counts.
 - Dashboard Runtime proposals may be written to Calendar only after the user clicks `写入日历`; valid `llm` and `local_fallback` structuredPlan outputs are both writable, and Runtime execution itself must not auto-write Calendar data.
+- Command/P Mode is a minimal Codex-like route. `CommandPage` may contain only the conversation thread and bottom composer; do not add fixed `PWorkspacePanel`, Calendar draft panes, Goal draft panes, Materials draft panes, or Notes draft panes.
+- The top-left Planix `P` brand mark and the menu P entry both route to Command/P Mode; collapsed menu states must still show a visible P letter and should never leave only a colored background.
+- When no explicit hash route exists, the frontend should default to `#/command`. The P composer should use normal bottom anchoring, start around two text rows, let text begin from the left edge of the composer, grow with input, and scroll internally only after about five rows.
+- Keep the P page visually loose: empty state content should sit slightly above center, the thread should have breathing room, and no fixed workspace or draft panel should be introduced.
+- P Mode may expose a hidden right-side conversation drawer for new chat, history, and deleting command threads. The drawer must remain a conversation manager, not a workspace preview or persistent draft panel.
+- P Workspace is an internal draft/audit concept, not a page layout. Phase 4.4 may write hidden `calendar_plan` drafts and permission-gated Calendar write actions only.
+- Command mode is a single `auto | chat | workbench` value. Default `auto` keeps normal chat conversational, while clear planning requests run backend Runtime and return compact summary cards.
+- Chat and Runtime planning may use recent text messages from the current command thread as context. New chats must start clean and must not inherit context from previous threads.
+- After a valid Runtime planning draft is created, show both the compact summary and the full plan as inline cards by default.
+- P Mode Runtime execution events should render as one collapsible inline execution chain after completion. The thread should use a lightweight center arrow toggle for collapse/expand, may show execution details on click, and must not introduce a fixed Trace or Workspace panel.
+- P Mode execution chain groups should blend into the page background instead of using a gray block.
+- P Mode task refinement commands such as `细化任务`, `细化计划`, or `refine all tasks` refine the current hidden `calendar_plan` draft. Store results in `command_drafts.payload_json.refinements` and render them inline; do not write Calendar from refinement alone.
+- Forced chat mode is discussion-only and must not run Dashboard Runtime, create drafts, write Calendar data, or execute any instruction.
+- Forced workbench mode is a planning entry state that may run backend Runtime and create a hidden `calendar_plan` draft.
+- Command permission state is `low | medium | high`; low confirms writes/deletes, medium confirms deletes/dangerous actions, and high confirms dangerous actions only.
+- P Mode Calendar writes must start from the current hidden `calendar_plan` draft, use `command-draft:` source keys, never overwrite manual plans, and never overwrite `completion/result/done`.
+- P Mode Calendar writes should include matching refined task payloads from the draft in `plans.refined_task_json`, while preserving `completion/result/done`.
+- P Mode Calendar write failures from `/api/command/chat` or `/api/command/approve` should use the Calendar-specific write error. They must not be reported as draft-save failures.
+- Command table startup migrations must preserve old local SQLite data and add `command_actions.draft_id`, `command_actions.error_message`, and `command_approvals.decision` without destructive rebuilds.
+- Calendar month view should load all plans for the visible month so dates with plans are highlighted before the user clicks them.
 - Calendar full-plan clearing prefers `DELETE /api/plans/all`; when an older backend returns 404, the frontend may fall back to deleting known plans individually and should retain failed deletions in state.
 - Settings model input is free text with built-in recommendations for `deepseek-v4-flash` and `deepseek-v4-pro` only.
 - Do not change existing request payloads or response schemas unless explicitly required by the phase plan.
@@ -152,6 +183,9 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Medium-relevance history can inform the memory summary, but should not enter material search unless it shares clear goal-domain keywords.
 - Rust `stream_agent_runtime` must remain a thin pass-through bridge.
 - If true LLM streaming is unavailable, do not split a completed LLM response into fake token chunks; use Runtime step events plus final output or local structured fallback.
+- `/api/command/chat` streams Phase 4.6 command NDJSON events (`thread`, `assistant_delta`, `runtime_started`, `runtime_event`, `draft_created`, `summary`, `plan_detail`, `refinement_started`, `refined_tasks_result`, `calendar_plan_preview`, `approval_required`, `calendar_write_result`, `execution_result`, `done`, `error`) for P Mode.
+- `/api/command/approve` approves or rejects pending Calendar write actions. `/api/command/threads` lists command thread summaries, `/api/command/thread/{thread_id}` replays saved messages and may return the current hidden draft, and `DELETE /api/command/thread/{thread_id}` deletes command-thread data without deleting Calendar plans.
+- Phase 4.4 stores `command_threads`, `command_messages`, hidden `command_drafts`, Calendar write `command_actions`, and `command_approvals`. Do not register `/api/command/drafts` or use `command_outputs` until a later phase explicitly enables them.
 
 ## Settings Maintenance
 
@@ -192,7 +226,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-desktop-config.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\check-packaging-toolchain.ps1
 ```
 
-Latest local MSI generation record: `release\Planix-v1.1.4-windows-x64.msi` was regenerated on 2026-07-04 with SHA256 `f0bfdfd0a5e7a3c8cba444c8ce7b8e57f22358192ed3096b42638a2255394766`. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
+Latest local MSI generation record: `release\Planix-v1.1.4-windows-x64.msi` was regenerated on 2026-07-05 after replacing the Windows installer/app icon with the app shell gradient `P` brand mark. SHA256: `6a25f460124508dd2db7a9d8f90137ea2e7074690eda3f62faabe6e47cf1787e`. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
 
 ## Documentation Maintenance
 

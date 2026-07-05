@@ -6,6 +6,7 @@ from ..services.plans import (
     delete_all_plans,
     delete_plan,
     delete_plan_refined_task,
+    list_month_plans,
     list_plans,
     save_plan_refined_task,
     update_plan,
@@ -17,6 +18,11 @@ router = APIRouter(prefix="/api/plans", tags=["plans"])
 @router.get("", response_model=list[PlanOut])
 def get_plans(date: str) -> list[PlanOut]:
     return list_plans(date)
+
+
+@router.get("/month", response_model=list[PlanOut])
+def get_month_plans(year: int, month: int) -> list[PlanOut]:
+    return list_month_plans(year, month)
 
 
 @router.post("", response_model=PlanOut)

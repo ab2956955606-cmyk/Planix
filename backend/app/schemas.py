@@ -418,3 +418,153 @@ class DailyReviewOut(BaseModel):
 
 class ReplanApplyRequest(BaseModel):
     tasks: list[ReplanTask]
+
+
+CommandPermission = Literal["low", "medium", "high"]
+CommandMode = Literal["auto", "chat", "workbench"]
+CommandDraftKind = Literal["calendar_plan"]
+CommandDraftStatus = Literal["current", "superseded", "written", "dismissed"]
+CommandActionTarget = Literal["calendar", "notes", "materials", "goals", "settings", "dashboard", "ui"]
+CommandActionOperation = Literal["read", "create", "update", "delete", "navigate", "run", "create_or_update_plans"]
+CommandActionRisk = Literal["read", "write", "delete", "dangerous"]
+CommandActionStatus = Literal["proposed", "waiting_approval", "running", "success", "failed", "rejected"]
+CommandOutputKind = Literal[
+    "assistant_text",
+    "runtime_trace",
+    "task_proposal_summary",
+    "task_proposal_detail",
+    "calendar_plan_preview",
+    "approval_request",
+    "calendar_write_result",
+    "execution_result",
+    "error",
+]
+
+
+class CommandChatRequest(BaseModel):
+    thread_id: str | None = Field(default=None, alias="threadId")
+    message: str = Field(min_length=1, max_length=4000)
+    permission: CommandPermission = "low"
+    mode: CommandMode = "auto"
+    context: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("message")
+    @classmethod
+    def _message_required(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("message cannot be empty")
+        return cleaned
+
+
+class CommandActionPlan(BaseModel):
+    target: CommandActionTarget
+    operation: CommandActionOperation
+    risk: CommandActionRisk
+    payload: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+
+
+class CommandDraftCreate(BaseModel):
+    thread_id: str | None = Field(default=None, alias="threadId")
+    kind: CommandDraftKind = "calendar_plan"
+    title: str = ""
+    summary: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CommandDraftOut(BaseModel):
+    id: str
+    thread_id: str = Field(alias="threadId")
+    kind: CommandDraftKind
+    version: int
+    status: CommandDraftStatus
+    title: str
+    summary: str
+    payload: dict[str, Any]
+    source_run_id: str = Field(default="", alias="sourceRunId")
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CommandMessageOut(BaseModel):
+    id: str
+    thread_id: str = Field(alias="threadId")
+    role: Literal["user", "assistant", "system", "card"]
+    content: str
+    kind: str = "text"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(alias="createdAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CommandActionOut(BaseModel):
+    id: str
+    thread_id: str = Field(alias="threadId")
+    draft_id: str = Field(default="", alias="draftId")
+    target: CommandActionTarget
+    operation: CommandActionOperation
+    risk: CommandActionRisk
+    status: CommandActionStatus
+    reason: str
+    payload: dict[str, Any]
+    result: dict[str, Any]
+    error: str
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CommandOutputEnvelope(BaseModel):
+    id: str
+    thread_id: str = Field(alias="threadId")
+    kind: CommandOutputKind
+    title: str = ""
+    summary: str = ""
+    payload: dict[str, Any]
+    source: Literal["command_agent", "dashboard_runtime", "calendar", "goals", "materials", "notes", "settings"] = "command_agent"
+    related_action_id: str = Field(default="", alias="relatedActionId")
+    related_run_id: str = Field(default="", alias="relatedRunId")
+    created_at: str = Field(alias="createdAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CommandThreadOut(BaseModel):
+    id: str
+    title: str
+    messages: list[CommandMessageOut]
+    current_draft: CommandDraftOut | None = Field(default=None, alias="currentDraft")
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CommandThreadSummaryOut(BaseModel):
+    id: str
+    title: str
+    message_count: int = Field(alias="messageCount")
+    current_draft_title: str = Field(default="", alias="currentDraftTitle")
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CommandApproveRequest(BaseModel):
+    thread_id: str | None = Field(default=None, alias="threadId")
+    action_id: str = Field(alias="actionId")
+    decision: Literal["approve", "reject"] = "approve"
+    approved: bool | None = None
+    permission: CommandPermission = "low"
+
+    model_config = ConfigDict(populate_by_name=True)

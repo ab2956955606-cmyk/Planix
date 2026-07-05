@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarPage } from './pages/CalendarPage';
+import { CommandPage } from './pages/CommandPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { GoalsPage } from './pages/GoalsPage';
 import { NotesPage } from './pages/NotesPage';
@@ -14,6 +15,7 @@ import {
   deletePlanRefinedTask,
   fetchAiSettings,
   fetchMonthNote,
+  fetchMonthPlans,
   fetchPlans,
   saveRemoteMonthNote,
   savePlanRefinedTask,
@@ -24,6 +26,7 @@ import { ensureDay, loadData, loadMonthNote, loadPreferences, saveData, saveMont
 import type {
   AiSettings,
   AppData,
+  AppRoute,
   AppliedPlan,
   CalendarWriteSummary,
   GoalPlanResponse,
@@ -44,6 +47,12 @@ function createId(): string {
 
 function getYearMonth(date: Date): { year: number; month: number } {
   return { year: date.getFullYear(), month: date.getMonth() + 1 };
+}
+
+function monthDateKeys(year: number, month: number): string[] {
+  const days = new Date(year, month, 0).getDate();
+  const prefix = `${year}-${String(month).padStart(2, '0')}`;
+  return Array.from({ length: days }, (_, index) => `${prefix}-${String(index + 1).padStart(2, '0')}`);
 }
 
 function normalizeGoalTaskDate(dueDate: string | null | undefined, fallbackDate: string): string {
@@ -115,6 +124,7 @@ export function App() {
   const [agentStatus, setAgentStatus] = useState<InspectorSnapshot['agentStatus']>('idle');
   const [inspectorLogs, setInspectorLogs] = useState<InspectorLog[]>([]);
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+  const [pOnlyMode, setPOnlyMode] = useState(false);
   const t = useI18n(language);
 
   const selectedPlans = useMemo(() => ensureDay(data, selectedDate).plans, [data, selectedDate]);
@@ -162,6 +172,36 @@ export function App() {
       cancelled = true;
     };
   }, [viewDate]);
+
+  useEffect(() => {
+    if (route !== 'calendar') return;
+    const { year, month } = getYearMonth(viewDate);
+    let cancelled = false;
+    fetchMonthPlans(year, month)
+      .then((remotePlans) => {
+        if (cancelled) return;
+        const grouped = remotePlans.reduce<Record<string, Plan[]>>((acc, plan) => {
+          const { date, ...rest } = plan;
+          acc[date] = [...(acc[date] ?? []), rest];
+          return acc;
+        }, {});
+        const monthDates = monthDateKeys(year, month);
+        setData((current) => {
+          let next = current;
+          for (const date of monthDates) {
+            next = {
+              ...next,
+              [date]: { plans: grouped[date] ?? [] }
+            };
+          }
+          return next;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [route, viewDate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -489,6 +529,23 @@ export function App() {
   function handleToday() {
     selectToday();
     setRoute('calendar');
+    setPOnlyMode(false);
+  }
+
+  function handleRouteChange(nextRoute: AppRoute) {
+    setRoute(nextRoute);
+    if (nextRoute !== 'command') {
+      setPOnlyMode(false);
+    }
+  }
+
+  function handleCommandToggle() {
+    if (route !== 'command') {
+      setRoute('command');
+      setPOnlyMode(true);
+      return;
+    }
+    setPOnlyMode((current) => !current);
   }
 
   const inspector = useMemo<InspectorSnapshot>(() => ({
@@ -526,9 +583,11 @@ export function App() {
       route={route}
       language={language}
       inspector={inspector}
-      onRouteChange={setRoute}
+      onRouteChange={handleRouteChange}
       onLanguageChange={setLanguage}
       onToday={handleToday}
+      pOnlyMode={pOnlyMode}
+      onCommandToggle={handleCommandToggle}
       t={t}
     >
       {route === 'dashboard' && (
@@ -596,6 +655,9 @@ export function App() {
       {route === 'notes' && <NotesPage {...aiPageProps} />}
       {route === 'goals' && <GoalsPage {...aiPageProps} />}
       {route === 'settings' && <SettingsPage {...aiPageProps} />}
+      {route === 'command' && (
+        <CommandPage t={t} />
+      )}
     </RivaShell>
   );
 }
