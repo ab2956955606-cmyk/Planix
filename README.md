@@ -1,10 +1,12 @@
 # Planix
 
+<video src="assets/readme/planix-demo.mp4" controls width="100%"></video>
+
+[如果视频没有自动显示，点击这里查看 Planix 演示视频。](assets/readme/planix-demo.mp4)
+
+![Planix Dashboard](assets/readme/planix-dashboard-cn.png)
+
 **Planix is an AI planning workspace with AI Agent, RAG, Agent Runtime, `structuredPlan`, P Mode, Tauri, and FastAPI sidecar packaging.**
-
-**Current version:** `v3.0.0`
-
-**Version note:** `v3.0.0` is the portfolio-facing documentation version. It does not mean `package.json`, backend health, Tauri config, Cargo config, or installer build versions were bumped.
 
 Planix 是一个面向学习、求职和长期目标管理的桌面 AI 规划工作台。它可以把用户的宽泛目标转化为结构化、可审查、可细化、可写入日历的任务计划，并结合本地资料库检索、Agent Runtime 执行链、P Mode 命令式对话和 Tauri 桌面打包，形成一个完整的 AI 应用工程项目。
 
@@ -12,9 +14,7 @@ Planix 是一个面向学习、求职和长期目标管理的桌面 AI 规划工
 
 ## Demo / 项目演示
 
-Planix 的核心演示路径是：输入一个宽泛目标，例如“帮我规划本周 AI 应用实习准备”，系统会检索本地资料库，生成结构化计划，展示 Agent Runtime 执行链，并允许用户继续细化任务或确认写入日历。
-
-<!-- TODO: 运行真实应用后补充截图。推荐路径：assets/planix-dashboard-cn.png -->
+Planix 的核心演示路径是：输入一个宽泛目标，例如“帮我规划本周 AI 应用实习准备”，系统会检索本地资料库，生成结构化计划，展示 Agent Runtime 执行链，并允许用户继续细化任务或确认写入日历。页面顶部的视频和截图展示的是 Planix 的真实界面与工作流。
 
 ## Planix 是什么
 
@@ -26,6 +26,77 @@ Planix 是一个桌面端 AI planning workspace，目标是帮助用户把模糊
 - 求职计划：简历优化、项目复盘、面试准备、作品集打磨。
 - 长期目标管理：阶段目标拆解、任务细化、日历排期。
 - 本地资料驱动规划：结合用户保存的笔记、资料和历史计划生成更贴合上下文的建议。
+
+## Planix 工作流程
+
+### 普通目标规划流程
+
+用户输入一个目标后，Planix 会先进入前端的 Command / P Mode 或 Goals 页面，再由 FastAPI 的 planning / runtime API 接收请求。后端会检索本地资料库，把相关资料作为上下文交给 LLM 或本地 fallback 规划器，生成 `structuredPlan`。前端拿到结构化计划后展示摘要、完整计划和可执行任务，用户可以继续细化、修改或确认。
+
+```text
+用户目标
+  → Command / P Mode 或 Goals
+  → FastAPI planning / runtime API
+  → RAG 检索本地资料
+  → LLM / local fallback 生成 structuredPlan
+  → 前端展示计划
+  → 用户细化 / 修改 / 确认
+```
+
+### Runtime 执行流程
+
+当用户运行智能体时，后端 RuntimeOrchestrator 会按固定链路组织工具调用。它先读取偏好和历史记忆，再读取今日计划，然后检索本地资料，必要时补充模型知识，最后生成任务提案。整个过程通过 NDJSON streaming 返回给前端，并渲染为 Agent Flow Trace 或 P Mode 执行链。
+
+```text
+用户运行智能体
+  → RuntimeOrchestrator
+  → get_memory
+  → get_today_plans
+  → search_materials
+  → enrich_with_model_knowledge
+  → propose_tasks
+  → NDJSON streaming
+  → Agent Flow Trace / P Mode 执行链
+```
+
+### P Mode 写入日历流程
+
+P Mode 不会让 Runtime 自动写入 Calendar。用户说“写进日历”后，Planix 会读取当前隐藏计划草稿，生成 Calendar WriteIntent，经过 PermissionGate 判断权限。如果需要确认，P 页面显示 ApprovalCard；如果允许自动执行，则通过 plans API 写入 Calendar，并在对话里显示创建、更新和失败结果。
+
+```text
+用户说“写进日历”
+  → 读取当前 hidden draft
+  → 生成 Calendar WriteIntent
+  → PermissionGate 判断
+  → ApprovalCard 或自动执行
+  → plans API 写入 Calendar
+  → P 页面显示写入结果
+```
+
+### 任务细化流程
+
+用户说“细化任务”“细化计划”或“细化全部任务”时，Planix 会读取当前 draft 或 Calendar plan，调用 planning refine service 生成 refinedTask。细化结果会写回 draft 或 plan 的 refined task 字段，并以内联卡片展示，不会污染用户填写的 completion / result。
+
+```text
+用户请求细化
+  → 当前 draft 或 Calendar plan
+  → planning refine service
+  → 生成 refinedTask
+  → 写回 refined task 字段
+  → 前端 inline card 展示
+```
+
+### 桌面端启动流程
+
+桌面版启动时，Tauri window 先加载打包后的前端资源，然后启动 FastAPI sidecar。FastAPI 连接本地 SQLite，前端再通过 API / IPC 调用后端能力。
+
+```text
+Tauri window 启动
+  → 加载前端资源
+  → 启动 FastAPI sidecar
+  → FastAPI 连接 SQLite
+  → 前端通过 API / IPC 调用后端
+```
 
 ## 核心亮点
 
@@ -170,33 +241,6 @@ npm install
 npm run dev
 ```
 
-## 桌面端安装说明
-
-当前 README 使用 `v3.0.0` 作为作品集展示版本。
-
-推荐的 Windows 安装包命名：
-
-```text
-Planix-v3.0.0-windows-x64-setup.exe
-```
-
-备用 / 企业安装包：
-
-```text
-Planix-v3.0.0-windows-x64.msi
-```
-
-校验文件：
-
-```text
-Planix-v3.0.0-windows-x64-setup.exe.sha256
-Planix-v3.0.0-windows-x64.msi.sha256
-```
-
-`.sha256` 文件是校验文件，不是安装程序，不能双击安装。
-
-如果真实 Release 资产尚未完全匹配上述命名，则这些名称表示 intended installer naming，真实下载以 GitHub Release 页面为准。
-
 ## 验证方式
 
 ```powershell
@@ -214,8 +258,6 @@ Backend health check:
 ```powershell
 curl http://127.0.0.1:8000/api/health
 ```
-
-> Note: `v3.0.0` is the portfolio-facing documentation version. It does not imply a package, backend, or installer version bump unless a separate release task is performed.
 
 ## Roadmap
 
@@ -256,3 +298,52 @@ Planix 主要展示以下能力：
 - **RAG 系统实践**：本地资料检索、上下文注入、来源展示。
 - **产品化能力**：从 Web 应用扩展到可安装桌面应用。
 - **安全意识**：API Key 不提交，Runtime 不自动写入正式数据，Calendar 写入需要用户确认。
+
+## 下载 Code 后进入 Planix
+
+如果你想在本地查看和运行 Planix，可以直接下载源码进入项目。
+
+### 方法一：Download ZIP
+
+1. 打开 GitHub 仓库页面。
+2. 点击绿色 `Code` 按钮。
+3. 选择 `Download ZIP`。
+4. 解压后进入项目目录。
+
+### 方法二：git clone
+
+```powershell
+git clone https://github.com/ab2956955606-cmyk/Planix.git
+cd Planix
+```
+
+### 启动后端
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn backend.app.main:app --reload
+```
+
+### 启动前端
+
+打开另一个终端：
+
+```powershell
+cd apps\web
+npm install
+npm run dev
+```
+
+然后在浏览器打开 Vite 输出的本地地址，通常是：
+
+```text
+http://127.0.0.1:5173
+```
+
+### 可选：桌面开发模式
+
+```powershell
+.\scripts\dev-desktop.ps1
+```
