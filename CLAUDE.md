@@ -4,7 +4,7 @@
 
 Planix is an AI application portfolio project. The portfolio-facing documentation version is `v3.0.0`, and it presents a RIVA-style AI OS Shell on the frontend connected to a real backend Runtime stream while keeping planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
 
-The current focus has moved into **Phase 4: Command Agent / P Mode** while preserving the Phase 3.5/3.7 planning, Runtime, and Calendar write behavior. The active P Mode slice is Phase 4.6: Collapsed Execution Chain + Draft Task Refinement, with a minimal conversation thread, bottom composer, hidden calendar drafts, inline draft detail/regeneration, inline task refinement, permission-gated Calendar writing, and a hidden right-side conversation drawer.
+The current focus has moved into **Phase 4: Command Agent / P Mode** while preserving the completed Phase 3 planning/RAG, Dashboard Runtime, and Calendar write behavior. The active P Mode slice is Phase 4.6: Collapsed Execution Chain + Draft Task Refinement, with a minimal conversation thread, bottom composer, hidden calendar drafts, inline draft detail/regeneration, inline task refinement, permission-gated Calendar writing, and a hidden right-side conversation drawer.
 
 The project is fully named Planix across frontend, backend, desktop, sidecar, installer, database path, environment variables, and documentation.
 
