@@ -1,6 +1,8 @@
 # Planix Desktop Packaging Notes
 
-Phase 8 turns the desktop scaffold into a Windows installer that normal users can install and run without a developer toolchain.
+Planix packages a React/Vite frontend and a FastAPI backend sidecar into a Windows desktop app through Tauri. These notes describe the intended installer experience and local packaging flow.
+
+The portfolio-facing documentation version is `v3.0.0`. It is a presentation label for documentation and release naming, not a package or backend version bump by itself.
 
 ## Target Shape
 
@@ -15,26 +17,39 @@ flowchart LR
 
 The release app should bundle:
 
-- The built web frontend copied into `apps/desktop/src-tauri/resources`
-- The backend sidecar binary named `planix-api`
-- A Tauri window named `Planix`
+- The built web frontend copied into `apps/desktop/src-tauri/resources`.
+- The backend sidecar binary named `planix-api`.
+- A Tauri window named `Planix`.
 
 ## Normal User Install
 
-Normal users should download the MSI installer only:
+Normal users should download the Setup.exe installer first:
 
 ```text
-Planix-v1.1.4-windows-x64.msi
+Planix-v3.0.0-windows-x64-setup.exe
 ```
 
-They should not download `Source code.zip` as the installer, run `planix-api.exe` directly, or set `$env:PLANIX_SKIP_SIDECAR="1"`. After installation, open `Planix` from the Windows Start menu.
+The MSI is kept as a backup or enterprise installer:
 
-The app bundles the frontend and the FastAPI sidecar. Users do not need Node.js, Python, Rust, Cargo, npm, pip, or a command line. Basic local features work immediately. AI features require the user to enter their own DeepSeek API key inside the app.
+```text
+Planix-v3.0.0-windows-x64.msi
+```
+
+Checksum files are for verification only:
+
+```text
+Planix-v3.0.0-windows-x64-setup.exe.sha256
+Planix-v3.0.0-windows-x64.msi.sha256
+```
+
+Users should not download `Source code.zip` as the installer, run `planix-api.exe` directly, open `.sha256` checksum files as installers, or set `$env:PLANIX_SKIP_SIDECAR="1"`. After installation, open `Planix` from the Windows Start menu.
+
+The app bundles the frontend and the FastAPI sidecar. Users do not need Node.js, Python, Rust, Cargo, npm, pip, or a command line. Basic local features work immediately. AI features require the user to enter their own DeepSeek-compatible API key inside the app.
 
 The installed directory is expected to look like this:
 
 ```text
-H:\planix\
+Planix\
   planix.exe
   resources\
     index.html
@@ -43,7 +58,7 @@ H:\planix\
       planix-api.exe
 ```
 
-If a user sees `asset not found: index.html`, the MSI was built incorrectly or is missing frontend assets. Rebuild and reinstall the latest MSI.
+If a user sees `asset not found: index.html`, the installer was built incorrectly or is missing frontend assets. Rebuild and reinstall the latest Setup.exe.
 
 ## Environment Contract
 
@@ -116,7 +131,7 @@ Build the backend sidecar:
 .\scripts\build-backend.ps1
 ```
 
-The backend script installs `requirements.txt` and `requirements-build.txt`, then packages `planix-api.exe` with PyInstaller. The sidecar copied into the MSI resources must be named:
+The backend script installs `requirements.txt` and `requirements-build.txt`, then packages `planix-api.exe` with PyInstaller. The sidecar copied into the installer resources must be named:
 
 ```text
 apps/desktop/src-tauri/resources/binaries/planix-api.exe
@@ -137,32 +152,34 @@ Run the static desktop check:
 ## Build The Release Package
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.1.4
+.\scripts\build-release.ps1 -Version 3.0.0
 ```
 
-Expected outputs:
+Expected portfolio release outputs:
 
 ```text
-release/Planix-v1.1.4-windows-x64.msi
-release/Planix-v1.1.4-windows-x64.sha256
+release/Planix-v3.0.0-windows-x64-setup.exe
+release/Planix-v3.0.0-windows-x64-setup.exe.sha256
+release/Planix-v3.0.0-windows-x64.msi
+release/Planix-v3.0.0-windows-x64.msi.sha256
 ```
 
 Publish locally with the official GitHub CLI after the build succeeds:
 
 ```powershell
 gh.exe auth status
-.\scripts\build-release.ps1 -Version 1.1.4 -CreateGitHubRelease
+.\scripts\build-release.ps1 -Version 3.0.0 -CreateGitHubRelease
 ```
 
-The project also includes `.github/workflows/desktop-release.yml`. Pushing a `v*` tag or manually running the workflow builds the Windows installer and uploads the MSI plus SHA256 checksum to GitHub Release.
+The project also includes `.github/workflows/desktop-release.yml`. Pushing a `v*` tag or manually running the workflow builds the Windows installers and uploads the Setup.exe, backup MSI, and their SHA256 checksum files to GitHub Release.
 
 ## Manual Acceptance
 
-- Install `Planix-v1.1.4-windows-x64.msi`.
+- Install `Planix-v3.0.0-windows-x64-setup.exe`.
 - Open `Planix`.
 - Confirm the web UI loads.
 - Confirm the FastAPI sidecar responds on `/api/health`.
-- Try calendar, goal planning, RAG query, TXT/MD material flow, and planner evaluation.
+- Try calendar, goal planning, RAG query, TXT/MD material flow, planner evaluation, Runtime trace, and P Mode.
 - Close the app and confirm every `planix-api` sidecar process exits, including the PyInstaller parent/child process tree.
 
 Run the installed-app smoke test:
@@ -181,14 +198,18 @@ The smoke test starts the installed app and checks `http://127.0.0.1:8000/api/he
 | `PyInstaller` missing | Run `.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt` |
 | `tauri` missing | Run `cd apps\desktop; npm.cmd install` |
 | `gh.ps1` blocked | Use official `gh.exe`, or publish through GitHub Actions |
-| MSI missing | Check `apps/desktop/src-tauri/target/release/bundle/msi` and rerun `npm.cmd run build` |
-| `asset not found: index.html` | Rebuild with `.\scripts\build-release.ps1 -Version 1.1.4`; `apps/web/dist/index.html` must exist |
+| Setup.exe missing | Check `apps/desktop/src-tauri/target/release/bundle/nsis` and rerun the release build |
+| MSI missing | Check `apps/desktop/src-tauri/target/release/bundle/msi` and rerun the release build |
+| `asset not found: index.html` | Rebuild with `.\scripts\build-release.ps1 -Version 3.0.0`; `apps/web/dist/index.html` must exist |
 | App opens but API is unavailable | Check port `8000`, sidecar file, and `%APPDATA%\Planix\logs\desktop.log` |
 
-## Phase 9 Checklist
+## Historical Notes
 
-- Add code signing for Windows releases.
-- Add Tauri auto-update.
-- Add desktop-specific empty/loading/error states.
-- Add release screenshots and a portfolio demo section.
+Older release notes under `docs/release-v*.md` are retained as historical records. They are not the current portfolio-facing documentation version.
 
+## Packaging Roadmap
+
+- Code signing for Windows releases.
+- Tauri auto-update.
+- Desktop-specific empty/loading/error states.
+- Real release screenshots and portfolio demo assets.

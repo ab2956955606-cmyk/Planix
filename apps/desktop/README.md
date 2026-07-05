@@ -1,8 +1,8 @@
 # Planix Desktop
 
-This folder contains the Tauri desktop shell and Phase 8 Windows release pipeline.
+This folder contains the Tauri desktop shell for Planix. The desktop app bundles the Vite web build and launches the FastAPI backend as a Tauri sidecar named `planix-api`.
 
-The app bundles the Vite web build and launches the FastAPI backend as a Tauri sidecar named `planix-api`.
+The portfolio-facing documentation version is `v3.0.0`. This is a documentation and release-presentation label; it does not automatically change package, Cargo, backend health, or build-script versions.
 
 ## Development
 
@@ -26,17 +26,26 @@ http://127.0.0.1:5173
 3. Tauri bundles the web dist and launches the backend through the `planix-api` sidecar.
 4. The sidecar receives `PLANIX_ENV=desktop` and stores SQLite data in the user data directory unless `PLANIX_DB_PATH` is set.
 
-## Release Build
+## Windows Installers
+
+The intended public installer naming for the portfolio release is:
+
+```text
+release/Planix-v3.0.0-windows-x64-setup.exe
+release/Planix-v3.0.0-windows-x64-setup.exe.sha256
+release/Planix-v3.0.0-windows-x64.msi
+release/Planix-v3.0.0-windows-x64.msi.sha256
+```
+
+Normal users should install with `Planix-v3.0.0-windows-x64-setup.exe`. The `.msi` is kept as a backup or enterprise installer. `.sha256` files are checksum files only and are not installers.
+
+## Build Commands
+
+Use the project release script for local installer builds:
 
 ```powershell
 .\scripts\check-packaging-toolchain.ps1
-.\scripts\build-release.ps1 -Version 1.1.4
+.\scripts\build-release.ps1 -Version 3.0.0
 ```
 
-Outputs:
-
-```text
-release/Planix-v1.1.4-windows-x64.msi
-release/Planix-v1.1.4-windows-x64.sha256
-```
-
+Do not commit generated installer binaries, release folders, Tauri targets, or sidecar build output.

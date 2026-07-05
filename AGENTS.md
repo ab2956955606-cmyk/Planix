@@ -6,7 +6,7 @@ Planix is a portfolio-grade AI planning application for learning, job search, an
 
 The project is fully renamed to Planix. Do not reintroduce former product, storage, sidecar, or environment-variable names.
 
-Current baseline: `1.1.4`.
+Portfolio-facing documentation version: `v3.0.0`. This is a presentation label for README and related showcase docs; do not treat it as a package, Cargo, Tauri, backend health, or installer build version unless a separate release-version task explicitly says so.
 
 ## Current Phase
 
@@ -34,7 +34,7 @@ Forbidden in this phase:
 - Letting P Mode bypass `command_actions`, `command_approvals`, or PermissionGate for Calendar writes.
 - Turning P Workspace into a foreground layout panel or persistent Calendar/Goals/Materials/Notes draft area.
 - Changing `/api/runtime/run` event protocol.
-- Changing Tauri/MSI sidecar mechanics.
+- Changing Tauri Windows installer sidecar mechanics.
 
 ## Architecture
 
@@ -85,7 +85,8 @@ Forbidden in this phase:
 - Backend health app: `planix-api`
 - Sidecar executable: `planix-api.exe`
 - Desktop executable: `planix.exe`
-- MSI artifact: `Planix-v1.1.4-windows-x64.msi`
+- Intended portfolio installer artifact: `Planix-v3.0.0-windows-x64-setup.exe`
+- Intended backup MSI artifact: `Planix-v3.0.0-windows-x64.msi`
 - Environment namespace: `PLANIX_*`
 - Desktop database: `%APPDATA%\Planix\planix.db`
 - Development database: `data/planix.db`
@@ -190,15 +191,19 @@ Desktop packaging:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\check-packaging-toolchain.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 1.1.4
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version 3.0.0
 ```
 
-Latest local MSI generation record: `release\Planix-v1.1.4-windows-x64.msi` was regenerated on 2026-07-05 after replacing the Windows installer/app icon with the app shell gradient `P` brand mark. SHA256: `6a25f460124508dd2db7a9d8f90137ea2e7074690eda3f62faabe6e47cf1787e`. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
+Portfolio release naming uses `release\Planix-v3.0.0-windows-x64-setup.exe` as the primary Setup.exe and `release\Planix-v3.0.0-windows-x64.msi` as the backup MSI. Each installer should have its own `.sha256` checksum. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
 
 ## Documentation Maintenance
 
 Every completed implementation must update `README.md`, `AGENTS.md`, and `CLAUDE.md` before final reporting. Include relevant behavior, API/database changes, phase boundaries, and verification notes; do not record secrets, local API keys, or machine-specific credentials.
 
 Update these three files whenever architecture, version, routes, UI shell, API behavior, database behavior, environment variables, AI strategy, packaging, release artifacts, screenshots, or portfolio positioning changes.
+
+`README.md` is the portfolio-facing project homepage. Keep internal maintenance rules, implementation notes, and historical development logs in `AGENTS.md`, `CLAUDE.md`, or `docs/`, not at the top of `README.md`.
+
+The portfolio-facing documentation version is `v3.0.0`. Do not confuse this with `package.json`, `tauri.conf.json`, `Cargo.toml`, backend health responses, or installer build versions unless a separate release-version bump task is explicitly requested.
 
 Current Calendar behavior includes a compact month layout, a `Note` area on the Calendar panel, selected-day plan clearing, and full calendar plan clearing. The two clearing buttons should remain visible above the date grid. Clearing plans deletes Calendar `plans` and their task refinements only; it must not delete notes/materials, Goals planning history, AI settings, documents, or API keys.

@@ -2,7 +2,7 @@
 
 ## Positioning
 
-Planix is a `v1.1.4` AI application portfolio project. It presents a RIVA-style AI OS Shell on the frontend and connects the Dashboard Agent Trace to a real backend Runtime stream while keeping planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
+Planix is an AI application portfolio project. The portfolio-facing documentation version is `v3.0.0`, and it presents a RIVA-style AI OS Shell on the frontend connected to a real backend Runtime stream while keeping planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
 
 The current focus has moved into **Phase 4: Command Agent / P Mode** while preserving the Phase 3.5/3.7 planning, Runtime, and Calendar write behavior. The active P Mode slice is Phase 4.6: Collapsed Execution Chain + Draft Task Refinement, with a minimal conversation thread, bottom composer, hidden calendar drafts, inline draft detail/regeneration, inline task refinement, permission-gated Calendar writing, and a hidden right-side conversation drawer.
 
@@ -11,6 +11,10 @@ The project is fully named Planix across frontend, backend, desktop, sidecar, in
 ## Documentation Maintenance
 
 Every completed implementation must update `README.md`, `AGENTS.md`, and `CLAUDE.md` before final reporting. Record relevant behavior, API/database changes, phase boundaries, and verification notes, but never record secrets, local API keys, Authorization headers, or machine-specific credentials.
+
+`README.md` is the portfolio-facing project homepage. Keep internal maintenance rules, implementation notes, and historical development logs in `AGENTS.md`, `CLAUDE.md`, or `docs/`, not at the top of `README.md`.
+
+The portfolio-facing documentation version is `v3.0.0`. Do not confuse this with `package.json`, `tauri.conf.json`, `Cargo.toml`, backend health responses, or installer build versions unless a separate release-version bump task is explicitly requested.
 
 ## Stack
 
@@ -91,7 +95,8 @@ Rules:
 - Tauri main binary: `planix`
 - Sidecar binary: `planix-api.exe`
 - API health app: `planix-api`
-- MSI artifact: `Planix-v1.1.4-windows-x64.msi`
+- Intended portfolio installer artifact: `Planix-v3.0.0-windows-x64-setup.exe`
+- Intended backup MSI artifact: `Planix-v3.0.0-windows-x64.msi`
 - Environment namespace: `PLANIX_*`
 - User database path: `%APPDATA%\Planix\planix.db`
 - Local database path: `data/planix.db`
@@ -226,7 +231,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-desktop-config.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\check-packaging-toolchain.ps1
 ```
 
-Latest local MSI generation record: `release\Planix-v1.1.4-windows-x64.msi` was regenerated on 2026-07-05 after replacing the Windows installer/app icon with the app shell gradient `P` brand mark. SHA256: `6a25f460124508dd2db7a9d8f90137ea2e7074690eda3f62faabe6e47cf1787e`. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
+Portfolio release naming uses `release\Planix-v3.0.0-windows-x64-setup.exe` as the primary Setup.exe and `release\Planix-v3.0.0-windows-x64.msi` as the backup MSI. Each installer should have its own `.sha256` checksum. Release binaries remain ignored by Git and should be attached through release tooling rather than committed.
 
 ## Documentation Maintenance
 

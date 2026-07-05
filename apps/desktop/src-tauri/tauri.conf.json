@@ -28,7 +28,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": ["nsis", "msi"],
+    "publisher": "Planix",
     "icon": ["icons/icon.ico"],
     "resources": {
       "resources/index.html": "resources/index.html",
@@ -38,6 +39,11 @@
     "windows": {
       "wix": {
         "language": "zh-CN"
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "installMode": "currentUser"
       },
       "webviewInstallMode": {
         "type": "embedBootstrapper",

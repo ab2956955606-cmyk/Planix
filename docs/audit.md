@@ -4,7 +4,7 @@ This document records the current desktop-readiness baseline for Planix.
 
 ## Current Product Target
 
-Planix is a Windows-installable AI planning workspace. A normal user should be able to install the MSI, open `planix.exe`, load the bundled web UI, and use the FastAPI sidecar without installing Node.js, Python, Rust, npm, pip, or command-line tools.
+Planix is a Windows-installable AI planning workspace. A normal user should be able to install the NSIS Setup.exe, open `planix.exe`, load the bundled web UI, and use the FastAPI sidecar without installing Node.js, Python, Rust, npm, pip, or command-line tools. MSI remains available as a backup installer.
 
 ## Current Architecture
 
@@ -14,7 +14,7 @@ backend/app              FastAPI application
 backend/app/db.py        SQLite schema and connection layer
 scripts/pyinstaller      PyInstaller sidecar entry/spec
 apps/desktop             Tauri v2 desktop shell
-release                  MSI and SHA256 release assets
+release                  NSIS Setup.exe, MSI, and SHA256 release assets
 ```
 
 ## Runtime Contract
@@ -65,7 +65,7 @@ Planix\
 
 ## Known Risks
 
-- The MSI is unsigned.
+- The Windows installers are unsigned.
 - The app does not yet include auto-update.
 - The desktop sidecar uses port `8000`; a port conflict blocks local API startup.
 - Live model calls require the user's own API key and `USE_REAL_LLM=1`.

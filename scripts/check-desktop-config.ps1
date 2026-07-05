@@ -40,6 +40,27 @@ if ($Config.bundle.windows.webviewInstallMode.type -ne "embedBootstrapper") {
     throw "Windows bundle should embed the WebView2 bootstrapper."
 }
 
+$Targets = @($Config.bundle.targets)
+if (-not ($Targets -contains "nsis") -or -not ($Targets -contains "msi")) {
+    throw "Desktop bundle targets must include both nsis and msi."
+}
+
+if ($Config.bundle.publisher -ne "Planix") {
+    throw "Unexpected bundle publisher: $($Config.bundle.publisher)"
+}
+
+if ($Config.bundle.windows.nsis.installerIcon -ne "icons/icon.ico") {
+    throw "NSIS installerIcon should use icons/icon.ico."
+}
+
+if ($Config.bundle.windows.nsis.uninstallerIcon -ne "icons/icon.ico") {
+    throw "NSIS uninstallerIcon should use icons/icon.ico."
+}
+
+if ($Config.bundle.windows.nsis.installMode -ne "currentUser") {
+    throw "NSIS installMode should be currentUser."
+}
+
 $Resources = $Config.bundle.resources
 if ($Resources.'resources/index.html' -ne "resources/index.html") {
     throw "Desktop bundle must copy resources/index.html."
