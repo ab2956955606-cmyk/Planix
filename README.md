@@ -1,8 +1,8 @@
 # Planix
 
-<video src="assets/readme/planix-demo.mp4" controls width="100%"></video>
+![Planix demo](assets/readme/planix-demo.gif)
 
-[如果视频没有自动显示，点击这里查看 Planix 演示视频。](assets/readme/planix-demo.mp4)
+[此处下载完整视频。](assets/readme/planix-demo.mp4)
 
 ![Planix Dashboard](assets/readme/planix-dashboard-cn.png)
 
