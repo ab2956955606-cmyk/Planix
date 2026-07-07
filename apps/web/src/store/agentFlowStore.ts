@@ -6,6 +6,8 @@ import type {
   AgentRuntimeEvent,
   AgentRuntimeToolCall,
   ModelKnowledgeDecision,
+  PlanHorizon,
+  PlanQualityStatus,
   RuntimePlanProposal,
   StructuredGoalPlan
 } from '../types';
@@ -377,6 +379,75 @@ function nonEmptyString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizePlanHorizon(value: unknown): PlanHorizon | undefined {
+  if (!isRecord(value)) return undefined;
+  const durationDays = positiveNumber(value.durationDays);
+  const expectedMilestoneCount = positiveNumber(value.expectedMilestoneCount);
+  const expectedMinTaskCount = positiveNumber(value.expectedMinTaskCount);
+  const expectedWeekCount = positiveNumber(value.expectedWeekCount);
+  const horizonType = value.horizonType;
+  if (
+    durationDays === undefined
+    || expectedMilestoneCount === undefined
+    || expectedMinTaskCount === undefined
+    || expectedWeekCount === undefined
+    || !['daily', 'weekly', 'monthly', 'quarterly', 'long_term'].includes(String(horizonType))
+  ) {
+    return undefined;
+  }
+  return {
+    rawText: nonEmptyString(value.rawText),
+    durationDays,
+    horizonType: horizonType as PlanHorizon['horizonType'],
+    startDate: nonEmptyString(value.startDate),
+    endDate: nonEmptyString(value.endDate),
+    expectedMilestoneCount,
+    expectedMinTaskCount,
+    expectedWeekCount
+  };
+}
+
+function normalizeQualityReport(value: unknown): RuntimePlanProposal['qualityReport'] {
+  if (!isRecord(value) || typeof value.ok !== 'boolean') return undefined;
+  const score = positiveNumber(value.score);
+  const totalTasks = positiveNumber(value.totalTasks);
+  const milestoneCount = positiveNumber(value.milestoneCount);
+  const coveredWeekCount = positiveNumber(value.coveredWeekCount);
+  const dateSpanDays = positiveNumber(value.dateSpanDays);
+  if (
+    score === undefined
+    || totalTasks === undefined
+    || milestoneCount === undefined
+    || coveredWeekCount === undefined
+    || dateSpanDays === undefined
+  ) {
+    return undefined;
+  }
+  const issues = Array.isArray(value.issues)
+    ? value.issues
+      .filter((issue): issue is Record<string, unknown> => isRecord(issue))
+      .map((issue) => ({
+        code: nonEmptyString(issue.code),
+        message: nonEmptyString(issue.message),
+        severity: issue.severity === 'error' ? 'error' as const : 'warning' as const
+      }))
+      .filter((issue) => issue.code || issue.message)
+    : [];
+  return {
+    ok: value.ok,
+    score,
+    totalTasks,
+    milestoneCount,
+    coveredWeekCount,
+    dateSpanDays,
+    issues
+  };
+}
+
 function isValidStructuredPlan(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value) || !Array.isArray(value.milestones)) return false;
   return value.milestones.some((milestone) => (
@@ -443,6 +514,15 @@ function extractRuntimePlanProposal(toolCall: AgentRuntimeToolCall, runtimeRunId
   const structuredPlan = normalizeStructuredPlan(toolCall.output.structuredPlan, goal);
   if (!structuredPlan) return undefined;
   const mode = toolCall.output.mode === 'llm' ? 'llm' : 'local_fallback';
+  const qualityStatus = ['passed', 'repaired', 'local_fallback'].includes(String(toolCall.output.qualityStatus))
+    ? toolCall.output.qualityStatus as PlanQualityStatus
+    : undefined;
+  const sourceType = ['local_context', 'model_knowledge', 'local_fallback', 'insufficient_context'].includes(String(toolCall.output.sourceType))
+    ? toolCall.output.sourceType as RuntimePlanProposal['sourceType']
+    : undefined;
+  const localRelevance = ['high', 'medium', 'low'].includes(String(toolCall.output.localRelevance))
+    ? toolCall.output.localRelevance as RuntimePlanProposal['localRelevance']
+    : undefined;
   return {
     runtimeRunId,
     goal: goal === 'Runtime proposal' ? structuredPlan.goalTitle : goal,
@@ -452,7 +532,12 @@ function extractRuntimePlanProposal(toolCall: AgentRuntimeToolCall, runtimeRunId
     mode,
     fallbackReason: typeof toolCall.output.fallbackReason === 'string' ? toolCall.output.fallbackReason : undefined,
     errorType: typeof toolCall.output.errorType === 'string' ? toolCall.output.errorType : undefined,
-    baseUrlHost: typeof toolCall.output.baseUrlHost === 'string' ? toolCall.output.baseUrlHost : undefined
+    baseUrlHost: typeof toolCall.output.baseUrlHost === 'string' ? toolCall.output.baseUrlHost : undefined,
+    planHorizon: normalizePlanHorizon(toolCall.output.planHorizon),
+    qualityReport: normalizeQualityReport(toolCall.output.qualityReport),
+    qualityStatus,
+    sourceType,
+    localRelevance
   };
 }
 

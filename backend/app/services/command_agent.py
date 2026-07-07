@@ -27,7 +27,7 @@ from ..schemas import (
 from .llm import LlmClient
 from .permission_gate import command_action_requires_approval
 from .plans import create_plan, save_plan_refined_task, update_plan
-from .planning import PlanningService
+from .planning import PlanningService, build_refine_plan_context
 from .runtime import RuntimeOrchestrator
 
 CommandIntent = Literal[
@@ -128,6 +128,17 @@ def detect_command_intent(message: str) -> CommandIntent:
         text,
     ):
         return "sync_to_calendar"
+    if re.search(
+        r"(写进|写入|同步|保存).{0,12}(计划|规划|草稿|plan|draft)",
+        text,
+    ) or re.search(
+        r"(计划|规划|草稿|this plan|current plan|draft).{0,12}(写进|写入|同步|保存|write|sync|save)",
+        text,
+    ) or re.search(
+        r"(write|sync|save) .{0,16}(this|current|the) .{0,8}(plan|draft)",
+        text,
+    ):
+        return "sync_to_calendar"
     if re.search(r"(细化|細化|拆细|一键细化|refine|refinement).{0,16}(任务|计划|全部|all|task|plan)?", text):
         return "refine_current_plan"
     if re.search(r"(重新生成|再生成|换个版本|另一个版本|更轻松|更激进|regenerate|another version)", text):
@@ -146,6 +157,41 @@ def detect_command_intent(message: str) -> CommandIntent:
     if re.search(r"(执行|删除|清空|设置|保存|execute|delete|clear|save|setting)", text):
         return "unsupported_command"
     return "normal_chat"
+
+
+def _looks_like_current_draft_write(message: str) -> bool:
+    text = message.strip().lower()
+    if not text:
+        return False
+    if re.fullmatch(
+        r"(写入|写进|保存|同步|确认|确认写入|执行写入|写入计划|保存计划|同步计划|write|save|sync|confirm|apply)",
+        text,
+    ):
+        return True
+    if re.search(
+        r"(写入|写进|保存|同步|确认|执行写入).{0,10}(计划|规划|草稿|当前|这个|这份|刚才|上面|它|plan|draft)",
+        text,
+    ):
+        return True
+    return bool(
+        re.search(
+            r"(计划|规划|草稿|当前|这个|这份|刚才|上面|它|this plan|current plan|draft).{0,10}(写入|写进|保存|同步|确认|执行写入|write|save|sync|confirm|apply)",
+            text,
+        )
+    )
+
+
+def resolve_command_intent(
+    message: str,
+    intent: CommandIntent | None = None,
+    *,
+    has_current_draft: bool = False,
+) -> CommandIntent:
+    resolved = intent or detect_command_intent(message)
+    if has_current_draft and resolved in {"normal_chat", "planning_request", "unsupported_command"}:
+        if _looks_like_current_draft_write(message):
+            return "sync_to_calendar"
+    return resolved
 
 
 def _intent_reply(intent: CommandIntent, message: str) -> str:
@@ -293,17 +339,30 @@ def _refined_task_from_payload(value: Any) -> RefinedTask | None:
     return None
 
 
-def _compact_summary(structured_plan: dict[str, Any], *, title: str) -> str:
+def _compact_summary(
+    structured_plan: dict[str, Any],
+    *,
+    title: str,
+    quality_status: str | None = None,
+    plan_horizon: dict[str, Any] | None = None,
+) -> str:
     milestones = _milestone_count(structured_plan)
     tasks = _task_count(structured_plan)
     days = _duration_days(structured_plan)
+    quality_label = {
+        "passed": "良好",
+        "repaired": "已自动补全",
+        "local_fallback": "本地模板兜底",
+    }.get(str(quality_status or ""), "已生成")
+    horizon_days = plan_horizon.get("durationDays") if isinstance(plan_horizon, dict) else days
     return (
         "已生成计划草稿。\n\n"
         "摘要：\n"
         f"- 计划：{title}\n"
         f"- {milestones} 个阶段\n"
         f"- {tasks} 个任务\n"
-        f"- 覆盖 {days} 天\n"
+        f"- 覆盖 {horizon_days} 天\n"
+        f"- 计划质量：{quality_label}\n"
         "- 可写入日历\n\n"
         "你可以继续说：\n"
         "“展开看看完整计划”\n"
@@ -538,6 +597,11 @@ class CommandAgentService:
         intent = detect_command_intent(payload.message)
         try:
             thread_id = self.ensure_thread(payload.thread_id, title=payload.message)
+            intent = resolve_command_intent(
+                payload.message,
+                intent,
+                has_current_draft=self._get_current_draft(thread_id) is not None,
+            )
             yield from self._stream_chat_impl(thread_id, payload, intent=intent)
         except AssertionError:
             raise
@@ -771,7 +835,8 @@ class CommandAgentService:
             return []
         text = message.strip().lower()
         if re.search(r"(全部|所有|一键|all|every)", text):
-            return records
+            first_milestone = records[0]["milestoneIndex"]
+            return [record for record in records if record["milestoneIndex"] == first_milestone][:5]
 
         number_match = re.search(r"(?:第|task\s*)?(\d+)(?:\s*(?:个|项|条|号|task))?", text)
         if number_match:
@@ -784,7 +849,7 @@ class CommandAgentService:
             title = str(record["title"]).strip()
             if title and title.lower() in text:
                 matched.append(record)
-        return matched or records
+        return (matched[:5] if matched else records[:1])
 
     def _save_draft_refinements(
         self,
@@ -847,6 +912,16 @@ class CommandAgentService:
                         ),
                         date=_normalize_task_date(record.get("dueDate"), _today()),
                         availableMinutes=_task_minutes(record.get("estimatedMinutes")),
+                        planContext=build_refine_plan_context(
+                            draft.payload.get("structuredPlan"),
+                            milestone_index=int(record["milestoneIndex"]),
+                            task_index=int(record["taskIndex"]),
+                            sources=draft.payload.get("sources") if isinstance(draft.payload.get("sources"), list) else [],
+                            plan_horizon=draft.payload.get("planHorizon") if isinstance(draft.payload.get("planHorizon"), dict) else None,
+                            quality_status=str(draft.payload.get("qualityStatus") or ""),
+                            daily_learning_minutes=_task_minutes(record.get("estimatedMinutes")),
+                        ),
+                        retrievedSources=draft.payload.get("sources") if isinstance(draft.payload.get("sources"), list) else [],
                         outputLanguage=output_language,
                         refinementInstruction=payload.message,
                     )
@@ -1025,7 +1100,14 @@ class CommandAgentService:
 
         structured_plan = proposal_output["structuredPlan"]
         title = _plan_title(structured_plan, proposal_input.get("goal") or payload.message)
-        summary = _compact_summary(structured_plan, title=title)
+        plan_horizon = proposal_output.get("planHorizon") if isinstance(proposal_output.get("planHorizon"), dict) else None
+        quality_report = proposal_output.get("qualityReport") if isinstance(proposal_output.get("qualityReport"), dict) else None
+        summary = _compact_summary(
+            structured_plan,
+            title=title,
+            quality_status=str(proposal_output.get("qualityStatus") or ""),
+            plan_horizon=plan_horizon,
+        )
         draft = self._create_calendar_draft(
             thread_id=thread_id,
             title=title,
@@ -1042,6 +1124,11 @@ class CommandAgentService:
                 "fallbackReason": proposal_output.get("fallbackReason"),
                 "errorType": proposal_output.get("errorType"),
                 "baseUrlHost": proposal_output.get("baseUrlHost"),
+                "planHorizon": plan_horizon,
+                "qualityReport": quality_report,
+                "qualityStatus": proposal_output.get("qualityStatus"),
+                "sourceType": proposal_output.get("sourceType"),
+                "localRelevance": proposal_output.get("localRelevance"),
                 "summary": summary,
             },
         )
@@ -1266,6 +1353,10 @@ class CommandAgentService:
         date = _normalize_task_date(item.get("date"), _today())
         time = str(item.get("time") or "09:00")
         source_key = str(item.get("sourceKey") or "").strip()
+        description = str(item.get("description") or "").strip()
+        priority = _task_priority(item.get("priority"))
+        estimated_minutes = _task_minutes(item.get("estimatedMinutes"))
+        row_data: dict[str, Any] | None = None
         with get_conn() as conn:
             row = None
             if source_key:
@@ -1284,16 +1375,22 @@ class CommandAgentService:
                 if row["source"] != "ai":
                     row = None
             if row:
-                if source_key and row["source_key"] != source_key:
-                    plan = update_plan(row["id"], PlanUpdate(sourceKey=source_key))
-                else:
-                    from .plans import _to_plan
-
-                    plan = _to_plan(row)
-                refined_task = _refined_task_from_payload(item.get("refinedTask"))
-                if refined_task:
-                    plan = save_plan_refined_task(plan.id, PlanRefinedTaskUpdate(refinedTask=refined_task))
-                return "updated", plan
+                row_data = dict(row)
+        if row_data:
+            updates: dict[str, Any] = {}
+            if source_key and row_data["source_key"] != source_key:
+                updates["sourceKey"] = source_key
+            if description and not str(row_data["result"] or "").strip():
+                updates["result"] = description
+            if row_data["priority"] != priority:
+                updates["priority"] = priority
+            if int(row_data["estimated_minutes"] or 0) != estimated_minutes:
+                updates["estimatedMinutes"] = estimated_minutes
+            plan = update_plan(row_data["id"], PlanUpdate(**updates))
+            refined_task = _refined_task_from_payload(item.get("refinedTask"))
+            if refined_task:
+                plan = save_plan_refined_task(plan.id, PlanRefinedTaskUpdate(refinedTask=refined_task))
+            return "updated", plan
         refined_task = _refined_task_from_payload(item.get("refinedTask"))
         plan = create_plan(
             PlanCreate(
@@ -1301,9 +1398,9 @@ class CommandAgentService:
                 time=time,
                 content=title,
                 done=False,
-                result="",
-                priority=_task_priority(item.get("priority")),
-                estimatedMinutes=_task_minutes(item.get("estimatedMinutes")),
+                result=description,
+                priority=priority,
+                estimatedMinutes=estimated_minutes,
                 source="ai",
                 sourceKey=source_key,
                 refinedTask=refined_task,

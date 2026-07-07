@@ -26,6 +26,7 @@ Allowed in this phase:
 - Keep P Mode context thread-local: recent user/assistant text from the current thread may inform chat and planning, but new chats must not inherit prior thread context.
 - Let P Mode write Calendar plans only from the current hidden `calendar_plan` draft through `command_actions`, `command_approvals`, and PermissionGate.
 - Let P Mode refine tasks in the current hidden `calendar_plan` draft through the existing planning refinement service. Refinement results stay in the command draft until the user writes the plan to Calendar.
+- Phase 3.10 may refine tasks with compact plan context, short time blocks, official/authoritative learning resources, budget explanation, and plan-fit checks.
 
 Forbidden in this phase:
 
@@ -69,6 +70,7 @@ Forbidden in this phase:
 - Backend app: `backend/app/main.py`
 - Backend schemas: `backend/app/schemas.py`
 - Structured planning helper: `backend/app/services/structured_goal_plan.py`
+- Planning quality gate: `backend/app/services/planning_quality.py`
 - Runtime route: `backend/app/routers/runtime.py`
 - Runtime service: `backend/app/services/runtime.py`
 - Command route: `backend/app/routers/command.py`
@@ -108,6 +110,12 @@ There is no compatibility fallback for old names or old environment variables.
 - Goals should display `structuredPlan` when present while keeping legacy task apply flows based on `tasks`.
 - Goals calendar writes must show immediate writing feedback, a visible pressed/writing button state, and final created/updated/failed counts.
 - Dashboard Runtime proposals may be written to Calendar only after the user clicks `写入日历`; valid `llm` and `local_fallback` structuredPlan outputs are both writable, and Runtime execution itself must not auto-write Calendar data.
+- Dashboard Runtime proposal metadata may show plan quality label, horizon duration, task count, and coverage range, but must not show raw validator JSON or full quality score.
+- P Mode hidden `calendar_plan` draft payloads should preserve `planHorizon`, `qualityReport`, `qualityStatus`, `sourceType`, and `localRelevance`; summaries may say the plan was automatically completed or locally templated.
+- Refined task cards should display optional `timeBlocks`, `learningResources`, `budgetExplanation`, and `planFitCheck` when present while remaining compatible with older refined tasks.
+- Calendar and Goals task refinement must pass the task's real `estimatedMinutes`; do not hardcode Calendar refinement to 60 minutes.
+- Calendar refinement for AI plans with `command-draft:{draftId}:m{milestoneIndex}:t{taskIndex}` source keys must resolve the original hidden draft and build compact plan context from its `structuredPlan`; fall back to the current Calendar row only when that lookup is unavailable.
+- AI Calendar writes must preserve task `description` in `plans.result`, plus `estimatedMinutes`, `priority`, and `sourceKey`. Existing AI rows may be topped up only when `result` is empty; never overwrite user-entered completion/result.
 - Command/P Mode must stay Codex-like and minimal: `CommandPage` contains the Agent thread and bottom composer only. Do not add a fixed `PWorkspacePanel` or persistent draft panels.
 - The top-left Planix `P` brand mark and the menu P entry both route to Command/P Mode; collapsed menu states must still show a visible P letter and should never leave only a colored background.
 - When no explicit hash route exists, the frontend should default to `#/command`. The P composer should use normal bottom anchoring while feeling spacious: start around two text rows, begin text from the left edge, grow with input, and scroll internally only after about five rows.
@@ -122,6 +130,7 @@ There is no compatibility fallback for old names or old environment variables.
 - Workbench mode is a forced planning entry state and may run backend Runtime to create a hidden `calendar_plan` draft.
 - Command permission state is `low | medium | high`; low asks before writes/deletes, medium auto-runs ordinary writes but asks before deletes, high auto-runs ordinary writes/deletes while dangerous actions still require confirmation.
 - P Mode Calendar writes must come from the current hidden `calendar_plan` draft, use `command-draft:` source keys, never overwrite manual plans, and never overwrite `completion/result/done`.
+- In a thread with a current `calendar_plan` draft, P Mode phrases such as `写入计划`, `保存计划`, `保存`, and `确认写入` mean writing the current draft to Calendar through PermissionGate; they must not start a new Runtime planning run.
 - P Mode Calendar writes may carry `refinedTask` values from `command_drafts.payload_json.refinements` into `plans.refined_task_json`; this must never be mixed into `completion/result/done`.
 - P Mode Calendar write failures, including approval execution failures, must show the Calendar-specific write error and must not fall back to draft-save failure wording.
 - Command table startup migrations must preserve old local SQLite data and add `command_actions.draft_id`, `command_actions.error_message`, and `command_approvals.decision` without destructive rebuilds.
@@ -144,9 +153,17 @@ There is no compatibility fallback for old names or old environment variables.
 - Goal planning asks the model only for `summary + structuredPlan`; legacy `phases` and `tasks` are derived from `structuredPlan`.
 - `PLANIX_GOAL_PLAN_MAX_TOKENS` controls Goals planning output budget. Default is `4096`; values above `8000` must clamp to `8000`.
 - OpenAI-compatible `finish_reason="length"` must map to `errorType="model_output_truncated"` rather than generic invalid JSON.
-- `GoalPlanOut` must keep `summary`, `phases`, `tasks`, and `sources` while adding `structuredPlan`.
+- `GoalPlanOut` must keep `summary`, `phases`, `tasks`, and `sources` while adding `structuredPlan`, `planHorizon`, `qualityReport`, `qualityStatus`, `sourceType`, and `localRelevance`.
+- Planning quality must run in the shared Planning Service after model parsing/normalization. Detect the horizon from explicit duration first, then valid deadline, then long-term keywords, otherwise default to 14 days.
+- Horizon-aware planning instructions and validation should replace static tiny limits. 90-day plans should prefer monthly milestones, at least 24 tasks, and at least 10 covered weeks.
+- If quality validation has error-severity issues, call at most one repair prompt. If repair still fails, return the stronger local structured fallback with `qualityStatus="local_fallback"`.
+- Local fallback must spread due dates across the full horizon, keep `estimatedMinutes` capped by available daily minutes, and generate 90-day plans with 3+ milestones, 24+ tasks, non-identical due dates, and 10+ covered weeks.
+- Quality validation should flag missing milestones/tasks, too few tasks, insufficient week coverage, first-week-only long plans, missing/out-of-range due dates, empty titles, and weak generic titles such as `继续学习`, `保持练习`, or `完成任务`.
 - Planning fallback must be transparent with safe diagnostics: `fallbackReason`, `errorType`, and host-only `baseUrlHost`.
 - `planning_goals` is planning result history/cache, not a confirmed execution table.
+- The Phase 3.9 quality fields require no database migration; `planning_goals` continues storing the final `structured_plan_json`.
+- Local retrieved materials count as `sourceType="local_context"` only when core or strong expanded keywords match. Generic weak keywords alone must never produce strong local relevance.
+- When local context is insufficient, Runtime final output should prepend `本地资料不足，下面是通用建议，不代表资料库事实.`
 - Runtime tools are restricted to read-only or preview-only behavior in this phase.
 - Runtime must build one internal Context Pack containing goal, explicit constraints, preference memory, history memory, today plans, materials, and output language.
 - Preference memory is separate from history memory and has higher planning priority.
@@ -156,13 +173,20 @@ There is no compatibility fallback for old names or old environment variables.
 - `memoryContextSummary` must be deterministic, short, and safe for display.
 - `search_materials`, `get_today_plans`, and `get_memory` are read-only.
 - `get_memory` returns `preferenceMemory` and `historyMemory`; do not add a separate `get_preferences` tool.
-- `propose_tasks` may return structured task previews with `memoryContextSummary` but must not write to `plans`, Goals, Calendar, or Notes.
+- `propose_tasks` may return structured task previews with `memoryContextSummary`, `planHorizon`, `qualityReport`, `qualityStatus`, `sourceType`, and `localRelevance`, but must not write to `plans`, Goals, Calendar, or Notes.
 - `structuredPlan` is the fact source; Runtime final output should be rendered from it.
 - `RuntimeOrchestrator` is the only component that coordinates Planner, Memory, Tool Router, and Stream Engine.
 - Rust/Tauri streaming bridge must stay a thin pass-through; do not put Runtime state or business logic in Rust.
 - Settings maintenance endpoints under `/api/settings/*` may clear AI memory/cache only. They must not delete formal `plans`, Calendar data, Notes/materials, documents, or AI settings.
 - Phase 4.6 command endpoints expose `POST /api/command/chat`, `POST /api/command/approve`, `GET /api/command/threads`, `GET /api/command/thread/{thread_id}`, and `DELETE /api/command/thread/{thread_id}`. They store `command_threads`, `command_messages`, hidden `command_drafts`, Calendar write `command_actions`, and `command_approvals`.
 - `refine_current_plan` is a command intent handled through `/api/command/chat`. It updates the current `command_drafts.payload_json.refinements`, emits inline refinement result cards, and does not write Calendar unless the user separately commands a Calendar write.
+- Phase 3.10 task refinement must keep all new fields optional on `RefineTaskRequest` and `RefinedTask`; no database migration is required because existing `refined_task_json` storage is reused.
+- `planContext` for refinement must be compact: plan title/summary, duration, quality status, daily budget, current milestone/task, previous/next task, same-milestone task titles, and top source summaries only. Do not pass a full 24+ task plan into every refine prompt.
+- Refinement time budget precedence is current task `estimatedMinutes`, then `availableMinutes`, then `planContext.dailyLearningMinutes`, then user-mentioned time, then 60 minutes.
+- Every refined `timeBlock.durationMinutes` must be <= 30. Backend normalization must split longer model blocks such as 40, 45, 60, 90, or 120 minutes into <=30 minute blocks.
+- Learning resources may expose URLs only for official/authoritative allowlisted domains such as `docs.python.org`, `pypi.org`, `flask.palletsprojects.com`, `pandas.pydata.org`, `numpy.org`, `requests.readthedocs.io`, `beautiful-soup-4.readthedocs.io`, `fastapi.tiangolo.com`, `sqlalchemy.org`, `sqlite.org`, and `developer.mozilla.org`. Other URLs must be removed and converted to `searchKeyword`.
+- Refinement must not change the task domain. If compact plan context clearly indicates skiing, a yoga/fitness/meditation refinement is invalid and should fall back to a same-domain local refinement.
+- P Mode `refine all tasks` must avoid 24+ LLM calls in one request. First version should refine the current/first milestone and cap each batch at 5 tasks, preserving partial successes.
 - Do not register `/api/command/drafts` or use `command_outputs` until a later phase explicitly enables them.
 - `DELETE /api/settings/memory/history` clears only Runtime summary memory (`agent_runs.output_summary`), while `DELETE /api/settings/runtime/runs` deletes `agent_events` and `agent_runs`.
 - `DELETE /api/settings/planning/history` clears `planning_goals` only, which is planning history/cache.

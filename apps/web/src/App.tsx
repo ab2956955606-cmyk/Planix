@@ -299,6 +299,9 @@ export function App() {
     date: string;
     time: string;
     title: string;
+    description?: string;
+    estimatedMinutes?: number;
+    priority?: Plan['priority'];
     sourceKey: string;
     refinedTask?: RefinedTask | null;
   }): Promise<'created' | 'updated'> {
@@ -309,8 +312,23 @@ export function App() {
     if (existing) {
       let currentPlan = existing.plan;
       const currentDate = existing.date;
+      const patch: Parameters<typeof updateRemotePlan>[1] = {};
       if (input.sourceKey && currentPlan.sourceKey !== input.sourceKey) {
-        currentPlan = await updateRemotePlan(currentPlan.id, { sourceKey: input.sourceKey });
+        patch.sourceKey = input.sourceKey;
+      }
+      if (currentPlan.source === 'ai') {
+        if (input.description?.trim() && !currentPlan.completion.trim()) {
+          patch.completion = input.description;
+        }
+        if (input.estimatedMinutes && currentPlan.estimatedMinutes !== input.estimatedMinutes) {
+          patch.estimatedMinutes = input.estimatedMinutes;
+        }
+        if (input.priority && currentPlan.priority !== input.priority) {
+          patch.priority = input.priority;
+        }
+      }
+      if (Object.keys(patch).length) {
+        currentPlan = await updateRemotePlan(currentPlan.id, patch);
         upsertPlan(currentDate, currentPlan);
       }
       if (input.refinedTask) {
@@ -325,8 +343,10 @@ export function App() {
       time: input.time,
       title: input.title,
       done: false,
-      completion: '',
+      completion: input.description ?? '',
       source: 'ai',
+      priority: input.priority ?? 'medium',
+      estimatedMinutes: input.estimatedMinutes ?? 30,
       sourceKey: input.sourceKey,
       refinedTask: input.refinedTask ?? null
     };
@@ -358,6 +378,9 @@ export function App() {
             date: targetDate,
             time: defaultGoalTaskTime(sequence),
             title: task.title,
+            description: task.description,
+            estimatedMinutes: task.estimatedMinutes,
+            priority: task.priority,
             sourceKey
           });
           if (result === 'created') created += 1;

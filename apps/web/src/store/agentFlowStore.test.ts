@@ -136,7 +136,29 @@ describe('agentFlowStore', () => {
             reviewPlan: { frequency: 'daily', questions: ['What worked?'] }
           },
           tasks: [{ title: 'Practice variables' }],
-          sources: []
+          sources: [],
+          planHorizon: {
+            rawText: 'Python plan',
+            durationDays: 30,
+            horizonType: 'monthly',
+            startDate: '2026-07-01',
+            endDate: '2026-07-31',
+            expectedMilestoneCount: 4,
+            expectedMinTaskCount: 12,
+            expectedWeekCount: 4
+          },
+          qualityReport: {
+            ok: true,
+            score: 94,
+            totalTasks: 12,
+            milestoneCount: 4,
+            coveredWeekCount: 4,
+            dateSpanDays: 28,
+            issues: []
+          },
+          qualityStatus: 'repaired',
+          sourceType: 'model_knowledge',
+          localRelevance: 'low'
         },
         latencyMs: 20,
         writeMode: 'preview'
@@ -147,6 +169,11 @@ describe('agentFlowStore', () => {
     expect(proposal?.runtimeRunId).toBe('runtime-proposal-1');
     expect(proposal?.goal).toBe('Python plan');
     expect(proposal?.structuredPlan.milestones[0].tasks[0].title).toBe('Practice variables');
+    expect(proposal?.planHorizon?.durationDays).toBe(30);
+    expect(proposal?.qualityReport?.totalTasks).toBe(12);
+    expect(proposal?.qualityStatus).toBe('repaired');
+    expect(proposal?.sourceType).toBe('model_knowledge');
+    expect(proposal?.localRelevance).toBe('low');
   });
 
   it('stores valid local fallback runtime proposals for Dashboard calendar writing', () => {

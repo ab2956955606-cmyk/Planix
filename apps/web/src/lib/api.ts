@@ -452,13 +452,15 @@ type BackendPlan = {
   refinedTaskUpdatedAt?: string | null; createdAt: string; updatedAt: string;
 };
 
-export type PlanPatch = Partial<Pick<Plan, 'time' | 'title' | 'done' | 'completion' | 'source' | 'sourceKey'>>;
+export type PlanPatch = Partial<Pick<Plan, 'time' | 'title' | 'done' | 'completion' | 'source' | 'sourceKey' | 'priority' | 'estimatedMinutes'>>;
 
 function fromBackendPlan(plan: BackendPlan): Plan {
   return {
     id: plan.id, time: plan.time, title: plan.content,
     done: plan.done, completion: plan.result ?? '', source: plan.source,
     sourceKey: plan.sourceKey ?? '',
+    priority: plan.priority,
+    estimatedMinutes: plan.estimatedMinutes,
     refinedTask: plan.refinedTask ?? null,
     refinedTaskUpdatedAt: plan.refinedTaskUpdatedAt ?? null,
   };
@@ -468,13 +470,14 @@ function fromAppliedBackendPlan(plan: BackendPlan): AppliedPlan {
   return { ...fromBackendPlan(plan), date: plan.date };
 }
 
-function toBackendPlan(date: string, plan: Plan) {
+export function toBackendPlan(date: string, plan: Plan) {
   return {
     date, time: plan.time, content: plan.title, done: plan.done,
     result: plan.completion, source: plan.source ?? 'manual',
     sourceKey: plan.sourceKey ?? '',
     refinedTask: plan.refinedTask ?? undefined,
-    priority: 'medium', estimatedMinutes: 30,
+    priority: plan.priority ?? 'medium',
+    estimatedMinutes: plan.estimatedMinutes ?? 30,
   };
 }
 
@@ -497,6 +500,7 @@ export async function updatePlan(id: string, patch: PlanPatch): Promise<Plan> {
   const saved = await callApi<BackendPlan>('PATCH', `/api/plans/${id}`, {
     time: patch.time, content: patch.title, done: patch.done,
     result: patch.completion, source: patch.source, sourceKey: patch.sourceKey,
+    priority: patch.priority, estimatedMinutes: patch.estimatedMinutes,
   });
   return fromBackendPlan(saved);
 }

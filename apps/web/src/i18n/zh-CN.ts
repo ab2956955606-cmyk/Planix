@@ -154,6 +154,13 @@ export const zhCN: I18nNamespace = {
     runtimeProposalMode: '模式',
     runtimeProposalModeLlm: '模型计划',
     runtimeProposalModeLocalFallback: '本地模板计划，可检查后写入日历',
+    runtimeProposalQuality: '计划质量',
+    runtimeProposalQualityPassed: '良好',
+    runtimeProposalQualityRepaired: '已自动补全',
+    runtimeProposalQualityLocalFallback: '本地模板兜底',
+    runtimeProposalHorizon: '周期识别',
+    runtimeProposalDays: '天',
+    runtimeProposalCoverage: '覆盖范围',
     writingToCalendar: '正在写入日历...',
     calendarWriteSuccess: '已写入日历',
     calendarWritePartial: '部分计划写入成功',
@@ -486,6 +493,18 @@ export const zhCN: I18nNamespace = {
     refinedRisks: '风险提醒',
     refinedFallbackTips: '卡住时怎么办',
     refinedNoRisks: '当前任务没有额外风险提醒。',
-    refinedNoFallbackTips: '当前任务没有额外卡点建议。'
+    refinedNoFallbackTips: '当前任务没有额外卡点建议。',
+    refinedTimeBlocks: '时间拆分',
+    refinedLearningResources: '学习资源',
+    refinedBudgetExplanation: '时间预算说明',
+    refinedPlanFitCheck: '计划匹配检查',
+    refinedExpectedOutput: '预期产出',
+    refinedSearchKeyword: '搜索关键词',
+    refinedResourceReason: '推荐理由',
+    refinedFitsMilestone: '服务当前阶段',
+    refinedAdvancesGoal: '推进整体目标',
+    refinedHasOutput: '有可检查产出',
+    refinedYes: '是',
+    refinedNo: '否'
   }
 };

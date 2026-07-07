@@ -30,6 +30,7 @@ import type {
   PlannerTask,
   RagDocument,
   RagSource,
+  RefinePlanContext,
   RefinedTask,
   Language,
   StructuredGoalPlan
@@ -136,6 +137,65 @@ function goalTaskSourceKey(goalPlan: GoalPlanResponse, taskKey: string, task: Go
     ? `goal-plan:${goalPlan.id}`
     : `goal-plan:${stableKeyPart(goalPlan.structuredPlan?.goalTitle || goalPlan.summary)}:${stableKeyPart(task.title)}:${task.dueDate || 'no-date'}`;
   return `${base}:m${milestoneIndex}:t${taskIndex}`;
+}
+
+function sourceSummary(source: RagSource): Record<string, unknown> {
+  return {
+    title: source.title,
+    chunk: source.chunk.slice(0, 240),
+    documentId: source.documentId,
+    chunkIndex: source.chunkIndex
+  };
+}
+
+function taskSummary(task: GoalPlanTask | undefined, milestoneTitle = ''): Record<string, unknown> | null {
+  if (!task) return null;
+  return {
+    title: task.title,
+    description: task.description,
+    dueDate: task.dueDate,
+    priority: task.priority,
+    estimatedMinutes: task.estimatedMinutes,
+    milestoneTitle
+  };
+}
+
+function buildGoalRefinePlanContext(goalPlan: GoalPlanResponse, taskKey: string, task: GoalPlanTask): RefinePlanContext | undefined {
+  const structuredPlan = goalPlan.structuredPlan;
+  if (!structuredPlan) return undefined;
+  const match = /^(\d+)-(\d+)-/.exec(taskKey);
+  const milestoneIndex = Number(match?.[1] ?? 0);
+  const taskIndex = Number(match?.[2] ?? 0);
+  const milestone = structuredPlan.milestones[milestoneIndex];
+  const tasks = milestone?.tasks ?? [];
+  const previousTask = taskIndex > 0
+    ? taskSummary(tasks[taskIndex - 1], milestone?.title)
+    : milestoneIndex > 0
+      ? taskSummary(structuredPlan.milestones[milestoneIndex - 1]?.tasks.at(-1), structuredPlan.milestones[milestoneIndex - 1]?.title)
+      : null;
+  const nextTask = taskIndex < tasks.length - 1
+    ? taskSummary(tasks[taskIndex + 1], milestone?.title)
+    : taskSummary(structuredPlan.milestones[milestoneIndex + 1]?.tasks[0], structuredPlan.milestones[milestoneIndex + 1]?.title);
+  return {
+    planTitle: structuredPlan.goalTitle,
+    planSummary: structuredPlan.goalDescription,
+    durationDays: structuredPlan.durationDays,
+    qualityStatus: goalPlan.qualityStatus,
+    dailyLearningMinutes: task.estimatedMinutes,
+    currentMilestone: {
+      title: milestone?.title ?? '',
+      description: milestone?.description ?? '',
+      index: milestoneIndex
+    },
+    currentTask: {
+      ...taskSummary(task, milestone?.title),
+      index: taskIndex
+    },
+    previousTask,
+    nextTask,
+    sameMilestoneTasks: tasks.map((item) => item.title).slice(0, 12),
+    sources: (goalPlan.sources ?? []).slice(0, 4).map(sourceSummary)
+  };
 }
 
 export function AIWorkspace(props: AIWorkspaceProps) {
@@ -388,6 +448,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
         taskDescription: task.description,
         date: task.dueDate || date,
         availableMinutes: task.estimatedMinutes,
+        planContext: buildGoalRefinePlanContext(goalPlan, taskKey, task),
         userConstraints: [preferences].filter(Boolean),
         retrievedSources: goalPlan.sources ?? [],
         outputLanguage: language === 'en-US' ? 'en' : 'zh',

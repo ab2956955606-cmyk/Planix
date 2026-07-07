@@ -36,6 +36,7 @@ GENERIC_WEAK_KEYWORDS = {
     "时间",
     "基础",
     "入门",
+    "预算",
     "risk",
     "plan",
     "learn",
@@ -408,6 +409,8 @@ class RuntimeToolExecutor:
                 *context.materials,
                 *context.model_knowledge_materials,
             ]
+            source_type = _runtime_plan_source_type(plan.mode, plan.source_type, context)
+            local_relevance = _runtime_local_relevance(plan.local_relevance, context)
             tool_call["input"] = {
                 "goal": context.goal,
                 "date": context.date,
@@ -424,6 +427,11 @@ class RuntimeToolExecutor:
                 "fallbackReason": _runtime_fallback_reason(plan.fallback_reason),
                 "errorType": plan.error_type,
                 "baseUrlHost": plan.base_url_host,
+                "planHorizon": plan.plan_horizon.model_dump(by_alias=True) if plan.plan_horizon else None,
+                "qualityReport": plan.quality_report.model_dump(by_alias=True) if plan.quality_report else None,
+                "qualityStatus": plan.quality_status,
+                "sourceType": source_type,
+                "localRelevance": local_relevance,
             }
         return {"error": f"Tool {name} is not available."}
 
@@ -543,6 +551,7 @@ class RuntimeOrchestrator:
                 source_items,
                 local_template=proposal.get("mode") == "local_fallback",
                 today_plan_count=today_plan_count,
+                source_type=str(proposal.get("sourceType") or ""),
             )
             for chunk in _chunk_text(rendered):
                 yield chunk
@@ -553,6 +562,7 @@ class RuntimeOrchestrator:
             _sources_from_tool_outputs(tool_outputs),
             local_template=True,
             today_plan_count=len(_tool_output_list(tool_outputs, "get_today_plans")),
+            source_type="local_fallback",
         )
         for chunk in _chunk_text(rendered):
             yield chunk
@@ -1105,6 +1115,28 @@ def _runtime_fallback_reason(value: str | None) -> str | None:
     return value
 
 
+def _runtime_plan_source_type(mode: str, plan_source_type: str | None, context: RuntimeContextPack) -> str:
+    if mode != "llm":
+        return "local_fallback"
+    if context.model_knowledge_materials:
+        return "model_knowledge"
+    decision_source_type = context.model_knowledge_decision.get("sourceType") if context.model_knowledge_decision else None
+    if decision_source_type in {"local_context", "insufficient_context"}:
+        return str(decision_source_type)
+    if plan_source_type in {"local_context", "model_knowledge", "insufficient_context"}:
+        return str(plan_source_type)
+    return "insufficient_context"
+
+
+def _runtime_local_relevance(plan_local_relevance: str | None, context: RuntimeContextPack) -> str:
+    decision_relevance = context.model_knowledge_decision.get("localRelevance") if context.model_knowledge_decision else None
+    if decision_relevance in {"high", "medium", "low"}:
+        return str(decision_relevance)
+    if plan_local_relevance in {"high", "medium", "low"}:
+        return str(plan_local_relevance)
+    return "low"
+
+
 def _preference_text(value: str | dict[str, Any]) -> str:
     if isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False)
@@ -1142,24 +1174,40 @@ def decide_model_knowledge_enrichment(
     trigger_reason: str | None = None
     should_enrich = False
 
+    weak_goal_hits = [
+        keyword
+        for keyword in matched_keywords
+        if keyword in expanded_keywords and keyword in GENERIC_WEAK_KEYWORDS
+    ]
+
     if force_model_knowledge:
         should_enrich = True
         trigger_reason = "forced_by_user"
     elif local_source_count < MIN_LOCAL_SOURCES:
         should_enrich = True
         trigger_reason = "insufficient_local_sources"
-    elif core_keyword_hits == 0 and strong_expanded_hits == 0:
+    elif core_keyword_hits == 0 and strong_expanded_hits == 0 and not weak_goal_hits:
         should_enrich = True
         trigger_reason = "keyword_mismatch"
     elif core_keyword_hits < MIN_CORE_KEYWORD_HITS or relevant_source_count < MIN_RELEVANT_SOURCES:
         should_enrich = True
         trigger_reason = "low_local_relevance"
 
+    if local_source_count == 0 or (core_keyword_hits == 0 and strong_expanded_hits == 0):
+        local_relevance = "low"
+    elif relevant_source_count >= MIN_RELEVANT_SOURCES and core_keyword_hits >= MIN_CORE_KEYWORD_HITS:
+        local_relevance = "high"
+    else:
+        local_relevance = "medium"
+    source_type = "local_context" if local_relevance in {"high", "medium"} else "insufficient_context"
+
     return {
         "shouldEnrich": should_enrich,
         "triggerReason": trigger_reason,
         "localSourceCount": local_source_count,
         "relevantSourceCount": relevant_source_count,
+        "localRelevance": local_relevance,
+        "sourceType": source_type,
         "matchedKeywords": matched_keywords[:12],
         "missingKeywords": missing_keywords,
     }

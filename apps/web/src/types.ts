@@ -49,6 +49,38 @@ export interface AgentFlowNode {
   diff?: AgentFlowDiff;
 }
 
+export type PlanHorizonType = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'long_term';
+export type PlanQualityStatus = 'passed' | 'repaired' | 'local_fallback';
+export type PlanSourceType = 'local_context' | 'model_knowledge' | 'local_fallback' | 'insufficient_context';
+export type LocalRelevance = 'high' | 'medium' | 'low';
+
+export interface PlanHorizon {
+  rawText: string;
+  durationDays: number;
+  horizonType: PlanHorizonType;
+  startDate: string;
+  endDate: string;
+  expectedMilestoneCount: number;
+  expectedMinTaskCount: number;
+  expectedWeekCount: number;
+}
+
+export interface PlanQualityIssue {
+  code: string;
+  message: string;
+  severity: 'warning' | 'error';
+}
+
+export interface PlanQualityReport {
+  ok: boolean;
+  score: number;
+  totalTasks: number;
+  milestoneCount: number;
+  coveredWeekCount: number;
+  dateSpanDays: number;
+  issues: PlanQualityIssue[];
+}
+
 export interface RuntimePlanProposal {
   runtimeRunId: string;
   goal: string;
@@ -59,6 +91,11 @@ export interface RuntimePlanProposal {
   fallbackReason?: string;
   errorType?: string;
   baseUrlHost?: string;
+  planHorizon?: PlanHorizon;
+  qualityReport?: PlanQualityReport;
+  qualityStatus?: PlanQualityStatus;
+  sourceType?: PlanSourceType;
+  localRelevance?: LocalRelevance;
 }
 
 export interface CalendarWriteSummary {
@@ -182,6 +219,8 @@ export interface Plan {
   title: string;
   done: boolean;
   completion: string;
+  priority?: GoalPriority;
+  estimatedMinutes?: number;
   source?: 'manual' | 'ai';
   sourceKey?: string;
   refinedTask?: RefinedTask | null;
@@ -293,6 +332,11 @@ export interface GoalPlanResponse {
   errorType?: string;
   errorMessage?: string;
   baseUrlHost?: string;
+  planHorizon?: PlanHorizon;
+  qualityReport?: PlanQualityReport;
+  qualityStatus?: PlanQualityStatus;
+  sourceType?: PlanSourceType;
+  localRelevance?: LocalRelevance;
 }
 
 export interface RefineTaskRequest {
@@ -301,10 +345,49 @@ export interface RefineTaskRequest {
   taskDescription?: string;
   date?: string;
   availableMinutes?: number;
+  planContext?: RefinePlanContext;
+  sourceKey?: string;
+  planId?: string;
   userConstraints?: string[];
   retrievedSources?: RagSource[];
   outputLanguage?: 'zh' | 'en';
   refinementInstruction?: string;
+}
+
+export interface RefinePlanContext {
+  planTitle?: string;
+  planSummary?: string;
+  durationDays?: number;
+  qualityStatus?: string;
+  dailyLearningMinutes?: number;
+  currentMilestone?: Record<string, unknown>;
+  currentTask?: Record<string, unknown>;
+  previousTask?: Record<string, unknown> | null;
+  nextTask?: Record<string, unknown> | null;
+  sameMilestoneTasks?: string[];
+  sources?: Array<Record<string, unknown>>;
+}
+
+export interface TimeBlock {
+  title: string;
+  durationMinutes: number;
+  action: string;
+  expectedOutput?: string | null;
+}
+
+export interface LearningResource {
+  title: string;
+  type: 'official_doc' | 'library_doc' | 'search_keyword' | 'local_source';
+  url?: string | null;
+  searchKeyword?: string | null;
+  reason?: string | null;
+}
+
+export interface PlanFitCheck {
+  fitsCurrentMilestone: boolean;
+  advancesOverallGoal: boolean;
+  hasCheckableOutput: boolean;
+  note: string;
 }
 
 export interface RefinedTask {
@@ -320,6 +403,10 @@ export interface RefinedTask {
   mode: 'llm' | 'local_fallback';
   fallbackReason?: string;
   errorType?: string;
+  timeBlocks?: TimeBlock[];
+  learningResources?: LearningResource[];
+  budgetExplanation?: string | null;
+  planFitCheck?: PlanFitCheck | null;
 }
 
 export interface DailyReviewResponse {

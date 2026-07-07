@@ -73,7 +73,23 @@ export function PlanList(props: PlanListProps) {
         taskTitle: plan.title,
         taskDescription: plan.completion,
         date,
-        availableMinutes: 60,
+        availableMinutes: plan.estimatedMinutes ?? 60,
+        sourceKey: plan.sourceKey,
+        planId: plan.id,
+        planContext: {
+          planTitle: plan.title,
+          planSummary: plan.completion,
+          dailyLearningMinutes: plan.estimatedMinutes ?? 60,
+          currentTask: {
+            title: plan.title,
+            description: plan.completion,
+            dueDate: date,
+            priority: plan.priority ?? 'medium',
+            estimatedMinutes: plan.estimatedMinutes ?? 60,
+            sourceKey: plan.sourceKey
+          },
+          sameMilestoneTasks: [plan.title]
+        },
         userConstraints: [preferences].filter(Boolean),
         outputLanguage: lang === 'en-US' ? 'en' : 'zh',
         refinementInstruction: refinementInputs[plan.id] ?? ''

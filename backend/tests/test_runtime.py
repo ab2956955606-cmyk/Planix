@@ -120,6 +120,11 @@ def test_runtime_tools_are_readonly_or_preview_and_do_not_write_plans(client):
     assert proposal["structuredPlan"]["milestones"]
     assert proposal["tasks"]
     assert proposal["memoryContextSummary"]
+    assert proposal["planHorizon"]["durationDays"] >= 1
+    assert proposal["qualityReport"]["ok"] is True
+    assert proposal["qualityStatus"] in {"passed", "repaired", "local_fallback"}
+    assert proposal["sourceType"] in {"local_context", "model_knowledge", "local_fallback", "insufficient_context"}
+    assert proposal["localRelevance"] in {"high", "medium", "low"}
 
     after = client.get("/api/plans", params={"date": "2026-07-03"}).json()
     assert [item["id"] for item in after] == [item["id"] for item in before]
@@ -223,6 +228,8 @@ def test_model_knowledge_decision_triggers_for_weak_generic_matches():
 
     assert decision["shouldEnrich"] is True
     assert decision["triggerReason"] == "low_local_relevance"
+    assert decision["localRelevance"] == "low"
+    assert decision["sourceType"] == "insufficient_context"
     assert "安全" in decision["matchedKeywords"]
 
 

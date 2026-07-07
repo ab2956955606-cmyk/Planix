@@ -67,6 +67,13 @@ export const enUS: I18nNamespace = {
     runtimeProposalMode: 'Mode',
     runtimeProposalModeLlm: 'Model plan',
     runtimeProposalModeLocalFallback: 'Local template plan, review before writing to calendar',
+    runtimeProposalQuality: 'Plan quality',
+    runtimeProposalQualityPassed: 'Good',
+    runtimeProposalQualityRepaired: 'Auto-filled',
+    runtimeProposalQualityLocalFallback: 'Local template fallback',
+    runtimeProposalHorizon: 'Detected horizon',
+    runtimeProposalDays: 'days',
+    runtimeProposalCoverage: 'Coverage',
     writingToCalendar: 'Writing to calendar...',
     calendarWriteSuccess: 'Written to calendar',
     calendarWritePartial: 'Some plans were written successfully',
@@ -487,6 +494,18 @@ export const enUS: I18nNamespace = {
     refinedRisks: 'Risks',
     refinedFallbackTips: 'If blocked',
     refinedNoRisks: 'No specific risks for this task.',
-    refinedNoFallbackTips: 'No extra fallback tips.'
+    refinedNoFallbackTips: 'No extra fallback tips.',
+    refinedTimeBlocks: 'Time blocks',
+    refinedLearningResources: 'Learning resources',
+    refinedBudgetExplanation: 'Time budget',
+    refinedPlanFitCheck: 'Plan fit check',
+    refinedExpectedOutput: 'Expected output',
+    refinedSearchKeyword: 'Search keyword',
+    refinedResourceReason: 'Reason',
+    refinedFitsMilestone: 'Fits current milestone',
+    refinedAdvancesGoal: 'Advances overall goal',
+    refinedHasOutput: 'Has checkable output',
+    refinedYes: 'Yes',
+    refinedNo: 'No'
   }
 };

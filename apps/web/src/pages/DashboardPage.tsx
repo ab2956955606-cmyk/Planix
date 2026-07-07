@@ -194,6 +194,9 @@ function RuntimeProposalPreview(props: {
   const modeLabel = proposal?.mode === 'local_fallback'
     ? t('dashboard.runtimeProposalModeLocalFallback')
     : t('dashboard.runtimeProposalModeLlm');
+  const qualityLabel = proposal ? runtimeProposalQualityLabel(proposal, t) : '';
+  const horizonDays = proposal?.planHorizon?.durationDays ?? proposal?.structuredPlan.durationDays;
+  const coverageRange = proposal ? runtimeProposalCoverageRange(proposal) : '';
 
   return (
     <div className="runtime-proposal-preview">
@@ -224,6 +227,9 @@ function RuntimeProposalPreview(props: {
           <div className="runtime-proposal-meta">
             <span>{t('dashboard.runtimeProposalSources')}: {proposal.sources.length}</span>
             <span>{t('dashboard.runtimeProposalMode')}: {modeLabel}</span>
+            <span>{t('dashboard.runtimeProposalQuality')}: {qualityLabel}</span>
+            {horizonDays ? <span>{t('dashboard.runtimeProposalHorizon')}: {horizonDays} {t('dashboard.runtimeProposalDays')}</span> : null}
+            {coverageRange ? <span>{t('dashboard.runtimeProposalCoverage')}: {coverageRange}</span> : null}
           </div>
         </>
       )}
@@ -247,6 +253,24 @@ function RuntimeProposalPreview(props: {
       </div>
     </div>
   );
+}
+
+function runtimeProposalQualityLabel(proposal: RuntimePlanProposal, t: (key: string) => string): string {
+  if (proposal.qualityStatus === 'repaired') return t('dashboard.runtimeProposalQualityRepaired');
+  if (proposal.qualityStatus === 'local_fallback' || proposal.mode === 'local_fallback') return t('dashboard.runtimeProposalQualityLocalFallback');
+  return t('dashboard.runtimeProposalQualityPassed');
+}
+
+function runtimeProposalCoverageRange(proposal: RuntimePlanProposal): string {
+  if (proposal.planHorizon?.startDate && proposal.planHorizon.endDate) {
+    return `${proposal.planHorizon.startDate} - ${proposal.planHorizon.endDate}`;
+  }
+  const dates = proposal.structuredPlan.milestones
+    .flatMap((milestone) => milestone.tasks.map((task) => task.dueDate))
+    .filter((value): value is string => Boolean(value));
+  if (!dates.length) return '';
+  const sorted = [...dates].sort();
+  return `${sorted[0]} - ${sorted[sorted.length - 1]}`;
 }
 
 function RuntimeProposalTask(props: { milestoneTitle: string; task: GoalPlanTask; t: (key: string) => string }) {

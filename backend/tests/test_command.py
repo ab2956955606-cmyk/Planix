@@ -3,7 +3,7 @@ import sqlite3
 
 from app.db import get_conn, init_db
 from app.schemas import RefinedTask
-from app.services.command_agent import detect_command_intent
+from app.services.command_agent import CommandAgentService, detect_command_intent, resolve_command_intent
 
 
 def _events(response):
@@ -428,9 +428,21 @@ def test_intent_router_rules():
     assert detect_command_intent("展开看看完整计划") == "show_current_plan"
     assert detect_command_intent("写入日历") == "sync_to_calendar"
     assert detect_command_intent("帮我写入日历") == "sync_to_calendar"
+    assert detect_command_intent("写入计划") == "sync_to_calendar"
+    assert detect_command_intent("保存计划") == "sync_to_calendar"
     assert detect_command_intent("确认写入") == "sync_to_calendar"
     assert detect_command_intent("保存到日程") == "sync_to_calendar"
     assert detect_command_intent("把这个计划写进日历") == "sync_to_calendar"
+    assert resolve_command_intent(
+        "保存",
+        detect_command_intent("保存"),
+        has_current_draft=True,
+    ) == "sync_to_calendar"
+    assert resolve_command_intent(
+        "保存",
+        detect_command_intent("保存"),
+        has_current_draft=False,
+    ) == "unsupported_command"
     assert detect_command_intent("打开日历") == "navigate_ui"
     assert detect_command_intent("Planix 这个项目怎么介绍？") == "normal_chat"
     assert detect_command_intent("帮我细化全部任务") == "refine_current_plan"
@@ -502,6 +514,46 @@ def test_sync_calendar_low_requires_approval_and_does_not_write(client, monkeypa
         assert conn.execute("SELECT COUNT(*) AS count FROM command_approvals WHERE action_id = ?", (approval["actionId"],)).fetchone()["count"] == 1
 
 
+def test_write_plan_phrase_uses_current_draft_without_runtime(client, monkeypatch):
+    FakeRuntime.calls = 0
+    _patch_runtime(monkeypatch, lambda: FakeRuntime())
+    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    thread_id = _events(first)[-1]["threadId"]
+    assert FakeRuntime.calls == 1
+
+    response = client.post(
+        "/api/command/chat",
+        json={"threadId": thread_id, "mode": "auto", "permission": "low", "message": "写入计划"},
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert FakeRuntime.calls == 1
+    assert not any(event["type"] == "runtime_started" for event in events)
+    assert any(event["type"] == "calendar_plan_preview" for event in events)
+    assert any(event["type"] == "approval_required" for event in events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
+
+
+def test_short_save_phrase_with_current_draft_means_calendar_write(client, monkeypatch):
+    FakeRuntime.calls = 0
+    _patch_runtime(monkeypatch, lambda: FakeRuntime())
+    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    thread_id = _events(first)[-1]["threadId"]
+
+    response = client.post(
+        "/api/command/chat",
+        json={"threadId": thread_id, "mode": "auto", "permission": "low", "message": "保存"},
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert FakeRuntime.calls == 1
+    assert not any(event["type"] == "runtime_started" for event in events)
+    assert any(event["type"] == "calendar_plan_preview" for event in events)
+
+
 def test_approve_calendar_write_creates_plans(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
     first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
@@ -525,6 +577,13 @@ def test_approve_calendar_write_creates_plans(client, monkeypatch):
     with get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 2
         assert conn.execute("SELECT status FROM command_actions WHERE id = ?", (action_id,)).fetchone()["status"] == "success"
+        first_plan = conn.execute(
+            "SELECT result, priority, estimated_minutes FROM plans WHERE content = ?",
+            ("Draft Planix project intro",),
+        ).fetchone()
+        assert first_plan["result"] == "Write a concise project overview."
+        assert first_plan["priority"] == "high"
+        assert first_plan["estimated_minutes"] == 60
 
 
 def test_approve_calendar_write_error_uses_calendar_specific_message(client, monkeypatch):
@@ -613,15 +672,19 @@ def test_refine_all_tasks_updates_current_draft_and_calendar_write_uses_refineme
     events = _events(response)
     started = next(event for event in events if event["type"] == "refinement_started")
     result = next(event for event in events if event["type"] == "refined_tasks_result")
-    assert started["total"] == 2
-    assert result["succeeded"] == 2
+    assert started["total"] == 1
+    assert result["succeeded"] == 1
     assert result["failed"] == 0
-    assert len(FakePlanningService.calls) == 2
+    assert len(FakePlanningService.calls) == 1
+    assert FakePlanningService.calls[0].plan_context is not None
+    assert FakePlanningService.calls[0].plan_context.plan_title == "AI internship prep"
+    assert FakePlanningService.calls[0].plan_context.current_milestone["title"] == "Project story"
+    assert FakePlanningService.calls[0].available_minutes == 60
 
     with get_conn() as conn:
         draft = conn.execute("SELECT payload_json FROM command_drafts WHERE id = ?", (started["draftId"],)).fetchone()
         payload = json.loads(draft["payload_json"])
-        assert sorted(payload["refinements"].keys()) == ["m0:t0", "m1:t0"]
+        assert sorted(payload["refinements"].keys()) == ["m0:t0"]
         assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
 
     write = client.post(
@@ -631,7 +694,41 @@ def test_refine_all_tasks_updates_current_draft_and_calendar_write_uses_refineme
 
     assert write.status_code == 200
     with get_conn() as conn:
-        assert conn.execute("SELECT COUNT(*) AS count FROM plans WHERE refined_task_json != ''").fetchone()["count"] == 2
+        assert conn.execute("SELECT COUNT(*) AS count FROM plans WHERE refined_task_json != ''").fetchone()["count"] == 1
+
+
+def test_refine_all_tasks_caps_large_current_milestone_at_five(client, monkeypatch):
+    FakePlanningService.calls = []
+    structured_plan = _valid_structured_plan()
+    structured_plan["milestones"][0]["tasks"] = [
+        {
+            "title": f"Task {index}",
+            "description": f"Practice item {index}",
+            "estimatedMinutes": 120,
+            "dueDate": "2026-07-05",
+            "priority": "high",
+        }
+        for index in range(1, 8)
+    ]
+    _patch_runtime(monkeypatch, lambda: FakeRuntime(structured_plan=structured_plan))
+    monkeypatch.setattr("app.services.command_agent.PlanningService", lambda: FakePlanningService())
+
+    first = client.post("/api/command/chat", json={"mode": "auto", "message": "Plan my Python practice"})
+    thread_id = _events(first)[-1]["threadId"]
+
+    response = client.post(
+        "/api/command/chat",
+        json={"threadId": thread_id, "mode": "auto", "message": "refine all tasks"},
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    started = next(event for event in events if event["type"] == "refinement_started")
+    result = next(event for event in events if event["type"] == "refined_tasks_result")
+    assert started["total"] == 5
+    assert result["succeeded"] == 5
+    assert len(FakePlanningService.calls) == 5
+    assert all(call.available_minutes == 120 for call in FakePlanningService.calls)
 
 
 def test_refine_without_current_draft_does_not_write(client):
@@ -665,3 +762,40 @@ def test_calendar_write_does_not_overwrite_manual_plan(client, monkeypatch):
         manual = conn.execute("SELECT * FROM plans WHERE source = 'manual'").fetchone()
         assert manual["result"] == "keep me"
         assert conn.execute("SELECT COUNT(*) AS count FROM plans WHERE source = 'ai'").fetchone()["count"] == 2
+
+
+def test_calendar_write_does_not_overwrite_existing_ai_result(client):
+    source_key = "command-draft:draft_existing_ai:m0:t0"
+    client.post(
+        "/api/plans",
+        json={
+            "date": "2026-07-05",
+            "time": "08:00",
+            "content": "Draft Planix project intro",
+            "source": "ai",
+            "sourceKey": source_key,
+            "result": "keep existing user note",
+        },
+    )
+
+    state, plan = CommandAgentService()._upsert_calendar_plan(
+        {
+            "title": "Draft Planix project intro",
+            "date": "2026-07-05",
+            "time": "09:00",
+            "description": "Write a concise project overview.",
+            "priority": "high",
+            "estimatedMinutes": 60,
+            "sourceKey": source_key,
+        }
+    )
+
+    assert state == "updated"
+    assert plan.result == "keep existing user note"
+    assert plan.priority == "high"
+    assert plan.estimated_minutes == 60
+    with get_conn() as conn:
+        row = conn.execute("SELECT result, priority, estimated_minutes FROM plans WHERE source_key = ?", (source_key,)).fetchone()
+        assert row["result"] == "keep existing user note"
+        assert row["priority"] == "high"
+        assert row["estimated_minutes"] == 60

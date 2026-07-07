@@ -120,6 +120,53 @@ class ToolSpec(BaseModel):
     parameters: dict[str, str]
 
 
+LearningResourceType = Literal["official_doc", "library_doc", "search_keyword", "local_source"]
+
+
+class TimeBlock(BaseModel):
+    title: str = Field(min_length=1)
+    duration_minutes: int = Field(alias="durationMinutes", ge=1, le=30)
+    action: str = Field(min_length=1)
+    expected_output: str | None = Field(default=None, alias="expectedOutput")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class LearningResource(BaseModel):
+    title: str = Field(min_length=1)
+    type: LearningResourceType = "search_keyword"
+    url: str | None = None
+    search_keyword: str | None = Field(default=None, alias="searchKeyword")
+    reason: str | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanFitCheck(BaseModel):
+    fits_current_milestone: bool = Field(alias="fitsCurrentMilestone")
+    advances_overall_goal: bool = Field(alias="advancesOverallGoal")
+    has_checkable_output: bool = Field(alias="hasCheckableOutput")
+    note: str = Field(min_length=1)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class RefinePlanContext(BaseModel):
+    plan_title: str = Field(default="", alias="planTitle")
+    plan_summary: str = Field(default="", alias="planSummary")
+    duration_days: int | None = Field(default=None, alias="durationDays", ge=1)
+    quality_status: str | None = Field(default=None, alias="qualityStatus")
+    daily_learning_minutes: int | None = Field(default=None, alias="dailyLearningMinutes", ge=1)
+    current_milestone: dict[str, Any] = Field(default_factory=dict, alias="currentMilestone")
+    current_task: dict[str, Any] = Field(default_factory=dict, alias="currentTask")
+    previous_task: dict[str, Any] | None = Field(default=None, alias="previousTask")
+    next_task: dict[str, Any] | None = Field(default=None, alias="nextTask")
+    same_milestone_tasks: list[str] = Field(default_factory=list, alias="sameMilestoneTasks")
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class RefinedTask(BaseModel):
     title: str = Field(min_length=1)
     objective: str = Field(min_length=1)
@@ -133,6 +180,10 @@ class RefinedTask(BaseModel):
     mode: Literal["llm", "local_fallback"] = "local_fallback"
     fallback_reason: str | None = Field(default=None, alias="fallbackReason")
     error_type: str | None = Field(default=None, alias="errorType")
+    time_blocks: list[TimeBlock] = Field(default_factory=list, alias="timeBlocks")
+    learning_resources: list[LearningResource] = Field(default_factory=list, alias="learningResources")
+    budget_explanation: str | None = Field(default=None, alias="budgetExplanation")
+    plan_fit_check: PlanFitCheck | None = Field(default=None, alias="planFitCheck")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -294,6 +345,10 @@ class PlannerTask(BaseModel):
 
 GoalPriority = Literal["low", "medium", "high"]
 ReviewFrequency = Literal["daily", "weekly"]
+PlanHorizonType = Literal["daily", "weekly", "monthly", "quarterly", "long_term"]
+PlanQualityStatus = Literal["passed", "repaired", "local_fallback"]
+PlanSourceType = Literal["local_context", "model_knowledge", "local_fallback", "insufficient_context"]
+LocalRelevance = Literal["high", "medium", "low"]
 
 
 class GoalPlanTask(BaseModel):
@@ -323,6 +378,51 @@ class StructuredGoalPlan(BaseModel):
     duration_days: int = Field(alias="durationDays", ge=1, le=3650)
     milestones: list[GoalMilestone]
     review_plan: ReviewPlan = Field(alias="reviewPlan")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanHorizon(BaseModel):
+    raw_text: str = Field(alias="rawText")
+    duration_days: int = Field(alias="durationDays", ge=1, le=3650)
+    horizon_type: PlanHorizonType = Field(alias="horizonType")
+    start_date: str = Field(alias="startDate")
+    end_date: str = Field(alias="endDate")
+    expected_milestone_count: int = Field(alias="expectedMilestoneCount", ge=1)
+    expected_min_task_count: int = Field(alias="expectedMinTaskCount", ge=1)
+    expected_week_count: int = Field(alias="expectedWeekCount", ge=1)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanDensityPolicy(BaseModel):
+    duration_days: int = Field(alias="durationDays", ge=1)
+    min_milestones: int = Field(alias="minMilestones", ge=1)
+    max_milestones: int = Field(alias="maxMilestones", ge=1)
+    min_total_tasks: int = Field(alias="minTotalTasks", ge=1)
+    max_total_tasks: int = Field(alias="maxTotalTasks", ge=1)
+    min_tasks_per_milestone: int = Field(alias="minTasksPerMilestone", ge=1)
+    require_weekly_coverage: bool = Field(alias="requireWeeklyCoverage")
+    min_covered_weeks: int = Field(alias="minCoveredWeeks", ge=1)
+    first_days_detail: int = Field(alias="firstDaysDetail", ge=1)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanQualityIssue(BaseModel):
+    code: str
+    message: str
+    severity: Literal["warning", "error"]
+
+
+class PlanQualityReport(BaseModel):
+    ok: bool
+    score: int = Field(ge=0, le=100)
+    total_tasks: int = Field(alias="totalTasks", ge=0)
+    milestone_count: int = Field(alias="milestoneCount", ge=0)
+    covered_week_count: int = Field(alias="coveredWeekCount", ge=0)
+    date_span_days: int = Field(alias="dateSpanDays", ge=0)
+    issues: list[PlanQualityIssue] = Field(default_factory=list)
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -360,6 +460,11 @@ class GoalPlanOut(BaseModel):
     error_type: str | None = Field(default=None, alias="errorType")
     error_message: str | None = Field(default=None, alias="errorMessage")
     base_url_host: str | None = Field(default=None, alias="baseUrlHost")
+    plan_horizon: PlanHorizon | None = Field(default=None, alias="planHorizon")
+    quality_report: PlanQualityReport | None = Field(default=None, alias="qualityReport")
+    quality_status: PlanQualityStatus | None = Field(default=None, alias="qualityStatus")
+    source_type: PlanSourceType | None = Field(default=None, alias="sourceType")
+    local_relevance: LocalRelevance | None = Field(default=None, alias="localRelevance")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -370,6 +475,9 @@ class RefineTaskRequest(BaseModel):
     task_description: str = Field(default="", alias="taskDescription")
     date: str = ""
     available_minutes: int | None = Field(default=None, alias="availableMinutes", ge=1)
+    plan_context: RefinePlanContext | None = Field(default=None, alias="planContext")
+    source_key: str = Field(default="", alias="sourceKey")
+    plan_id: str = Field(default="", alias="planId")
     user_constraints: list[str] = Field(default_factory=list, alias="userConstraints")
     retrieved_sources: list[RagSource] = Field(default_factory=list, alias="retrievedSources")
     output_language: Literal["zh", "en"] = Field(default="zh", alias="outputLanguage")
