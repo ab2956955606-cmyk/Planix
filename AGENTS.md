@@ -10,7 +10,7 @@ Portfolio-facing documentation version: `v3.0.0`. This is a presentation label f
 
 ## Current Phase
 
-Phase 4 has started with **Command Agent / P Mode**. The current P Mode implementation is Phase 4.6: Collapsed Execution Chain + Draft Task Refinement. Auto/workbench planning requests may run the existing backend Runtime and save a hidden `calendar_plan` draft; users can expand, regenerate/modify, refine tasks, or write the current draft to Calendar through P Mode permission handling. P Mode also has a hidden right-side conversation drawer for new chat, history, and thread deletion.
+Phase 4 has started with **Command Agent / P Mode**. The current P Mode implementation is Phase 4.7: Plan Query + Calendar Patch Loop. Manual workbench planning requests may run the existing backend Runtime and save a hidden `calendar_plan` draft; default auto-mode planning requests remain conversational and do not create drafts. Users can expand, regenerate/modify, refine tasks, query existing plans/materials/history/notes, or preview and patch Calendar plans through P Mode permission handling. P Mode also has a hidden right-side conversation drawer for new chat, history, and thread deletion.
 
 Allowed in this phase:
 
@@ -22,17 +22,21 @@ Allowed in this phase:
 - Clean Runtime Context Pack history before retrieval and planning.
 - Provide Settings maintenance controls for AI memory/cache cleanup.
 - Keep P Mode Codex-like: outputs appear as inline conversation cards, not as a fixed workspace preview panel.
-- Keep P Mode defaulting to `auto`: normal chat stays conversational, while clear planning requests may run Runtime and create hidden `calendar_plan` drafts.
+- Keep P Mode defaulting to `auto`: normal chat and clear planning requests stay conversational; only a manually enabled workbench request may run Runtime and create hidden `calendar_plan` drafts.
 - Keep P Mode context thread-local: recent user/assistant text from the current thread may inform chat and planning, but new chats must not inherit prior thread context.
 - Let P Mode write Calendar plans only from the current hidden `calendar_plan` draft through `command_actions`, `command_approvals`, and PermissionGate.
 - Let P Mode refine tasks in the current hidden `calendar_plan` draft through the existing planning refinement service. Refinement results stay in the command draft until the user writes the plan to Calendar.
+- Let P Mode query Calendar plans, local RAG materials, `planning_goals` history, and `month_notes` through inline `plan_search_results` cards without running Runtime or creating a draft.
+- Let P Mode preview Calendar plan updates/deletes through `command_actions` before execution. Patch actions may update title/date/time/estimated duration only; they must not overwrite `done`, `result/completion`, `source`, or `sourceKey`.
 - Phase 3.10 may refine tasks with compact plan context, short time blocks, official/authoritative learning resources, budget explanation, and plan-fit checks.
+- Phase 3.11 demo reliability metrics may be shown in Dashboard proposals, P Mode plan-detail cards, Goals previews, and Settings health/version diagnostics.
 
 Forbidden in this phase:
 
 - Auto-writing generated tasks to Calendar from Runtime without an explicit P command.
 - Writing Goals, Notes, Materials, Settings, or non-Calendar data from P Mode.
 - Letting P Mode bypass `command_actions`, `command_approvals`, or PermissionGate for Calendar writes.
+- Letting P Mode patch or delete Calendar rows without an inline preview, approval path when required, and replayable result card.
 - Turning P Workspace into a foreground layout panel or persistent Calendar/Goals/Materials/Notes draft area.
 - Changing `/api/runtime/run` event protocol.
 - Changing Tauri Windows installer sidecar mechanics.
@@ -123,13 +127,17 @@ There is no compatibility fallback for old names or old environment variables.
 - P Workspace is an internal draft/audit concept, not a foreground layout. Phase 4.4 may write hidden `calendar_plan` drafts and Calendar write actions only.
 - The right-side P conversation drawer is allowed for thread history and deletion only. It must not become a fixed workspace preview or persistent draft panel.
 - Command mode is a single `auto | chat | workbench` value. Do not represent it with separate boolean flags.
-- Auto mode is the P default. Normal chat stays text-only; `planning_request` runs backend Runtime and creates a compact hidden draft summary.
-- Auto/workbench planning should include current-thread context in the backend Runtime input so follow-up phrases like "帮我做个规划" can inherit the current topic. Do not include messages from other threads.
+- Auto mode is the P default. Normal chat stays text-only; `planning_request` also stays conversational and must not run backend Runtime or create a draft unless the user manually enables workbench mode.
+- Workbench planning should include current-thread context in the backend Runtime input so follow-up phrases like "帮我做个规划" can inherit the current topic. Do not include messages from other threads.
 - After a valid planning draft is created, P Mode should show the summary and the full plan inline by default.
 - Chat mode is a safety lock: it must not run Dashboard Runtime, create drafts, write Calendar data, or execute any instruction.
-- Workbench mode is a forced planning entry state and may run backend Runtime to create a hidden `calendar_plan` draft.
+- Workbench mode is the only initial planning entry state that may run backend Runtime to create a hidden `calendar_plan` draft.
 - Command permission state is `low | medium | high`; low asks before writes/deletes, medium auto-runs ordinary writes but asks before deletes, high auto-runs ordinary writes/deletes while dangerous actions still require confirmation.
 - P Mode Calendar writes must come from the current hidden `calendar_plan` draft, use `command-draft:` source keys, never overwrite manual plans, and never overwrite `completion/result/done`.
+- P Mode `query_plan` and `patch_calendar_plan` are handled through `/api/command/chat`; do not add public query/patch REST routes or a fixed P Workspace panel.
+- P Mode date words for plan query/patch use `context.date` first, then backend local date. Supported ranges include today, tomorrow, the day after tomorrow, this week, next week, this month, and explicit `YYYY-MM-DD`.
+- P Mode patch commands may target the most recent `plan_search_results` card by ordinal phrases such as "first" or "第一个"; ambiguous multi-candidate matches should return a selection/search card rather than creating an action.
+- P Mode patch actions use `command_actions.target = "calendar"`, `operation = "update" | "delete"`, and `risk = "write" | "delete"` with payload `before`, `after`, and `changes`.
 - In a thread with a current `calendar_plan` draft, P Mode phrases such as `写入计划`, `保存计划`, `保存`, and `确认写入` mean writing the current draft to Calendar through PermissionGate; they must not start a new Runtime planning run.
 - P Mode Calendar writes may carry `refinedTask` values from `command_drafts.payload_json.refinements` into `plans.refined_task_json`; this must never be mixed into `completion/result/done`.
 - P Mode Calendar write failures, including approval execution failures, must show the Calendar-specific write error and must not fall back to draft-save failure wording.
@@ -154,6 +162,7 @@ There is no compatibility fallback for old names or old environment variables.
 - `PLANIX_GOAL_PLAN_MAX_TOKENS` controls Goals planning output budget. Default is `4096`; values above `8000` must clamp to `8000`.
 - OpenAI-compatible `finish_reason="length"` must map to `errorType="model_output_truncated"` rather than generic invalid JSON.
 - `GoalPlanOut` must keep `summary`, `phases`, `tasks`, and `sources` while adding `structuredPlan`, `planHorizon`, `qualityReport`, `qualityStatus`, `sourceType`, and `localRelevance`.
+- `qualityReport.metrics` may add optional demo reliability fields derived from the existing quality report and plan metadata: duration days, task/milestone/week counts, date span, weak/missing/out-of-range task counts, repair/fallback booleans, quality status, source type, and local relevance. These fields are diagnostic only and must not change Calendar task schema or write permissions.
 - Planning quality must run in the shared Planning Service after model parsing/normalization. Detect the horizon from explicit duration first, then valid deadline, then long-term keywords, otherwise default to 14 days.
 - Horizon-aware planning instructions and validation should replace static tiny limits. 90-day plans should prefer monthly milestones, at least 24 tasks, and at least 10 covered weeks.
 - If quality validation has error-severity issues, call at most one repair prompt. If repair still fails, return the stronger local structured fallback with `qualityStatus="local_fallback"`.
@@ -173,13 +182,15 @@ There is no compatibility fallback for old names or old environment variables.
 - `memoryContextSummary` must be deterministic, short, and safe for display.
 - `search_materials`, `get_today_plans`, and `get_memory` are read-only.
 - `get_memory` returns `preferenceMemory` and `historyMemory`; do not add a separate `get_preferences` tool.
-- `propose_tasks` may return structured task previews with `memoryContextSummary`, `planHorizon`, `qualityReport`, `qualityStatus`, `sourceType`, and `localRelevance`, but must not write to `plans`, Goals, Calendar, or Notes.
+- `propose_tasks` may return structured task previews with `memoryContextSummary`, `planHorizon`, `qualityReport`, `qualityStatus`, `sourceType`, and `localRelevance`, including optional `qualityReport.metrics`, but must not write to `plans`, Goals, Calendar, or Notes.
+- `/api/health` and `/health` should expose `name="planix-api"`, `version="3.11-demo-reliability"`, `startupTime`, and feature flags for `planQualityGate`, `contextAwareRefinement`, `calendarDraftContextRecovery`, and `demoMetrics` so stale backend processes are easy to identify.
 - `structuredPlan` is the fact source; Runtime final output should be rendered from it.
 - `RuntimeOrchestrator` is the only component that coordinates Planner, Memory, Tool Router, and Stream Engine.
 - Rust/Tauri streaming bridge must stay a thin pass-through; do not put Runtime state or business logic in Rust.
 - Settings maintenance endpoints under `/api/settings/*` may clear AI memory/cache only. They must not delete formal `plans`, Calendar data, Notes/materials, documents, or AI settings.
-- Phase 4.6 command endpoints expose `POST /api/command/chat`, `POST /api/command/approve`, `GET /api/command/threads`, `GET /api/command/thread/{thread_id}`, and `DELETE /api/command/thread/{thread_id}`. They store `command_threads`, `command_messages`, hidden `command_drafts`, Calendar write `command_actions`, and `command_approvals`.
+- Phase 4.7 command endpoints expose `POST /api/command/chat`, `POST /api/command/approve`, `GET /api/command/threads`, `GET /api/command/thread/{thread_id}`, and `DELETE /api/command/thread/{thread_id}`. They store `command_threads`, `command_messages`, hidden `command_drafts`, Calendar write/patch `command_actions`, and `command_approvals`.
 - `refine_current_plan` is a command intent handled through `/api/command/chat`. It updates the current `command_drafts.payload_json.refinements`, emits inline refinement result cards, and does not write Calendar unless the user separately commands a Calendar write.
+- `query_plan` and `patch_calendar_plan` are command intents handled through `/api/command/chat`. They emit `plan_search_results`, `plan_patch_preview`, and `plan_patch_result` cards, and replay history must tolerate those card kinds.
 - Phase 3.10 task refinement must keep all new fields optional on `RefineTaskRequest` and `RefinedTask`; no database migration is required because existing `refined_task_json` storage is reused.
 - `planContext` for refinement must be compact: plan title/summary, duration, quality status, daily budget, current milestone/task, previous/next task, same-milestone task titles, and top source summaries only. Do not pass a full 24+ task plan into every refine prompt.
 - Refinement time budget precedence is current task `estimatedMinutes`, then `availableMinutes`, then `planContext.dailyLearningMinutes`, then user-mentioned time, then 60 minutes.
@@ -209,6 +220,12 @@ Backend:
 ```powershell
 python -m compileall backend
 .\.venv\Scripts\python.exe -m pytest backend\tests
+```
+
+Demo reliability:
+
+```powershell
+.\scripts\verify-demo.ps1
 ```
 
 Desktop packaging:

@@ -409,6 +409,24 @@ class PlanDensityPolicy(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class PlanQualityMetrics(BaseModel):
+    duration_days: int | None = Field(default=None, alias="durationDays", ge=1)
+    total_tasks: int | None = Field(default=None, alias="totalTasks", ge=0)
+    milestone_count: int | None = Field(default=None, alias="milestoneCount", ge=0)
+    covered_week_count: int | None = Field(default=None, alias="coveredWeekCount", ge=0)
+    date_span_days: int | None = Field(default=None, alias="dateSpanDays", ge=0)
+    weak_task_count: int | None = Field(default=None, alias="weakTaskCount", ge=0)
+    missing_due_date_count: int | None = Field(default=None, alias="missingDueDateCount", ge=0)
+    out_of_range_due_date_count: int | None = Field(default=None, alias="outOfRangeDueDateCount", ge=0)
+    repair_attempted: bool | None = Field(default=None, alias="repairAttempted")
+    fallback_used: bool | None = Field(default=None, alias="fallbackUsed")
+    quality_status: PlanQualityStatus | None = Field(default=None, alias="qualityStatus")
+    source_type: PlanSourceType | None = Field(default=None, alias="sourceType")
+    local_relevance: LocalRelevance | None = Field(default=None, alias="localRelevance")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class PlanQualityIssue(BaseModel):
     code: str
     message: str
@@ -423,6 +441,7 @@ class PlanQualityReport(BaseModel):
     covered_week_count: int = Field(alias="coveredWeekCount", ge=0)
     date_span_days: int = Field(alias="dateSpanDays", ge=0)
     issues: list[PlanQualityIssue] = Field(default_factory=list)
+    metrics: PlanQualityMetrics | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -544,6 +563,9 @@ CommandOutputKind = Literal[
     "calendar_plan_preview",
     "approval_request",
     "calendar_write_result",
+    "plan_search_results",
+    "plan_patch_preview",
+    "plan_patch_result",
     "execution_result",
     "error",
 ]

@@ -15,8 +15,13 @@ import type {
   DailyReviewResponse,
   GoalPlanResponse,
   Language,
+  LocalRelevance,
   MemoryCacheStats,
   MemoryResetResult,
+  PlanHorizon,
+  PlanQualityReport,
+  PlanQualityStatus,
+  PlanSourceType,
   Plan,
   PlannerResponse,
   PlannerTask,
@@ -76,12 +81,26 @@ export type CommandChatEvent =
   | { type: 'runtime_event'; name: string; status: 'running' | 'success' | 'error'; summary?: string }
   | { type: 'draft_created'; draftId: string; kind: 'calendar_plan'; version: number }
   | { type: 'summary'; text: string; draftId?: string }
-  | { type: 'plan_detail'; draftId: string; version: number; title: string; structuredPlan: unknown }
+  | {
+      type: 'plan_detail';
+      draftId: string;
+      version: number;
+      title: string;
+      structuredPlan: unknown;
+      planHorizon?: PlanHorizon | null;
+      qualityReport?: PlanQualityReport | null;
+      qualityStatus?: PlanQualityStatus | null;
+      sourceType?: PlanSourceType | null;
+      localRelevance?: LocalRelevance | null;
+    }
   | { type: 'refinement_started'; draftId: string; total: number }
   | { type: 'refined_tasks_result'; draftId: string; total: number; succeeded: number; failed: number; items: unknown[]; errors?: unknown[] }
   | { type: 'calendar_plan_preview'; actionId: string; draftId: string; title: string; plans: unknown[] }
   | { type: 'approval_required'; actionId: string; draftId: string; permission: CommandPermission; risk: string; summary: string }
   | { type: 'calendar_write_result'; actionId?: string; created: number; updated: number; failed: number; affectedDates?: string[]; errors?: string[]; plans?: unknown[] }
+  | { type: 'plan_search_results'; query: string; summary: string; dateRange?: unknown; calendarPlans?: unknown[]; materials?: unknown[]; goalHistory?: unknown[]; monthNotes?: unknown[] }
+  | { type: 'plan_patch_preview'; actionId: string; operation: 'update' | 'delete'; risk: 'write' | 'delete'; before: unknown; after?: unknown; changes?: Record<string, unknown> }
+  | { type: 'plan_patch_result'; actionId?: string; operation: 'update' | 'delete'; status: 'success' | 'failed'; before?: unknown; after?: unknown; changes?: Record<string, unknown>; error?: string }
   | { type: 'execution_result'; actionId?: string; status: 'success' | 'failed' | 'rejected'; text: string }
   | { type: 'done'; threadId: string }
   | { type: 'error'; error: string };
@@ -423,9 +442,24 @@ export async function deleteCommandThread(threadId: string): Promise<void> {
 
 // ═══ Health & Settings ═══
 
+export interface BackendHealth {
+  status: string;
+  app?: string;
+  name?: string;
+  pid?: number;
+  version?: string;
+  startupTime?: string;
+  features?: Record<string, boolean>;
+}
+
+export async function fetchBackendHealth(): Promise<BackendHealth> {
+  return callApi<BackendHealth>('GET', '/api/health');
+}
+
 export async function checkBackendHealth(): Promise<boolean> {
   try {
-    return await callApi<boolean>('GET', '/api/health');
+    const health = await fetchBackendHealth();
+    return health.status === 'ok';
   } catch {
     return false;
   }

@@ -2816,6 +2816,72 @@ select:focus {
   color: #94a3b8;
 }
 
+.command-result-section {
+  display: grid;
+  gap: 8px;
+}
+
+.command-result-section > strong {
+  color: #dbeafe;
+  font-size: 13px;
+}
+
+.command-compact-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.command-compact-list li {
+  color: #e2e8f0;
+  line-height: 1.45;
+}
+
+.command-compact-list span,
+.command-compact-list small {
+  display: block;
+}
+
+.command-compact-list small {
+  color: #94a3b8;
+}
+
+.command-inline-card.plan-search-results {
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+.command-inline-card.plan-patch-preview {
+  border-color: rgba(251, 191, 36, 0.34);
+}
+
+.command-inline-card.plan-patch-preview.delete {
+  border-color: rgba(248, 113, 113, 0.42);
+}
+
+.command-patch-lines {
+  display: grid;
+  gap: 8px;
+}
+
+.command-patch-lines p {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.command-patch-lines span {
+  color: #f8fafc;
+}
+
+.command-inline-card.plan-patch-result {
+  border-color: rgba(34, 197, 94, 0.32);
+}
+
+.command-inline-card.plan-patch-result.has-error {
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
 .command-inline-card.calendar-preview {
   border-color: rgba(45, 212, 191, 0.32);
 }

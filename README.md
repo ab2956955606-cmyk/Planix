@@ -14,6 +14,18 @@ Planix 是一个面向学习、求职和长期目标管理的桌面 AI 规划工
 
 Planix 的核心演示路径是：输入一个宽泛目标，例如“帮我规划本周 AI 应用实习准备”，系统会检索本地资料库，生成结构化计划，展示 Agent Runtime 执行链，并允许用户继续细化任务或确认写入日历。页面顶部的视频和截图展示的是 Planix 的真实界面与工作流。
 
+## Demo Reliability / 稳定演示验收
+
+Planix does not simply trust LLM output. It validates plan horizon, task density, date coverage, weak task titles, source relevance, and fallback usage before showing or writing proposals.
+
+当前 demo 重点锁定三条高风险路径：
+
+1. 三个月 Python 学习规划必须识别为 90 天计划，并通过 repair 或 local fallback 保证 24+ tasks、10+ covered weeks。
+2. Calendar 写入必须保留 generated task 的 `description`、`estimatedMinutes`、`priority` 和 `sourceKey`，不会覆盖用户手动填写的 completion / result / done。
+3. Calendar 任务细化会通过 `command-draft:*` sourceKey 恢复原始 draft 上下文，避免把滑雪站姿/平衡任务错细化成瑜伽等无关领域。
+
+前端会在 Dashboard proposal、P Mode draft、Goals preview 中展示简洁质量指标：计划质量、周期、任务数、覆盖周数、日期跨度和来源类型。后端 `/api/health` 返回 `version = 3.11-demo-reliability` 以及 `planQualityGate`、`contextAwareRefinement`、`calendarDraftContextRecovery`、`demoMetrics` feature flags；如果页面仍生成稀疏计划，先检查当前 8000 端口是否加载了这个版本。
+
 ## Planix 是什么
 
 Planix 是一个桌面端 AI planning workspace，目标是帮助用户把模糊目标拆成可以执行、可以追踪、可以写入日历的计划。
@@ -186,6 +198,12 @@ NDJSON Stream → Agent Flow Trace UI
 
 ### P Mode / Command Agent
 
+P Mode 默认停留在对话式 `auto` 状态。用户直接说“帮我做规划”时，Planix 会按普通聊天回复，不会自动运行 Runtime，也不会创建隐藏 `calendar_plan` 草稿；只有用户手动开启工作台模式后，规划请求才会进入 Runtime 并生成结构化计划草稿。
+
+Phase 4.7 adds a closed plan query and patch loop inside the existing `#/command` surface. Users can ask for today's plans, search by keyword, or look up study/job-search materials; the backend answers through `/api/command/chat` with `plan_search_results` cards that read Calendar plans, local RAG materials, `planning_goals` history, and `month_notes` without running Runtime or creating a new draft.
+
+Calendar changes also stay in P Mode. Requests such as moving a task to another day, changing the time or duration, renaming a plan, or deleting a plan create `command_actions` with `target="calendar"` and emit `plan_patch_preview`; PermissionGate decides whether the action runs immediately or waits for approval, and the final state is echoed through `plan_patch_result`. Updates only touch title/date/time/estimated duration and preserve completion, done state, source, and sourceKey.
+
 - 提供命令式 AI 对话入口。
 - 支持 Auto Agent Mode、强制 Chat 模式、强制 Workbench 模式。
 - 支持计划草稿生成、展开、修改、细化和上下文追问。
@@ -265,6 +283,12 @@ Backend health check:
 curl http://127.0.0.1:8000/api/health
 ```
 
+Demo readiness check:
+
+```powershell
+.\scripts\verify-demo.ps1
+```
+
 ## Roadmap
 
 ### 已完成
@@ -272,10 +296,12 @@ curl http://127.0.0.1:8000/api/health
 - Planning Intelligence + `structuredPlan` 结构化规划。
 - Phase 3.9 Plan Quality Gate / Planning Reliability。
 - Phase 3.10 Context-aware Task Refinement / 基于完整计划上下文的任务细化。
+- Phase 3.11 Demo Reliability & Evaluation Metrics / 稳定演示验收与质量指标。
 - Grounded RAG 本地资料检索。
 - Agent Runtime + NDJSON streaming。
 - Agent Flow Trace 可观测执行轨迹。
 - P Mode / Command Agent 命令式规划工作流。
+- Phase 4.7 P Mode plan query and Calendar patch preview/result cards.
 - Calendar-ready proposal 预览与确认写入。
 - Tauri 桌面端原型。
 - FastAPI sidecar 打包链路。

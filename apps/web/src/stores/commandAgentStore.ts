@@ -11,13 +11,14 @@ import {
   type CommandChatEvent
 } from '../lib/api';
 import type { CommandMessage, CommandMode, CommandPermission, CommandThreadSummary } from '../types';
+import { todayISO } from '../utils/date';
 
 export interface CommandThreadMessage {
   id: string;
   role: 'user' | 'assistant' | 'card';
   content: string;
   createdAt: number;
-  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'execution_result';
+  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'plan_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'execution_result';
   status?: 'running' | 'success' | 'error';
   title?: string;
   draftId?: string;
@@ -110,6 +111,9 @@ const CARD_KINDS = new Set([
   'calendar_preview',
   'approval',
   'calendar_write_result',
+  'plan_search_results',
+  'plan_patch_preview',
+  'plan_patch_result',
   'execution_result'
 ]);
 
@@ -339,6 +343,38 @@ function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
       payload: { ...event }
     });
   }
+  if (event.type === 'plan_search_results') {
+    addMessage({
+      role: 'card',
+      kind: 'plan_search_results',
+      status: 'success',
+      title: t('command.planSearchResults'),
+      content: event.summary,
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'plan_patch_preview') {
+    addMessage({
+      role: 'card',
+      kind: 'plan_patch_preview',
+      status: 'running',
+      title: t('command.planPatchPreview'),
+      content: event.operation,
+      actionId: event.actionId,
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'plan_patch_result') {
+    addMessage({
+      role: 'card',
+      kind: 'plan_patch_result',
+      status: event.status === 'success' ? 'success' : 'error',
+      title: t('command.planPatchResult'),
+      content: event.error || event.status,
+      actionId: event.actionId,
+      payload: { ...event }
+    });
+  }
   if (event.type === 'execution_result') {
     addMessage({
       role: 'card',
@@ -395,6 +431,9 @@ function createStreamHandler(t: (key: string) => string) {
         event.type === 'calendar_plan_preview' ||
         event.type === 'approval_required' ||
         event.type === 'calendar_write_result' ||
+        event.type === 'plan_search_results' ||
+        event.type === 'plan_patch_preview' ||
+        event.type === 'plan_patch_result' ||
         event.type === 'execution_result'
       ) {
         sawOutput = true;
@@ -419,7 +458,8 @@ async function sendCommand(input: string, t: (key: string) => string) {
       threadId: state.threadId,
       message: trimmed,
       mode: state.mode,
-      permission: state.permission
+      permission: state.permission,
+      context: { date: todayISO() }
     }, {
       onEvent: stream.onEvent
     });

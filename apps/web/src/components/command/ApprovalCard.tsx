@@ -1,17 +1,18 @@
 interface ApprovalCardProps {
   summary: string;
   actionId?: string;
+  risk?: string;
   sending: boolean;
   onDecision: (actionId: string, decision: 'approve' | 'reject') => void;
   t: (key: string) => string;
 }
 
-export function ApprovalCard({ summary, actionId, sending, onDecision, t }: ApprovalCardProps) {
+export function ApprovalCard({ summary, actionId, risk, sending, onDecision, t }: ApprovalCardProps) {
   return (
     <div className="command-inline-card approval">
       <div className="command-card-heading">
         <strong>{t('command.approvalRequired')}</strong>
-        <span>{t('command.writeRisk')}</span>
+        <span>{risk === 'delete' ? t('command.deleteOperation') : t('command.writeRisk')}</span>
       </div>
       <p>{summary}</p>
       <div className="command-card-actions">

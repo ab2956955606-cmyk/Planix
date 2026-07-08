@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { CommandThreadMessage } from '../../stores/commandAgentStore';
+import type { PlanHorizon, PlanQualityReport, PlanQualityStatus, PlanSourceType } from '../../types';
 import { ApprovalCard } from './ApprovalCard';
 import { CalendarPlanPreviewCard } from './CalendarPlanPreviewCard';
 import { CalendarWriteResultCard } from './CalendarWriteResultCard';
 import { ExecutionMiniCard } from './ExecutionMiniCard';
 import { InlinePlanDetailCard } from './InlinePlanDetailCard';
 import { InlinePlanSummaryCard } from './InlinePlanSummaryCard';
+import { PlanPatchPreviewCard } from './PlanPatchPreviewCard';
+import { PlanPatchResultCard } from './PlanPatchResultCard';
+import { PlanSearchResultsCard } from './PlanSearchResultsCard';
 import { RefinedTasksResultCard } from './RefinedTasksResultCard';
 
 interface AgentThreadProps {
@@ -115,6 +119,7 @@ export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProp
           <p>{t('command.empty')}</p>
           <div className="command-examples">
             <button type="button">{t('command.examplePlan')}</button>
+            <button type="button">{t('command.exampleQuery')}</button>
             <button type="button">{t('command.exampleRegenerate')}</button>
             <button type="button">{t('command.exampleWrite')}</button>
           </div>
@@ -163,6 +168,10 @@ export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProp
               title={String(payloadOf(message).title || message.title || '')}
               version={typeof payloadOf(message).version === 'number' ? payloadOf(message).version as number : undefined}
               structuredPlan={payloadOf(message).structuredPlan}
+              planHorizon={payloadOf(message).planHorizon as PlanHorizon | null | undefined}
+              qualityReport={payloadOf(message).qualityReport as PlanQualityReport | null | undefined}
+              qualityStatus={payloadOf(message).qualityStatus as PlanQualityStatus | null | undefined}
+              sourceType={payloadOf(message).sourceType as PlanSourceType | null | undefined}
               t={t}
             />
           )}
@@ -190,6 +199,7 @@ export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProp
             <ApprovalCard
               summary={message.content}
               actionId={message.actionId}
+              risk={String(payloadOf(message).risk || '')}
               sending={sending}
               onDecision={onApprove}
               t={t}
@@ -204,6 +214,37 @@ export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProp
               affectedDates={payloadOf(message).affectedDates}
               errors={payloadOf(message).errors}
               plans={payloadOf(message).plans}
+              t={t}
+            />
+          )}
+
+          {message.role === 'card' && message.kind === 'plan_search_results' && (
+            <PlanSearchResultsCard
+              summary={String(payloadOf(message).summary || message.content || '')}
+              calendarPlans={payloadOf(message).calendarPlans}
+              materials={payloadOf(message).materials}
+              goalHistory={payloadOf(message).goalHistory}
+              monthNotes={payloadOf(message).monthNotes}
+              t={t}
+            />
+          )}
+
+          {message.role === 'card' && message.kind === 'plan_patch_preview' && (
+            <PlanPatchPreviewCard
+              operation={String(payloadOf(message).operation || '')}
+              before={payloadOf(message).before}
+              after={payloadOf(message).after}
+              changes={payloadOf(message).changes}
+              t={t}
+            />
+          )}
+
+          {message.role === 'card' && message.kind === 'plan_patch_result' && (
+            <PlanPatchResultCard
+              operation={String(payloadOf(message).operation || '')}
+              status={String(payloadOf(message).status || '')}
+              after={payloadOf(message).after}
+              error={typeof payloadOf(message).error === 'string' ? payloadOf(message).error as string : undefined}
               t={t}
             />
           )}

@@ -75,6 +75,43 @@ class FakeRuntime:
                     "tasks": [],
                     "sources": [],
                     "fallbackReason": "test",
+                    "planHorizon": {
+                        "rawText": "AI internship prep",
+                        "durationDays": 5,
+                        "horizonType": "weekly",
+                        "startDate": "2026-07-05",
+                        "endDate": "2026-07-09",
+                        "expectedMilestoneCount": 1,
+                        "expectedMinTaskCount": 3,
+                        "expectedWeekCount": 1,
+                    },
+                    "qualityReport": {
+                        "ok": True,
+                        "score": 94,
+                        "totalTasks": 2,
+                        "milestoneCount": 2,
+                        "coveredWeekCount": 1,
+                        "dateSpanDays": 2,
+                        "issues": [],
+                        "metrics": {
+                            "durationDays": 5,
+                            "totalTasks": 2,
+                            "milestoneCount": 2,
+                            "coveredWeekCount": 1,
+                            "dateSpanDays": 2,
+                            "weakTaskCount": 0,
+                            "missingDueDateCount": 0,
+                            "outOfRangeDueDateCount": 0,
+                            "repairAttempted": False,
+                            "fallbackUsed": True,
+                            "qualityStatus": "local_fallback",
+                            "sourceType": "local_fallback",
+                            "localRelevance": "low",
+                        },
+                    },
+                    "qualityStatus": "local_fallback",
+                    "sourceType": "local_fallback",
+                    "localRelevance": "low",
                 },
             },
         }) + "\n"
@@ -90,6 +127,13 @@ class ExplodingRuntime:
 
 def _patch_runtime(monkeypatch, runtime_factory):
     monkeypatch.setattr("app.services.command_agent.RuntimeOrchestrator", runtime_factory)
+
+
+DEFAULT_PLANNING_MESSAGE = "\u5e2e\u6211\u89c4\u5212\u672c\u5468 AI \u5b9e\u4e60\u51c6\u5907"
+
+
+def _create_workbench_draft(client, message: str = DEFAULT_PLANNING_MESSAGE):
+    return client.post("/api/command/chat", json={"mode": "workbench", "message": message})
 
 
 class FakePlanningService:
@@ -109,6 +153,17 @@ class FakePlanningService:
             fallbackTips=[],
             mode="local_fallback",
         )
+
+
+PY_STUDY = "Python \u5b66\u4e60"
+MSG_TODAY_PLANS = "\u6211\u4eca\u5929\u6709\u4ec0\u4e48\u5b89\u6392\uff1f"
+MSG_FIND_PYTHON = "\u5e2e\u6211\u627e Python \u8ba1\u5212"
+MSG_PATCH_TO_DAY_AFTER = "\u628a\u660e\u5929\u7684 Python \u5b66\u4e60\u6539\u5230\u540e\u5929"
+MSG_PATCH_TO_DAY_AFTER_30 = "\u628a\u660e\u5929\u7684 Python \u5b66\u4e60\u6539\u5230\u540e\u5929\uff0c\u6539\u6210 30 \u5206\u949f"
+MSG_DELETE_TOMORROW = "\u5220\u9664\u660e\u5929\u7684 Python \u5b66\u4e60"
+MSG_PATCH_AMBIGUOUS = "\u628a\u660e\u5929\u7684\u4efb\u52a1\u6539\u6210 30 \u5206\u949f"
+MSG_PATCH_FIRST = "\u628a\u7b2c\u4e00\u4e2a\u6539\u6210 30 \u5206\u949f"
+MSG_FIND_PYTHON_AI = "\u627e\u4e00\u4e0b Python AI \u5b9e\u4e60\u8d44\u6599\u548c\u8ba1\u5212"
 
 
 def test_command_chat_streams_and_replays_thread(client):
@@ -230,11 +285,31 @@ def test_chat_mode_planning_request_does_not_run_runtime(client, monkeypatch):
         assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
 
 
-def test_auto_planning_request_creates_hidden_draft(client, monkeypatch):
+def test_auto_planning_request_uses_chat_without_runtime_or_draft(client, monkeypatch):
+    ExplodingRuntime.calls = 0
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+
+    response = client.post("/api/command/chat", json={"mode": "auto", "message": DEFAULT_PLANNING_MESSAGE})
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert ExplodingRuntime.calls == 0
+    assert any(event["type"] == "assistant_delta" for event in events)
+    assert not any(
+        event["type"] in {"runtime_started", "runtime_event", "draft_created", "summary", "plan_detail"}
+        for event in events
+    )
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_actions").fetchone()["count"] == 0
+        assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
+
+
+def test_workbench_mode_creates_hidden_draft(client, monkeypatch):
     FakeRuntime.calls = 0
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
 
-    response = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    response = _create_workbench_draft(client, "Planix 这个项目怎么介绍？")
 
     assert response.status_code == 200
     events = _events(response)
@@ -244,7 +319,12 @@ def test_auto_planning_request_creates_hidden_draft(client, monkeypatch):
     draft_event = next(event for event in events if event["type"] == "draft_created")
     summary_event = next(event for event in events if event["type"] == "summary")
     summary_index = next(index for index, event in enumerate(events) if event["type"] == "summary")
-    assert events[summary_index + 1]["type"] == "plan_detail"
+    detail_event = events[summary_index + 1]
+    assert detail_event["type"] == "plan_detail"
+    assert detail_event["planHorizon"]["durationDays"] == 5
+    assert detail_event["qualityStatus"] == "local_fallback"
+    assert detail_event["qualityReport"]["metrics"]["fallbackUsed"] is True
+    assert detail_event["sourceType"] == "local_fallback"
     assert draft_event["kind"] == "calendar_plan"
     assert "已生成计划草稿" in summary_event["text"]
 
@@ -256,23 +336,12 @@ def test_auto_planning_request_creates_hidden_draft(client, monkeypatch):
         payload = json.loads(draft["payload_json"])
         assert payload["structuredPlan"]["goalTitle"] == "AI internship prep"
         assert payload["runtimeRunId"].startswith("run_fake_")
+        assert payload["qualityReport"]["metrics"]["qualityStatus"] == "local_fallback"
         assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
 
     thread_id = events[-1]["threadId"]
     thread = client.get(f"/api/command/thread/{thread_id}").json()
     assert thread["currentDraft"]["id"] == draft_event["draftId"]
-
-
-def test_workbench_mode_creates_hidden_draft(client, monkeypatch):
-    FakeRuntime.calls = 0
-    _patch_runtime(monkeypatch, lambda: FakeRuntime())
-
-    response = client.post("/api/command/chat", json={"mode": "workbench", "message": "Planix 这个项目怎么介绍？"})
-
-    assert response.status_code == 200
-    events = _events(response)
-    assert FakeRuntime.calls == 1
-    assert any(event["type"] == "draft_created" for event in events)
 
 
 def test_command_threads_list_and_delete_do_not_delete_plans(client):
@@ -306,11 +375,11 @@ def test_second_generation_supersedes_previous_draft(client, monkeypatch):
     FakeRuntime.calls = 0
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
 
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
     second = client.post(
         "/api/command/chat",
-        json={"threadId": thread_id, "mode": "auto", "message": "帮我规划下周 AI 实习准备"},
+        json={"threadId": thread_id, "mode": "workbench", "message": "帮我规划下周 AI 实习准备"},
     )
 
     assert second.status_code == 200
@@ -331,14 +400,14 @@ def test_runtime_handoff_uses_current_thread_context_only(client, monkeypatch):
     thread_id = _events(first)[-1]["threadId"]
     second = client.post(
         "/api/command/chat",
-        json={"threadId": thread_id, "mode": "auto", "message": "帮我做个规划"},
+        json={"threadId": thread_id, "mode": "workbench", "message": "帮我做个规划"},
     )
 
     assert second.status_code == 200
     assert FakeRuntime.calls == 1
     assert "赛里木湖" in FakeRuntime.last_input
 
-    client.post("/api/command/chat", json={"mode": "auto", "message": "帮我做个规划"})
+    client.post("/api/command/chat", json={"mode": "workbench", "message": "帮我做个规划"})
     assert FakeRuntime.calls == 2
     assert "赛里木湖" not in FakeRuntime.last_input
 
@@ -346,7 +415,7 @@ def test_runtime_handoff_uses_current_thread_context_only(client, monkeypatch):
 def test_invalid_structured_plan_does_not_create_draft_but_saves_message(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime(structured_plan={"goalTitle": "Bad", "milestones": []}))
 
-    response = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    response = _create_workbench_draft(client)
 
     assert response.status_code == 200
     events = _events(response)
@@ -370,7 +439,7 @@ def test_draft_save_error_returns_error_event_and_done(client, monkeypatch):
 
     monkeypatch.setattr("app.services.command_agent.CommandAgentService._create_calendar_draft", fail_create)
 
-    response = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    response = _create_workbench_draft(client)
 
     assert response.status_code == 200
     events = _events(response)
@@ -386,7 +455,7 @@ def test_draft_save_error_returns_error_event_and_done(client, monkeypatch):
 
 def test_calendar_write_error_uses_calendar_specific_message(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "Plan my skating practice"})
+    first = _create_workbench_draft(client, "Plan my skating practice")
     thread_id = _events(first)[-1]["threadId"]
 
     def fail_execute(self, action_id):
@@ -409,7 +478,7 @@ def test_calendar_write_error_uses_calendar_specific_message(client, monkeypatch
 def test_phase_43_generation_does_not_create_write_actions(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
 
-    response = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    response = _create_workbench_draft(client)
 
     assert response.status_code == 200
     with get_conn() as conn:
@@ -424,6 +493,10 @@ def test_phase_43_generation_does_not_create_write_actions(client, monkeypatch):
 
 def test_intent_router_rules():
     assert detect_command_intent("帮我规划本周 AI 实习准备") == "planning_request"
+    assert detect_command_intent(MSG_TODAY_PLANS) == "query_plan"
+    assert detect_command_intent(MSG_FIND_PYTHON) == "query_plan"
+    assert detect_command_intent(MSG_PATCH_TO_DAY_AFTER) == "patch_calendar_plan"
+    assert detect_command_intent("删除周五的计划") == "patch_calendar_plan"
     assert detect_command_intent("重新生成一个轻松版本") == "regenerate_draft"
     assert detect_command_intent("展开看看完整计划") == "show_current_plan"
     assert detect_command_intent("写入日历") == "sync_to_calendar"
@@ -449,13 +522,314 @@ def test_intent_router_rules():
     assert detect_command_intent("refine all tasks") == "refine_current_plan"
 
 
+def test_query_plan_searches_calendar_without_runtime_or_draft(client, monkeypatch):
+    ExplodingRuntime.calls = 0
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+    client.post(
+        "/api/plans",
+        json={"date": "2026-07-05", "time": "09:00", "content": PY_STUDY, "source": "manual"},
+    )
+
+    response = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "message": MSG_TODAY_PLANS, "context": {"date": "2026-07-05"}},
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    result = next(event for event in events if event["type"] == "plan_search_results")
+    assert ExplodingRuntime.calls == 0
+    assert result["calendarPlans"][0]["title"] == PY_STUDY
+    assert result["dateRange"]["startDate"] == "2026-07-05"
+    assert not any(event["type"] == "runtime_started" for event in events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
+
+
+def test_query_plan_searches_materials_history_and_month_notes(client):
+    client.post(
+        "/api/rag/documents",
+        json={"title": "Python 面试资料", "content": "Python portfolio and AI internship notes.", "sourceType": "paste"},
+    )
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO planning_goals(
+              id, goal, summary, structured_plan_json, phases_json, tasks_json, sources_json
+            )
+            VALUES (
+              'goal_python', 'Python AI internship plan', 'History summary',
+              '{"goalTitle":"Python AI internship plan","goalDescription":"History"}',
+              '[]', '[]', '[]'
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO month_notes(year, month, content) VALUES (2026, 7, 'Python 月度复盘和 AI 实习材料')"
+        )
+
+    response = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "message": MSG_FIND_PYTHON_AI, "context": {"date": "2026-07-05"}},
+    )
+
+    assert response.status_code == 200
+    result = next(event for event in _events(response) if event["type"] == "plan_search_results")
+    assert result["materials"]
+    assert result["goalHistory"][0]["title"] == "Python AI internship plan"
+    assert result["monthNotes"][0]["month"] == 7
+
+
+def test_patch_calendar_plan_low_permission_previews_and_requires_approval(client):
+    client.post(
+        "/api/plans",
+        json={
+            "date": "2026-07-06",
+            "time": "09:00",
+            "content": PY_STUDY,
+            "source": "manual",
+            "result": "keep completion",
+        },
+    )
+
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "permission": "low",
+            "message": MSG_PATCH_TO_DAY_AFTER,
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    preview = next(event for event in events if event["type"] == "plan_patch_preview")
+    approval = next(event for event in events if event["type"] == "approval_required")
+    assert preview["changes"]["date"] == "2026-07-07"
+    assert approval["risk"] == "write"
+    with get_conn() as conn:
+        plan = conn.execute("SELECT date, result FROM plans WHERE content = ?", (PY_STUDY,)).fetchone()
+        action = conn.execute("SELECT operation, status FROM command_actions WHERE id = ?", (approval["actionId"],)).fetchone()
+        assert plan["date"] == "2026-07-06"
+        assert plan["result"] == "keep completion"
+        assert action["operation"] == "update"
+        assert action["status"] == "waiting_approval"
+
+
+def test_reject_patch_calendar_plan_does_not_update_plan(client):
+    client.post(
+        "/api/plans",
+        json={
+            "date": "2026-07-06",
+            "time": "09:00",
+            "content": PY_STUDY,
+            "source": "manual",
+            "result": "keep completion",
+        },
+    )
+    preview_response = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "permission": "low",
+            "message": MSG_PATCH_TO_DAY_AFTER,
+            "context": {"date": "2026-07-05"},
+        },
+    )
+    action_id = next(event for event in _events(preview_response) if event["type"] == "approval_required")["actionId"]
+
+    response = client.post(
+        "/api/command/approve",
+        json={"actionId": action_id, "decision": "reject", "permission": "low"},
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert any(event["type"] == "execution_result" and event["status"] == "rejected" for event in events)
+    assert not any(event["type"] == "plan_patch_result" for event in events)
+    with get_conn() as conn:
+        plan = conn.execute("SELECT date, result FROM plans WHERE content = ?", (PY_STUDY,)).fetchone()
+        action = conn.execute("SELECT status FROM command_actions WHERE id = ?", (action_id,)).fetchone()
+        assert plan["date"] == "2026-07-06"
+        assert plan["result"] == "keep completion"
+        assert action["status"] == "rejected"
+
+
+def test_patch_calendar_plan_medium_permission_auto_updates_allowed_fields(client):
+    client.post(
+        "/api/plans",
+        json={
+            "date": "2026-07-06",
+            "time": "09:00",
+            "content": PY_STUDY,
+            "source": "manual",
+            "result": "keep completion",
+        },
+    )
+
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "permission": "medium",
+            "message": MSG_PATCH_TO_DAY_AFTER_30,
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    result = next(event for event in events if event["type"] == "plan_patch_result")
+    assert result["status"] == "success"
+    assert result["after"]["date"] == "2026-07-07"
+    assert result["after"]["estimatedMinutes"] == 30
+    assert not any(event["type"] == "approval_required" for event in events)
+    with get_conn() as conn:
+        plan = conn.execute("SELECT date, estimated_minutes, result, done FROM plans WHERE content = ?", (PY_STUDY,)).fetchone()
+        assert plan["date"] == "2026-07-07"
+        assert plan["estimated_minutes"] == 30
+        assert plan["result"] == "keep completion"
+        assert plan["done"] == 0
+
+
+def test_patch_calendar_delete_medium_permission_requires_approval(client):
+    client.post(
+        "/api/plans",
+        json={"date": "2026-07-06", "time": "09:00", "content": PY_STUDY, "source": "ai"},
+    )
+
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "permission": "medium",
+            "message": MSG_DELETE_TOMORROW,
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert any(event["type"] == "plan_patch_preview" and event["operation"] == "delete" for event in events)
+    assert any(event["type"] == "approval_required" and event["risk"] == "delete" for event in events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 1
+
+
+def test_patch_calendar_high_permission_deletes_ai_plan(client):
+    client.post(
+        "/api/plans",
+        json={"date": "2026-07-06", "time": "09:00", "content": PY_STUDY, "source": "ai"},
+    )
+
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "permission": "high",
+            "message": MSG_DELETE_TOMORROW,
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    result = next(event for event in events if event["type"] == "plan_patch_result")
+    assert result["status"] == "success"
+    assert not any(event["type"] == "approval_required" for event in events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
+
+
+def test_patch_calendar_manual_delete_always_requires_approval(client):
+    client.post(
+        "/api/plans",
+        json={"date": "2026-07-06", "time": "09:00", "content": PY_STUDY, "source": "manual"},
+    )
+
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "permission": "high",
+            "message": MSG_DELETE_TOMORROW,
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert any(event["type"] == "approval_required" for event in events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 1
+
+
+def test_patch_calendar_multiple_candidates_returns_selection_card_without_action(client):
+    client.post("/api/plans", json={"date": "2026-07-06", "time": "09:00", "content": PY_STUDY, "source": "manual"})
+    client.post("/api/plans", json={"date": "2026-07-06", "time": "10:00", "content": "React \u5b66\u4e60", "source": "manual"})
+
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "permission": "medium",
+            "message": MSG_PATCH_AMBIGUOUS,
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert response.status_code == 200
+    result = next(event for event in _events(response) if event["type"] == "plan_search_results")
+    assert len(result["calendarPlans"]) == 2
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_actions").fetchone()["count"] == 0
+
+
+def test_patch_calendar_uses_last_query_ordinal_reference(client):
+    client.post(
+        "/api/plans",
+        json={"date": "2026-07-05", "time": "09:00", "content": PY_STUDY, "source": "manual", "estimatedMinutes": 60},
+    )
+    client.post(
+        "/api/plans",
+        json={"date": "2026-07-05", "time": "10:00", "content": "React \u5b66\u4e60", "source": "manual", "estimatedMinutes": 45},
+    )
+    query = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "message": MSG_TODAY_PLANS, "context": {"date": "2026-07-05"}},
+    )
+    thread_id = _events(query)[-1]["threadId"]
+
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "threadId": thread_id,
+            "mode": "auto",
+            "permission": "medium",
+            "message": MSG_PATCH_FIRST,
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert response.status_code == 200
+    result = next(event for event in _events(response) if event["type"] == "plan_patch_result")
+    assert result["after"]["title"] == PY_STUDY
+    assert result["after"]["estimatedMinutes"] == 30
+    with get_conn() as conn:
+        first = conn.execute("SELECT estimated_minutes FROM plans WHERE content = ?", (PY_STUDY,)).fetchone()
+        second = conn.execute("SELECT estimated_minutes FROM plans WHERE content = ?", ("React \u5b66\u4e60",)).fetchone()
+        assert first["estimated_minutes"] == 30
+        assert second["estimated_minutes"] == 45
+
+
 def test_command_drafts_route_stays_private(client):
     assert client.post("/api/command/drafts", json={}).status_code == 404
 
 
 def test_show_current_plan_returns_inline_detail(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
 
     response = client.post(
@@ -468,12 +842,16 @@ def test_show_current_plan_returns_inline_detail(client, monkeypatch):
     detail = next(event for event in events if event["type"] == "plan_detail")
     assert detail["title"] == "AI internship prep"
     assert detail["structuredPlan"]["milestones"][0]["tasks"][0]["title"] == "Draft Planix project intro"
+    assert detail["planHorizon"]["durationDays"] == 5
+    assert detail["qualityReport"]["metrics"]["totalTasks"] == 2
+    assert detail["qualityStatus"] == "local_fallback"
+    assert detail["sourceType"] == "local_fallback"
 
 
 def test_regenerate_current_draft_supersedes_old_version(client, monkeypatch):
     FakeRuntime.calls = 0
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
 
     response = client.post(
@@ -495,7 +873,7 @@ def test_regenerate_current_draft_supersedes_old_version(client, monkeypatch):
 
 def test_sync_calendar_low_requires_approval_and_does_not_write(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
 
     response = client.post(
@@ -517,7 +895,7 @@ def test_sync_calendar_low_requires_approval_and_does_not_write(client, monkeypa
 def test_write_plan_phrase_uses_current_draft_without_runtime(client, monkeypatch):
     FakeRuntime.calls = 0
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
     assert FakeRuntime.calls == 1
 
@@ -539,7 +917,7 @@ def test_write_plan_phrase_uses_current_draft_without_runtime(client, monkeypatc
 def test_short_save_phrase_with_current_draft_means_calendar_write(client, monkeypatch):
     FakeRuntime.calls = 0
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
 
     response = client.post(
@@ -556,7 +934,7 @@ def test_short_save_phrase_with_current_draft_means_calendar_write(client, monke
 
 def test_approve_calendar_write_creates_plans(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
     write = client.post(
         "/api/command/chat",
@@ -588,7 +966,7 @@ def test_approve_calendar_write_creates_plans(client, monkeypatch):
 
 def test_approve_calendar_write_error_uses_calendar_specific_message(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "Plan my skating practice"})
+    first = _create_workbench_draft(client, "Plan my skating practice")
     thread_id = _events(first)[-1]["threadId"]
     write = client.post(
         "/api/command/chat",
@@ -615,7 +993,7 @@ def test_approve_calendar_write_error_uses_calendar_specific_message(client, mon
 
 def test_reject_calendar_write_does_not_create_plans(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
     write = client.post(
         "/api/command/chat",
@@ -638,7 +1016,7 @@ def test_reject_calendar_write_does_not_create_plans(client, monkeypatch):
 
 def test_medium_permission_auto_writes_calendar_without_approval(client, monkeypatch):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
 
     response = client.post(
@@ -660,7 +1038,7 @@ def test_refine_all_tasks_updates_current_draft_and_calendar_write_uses_refineme
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
     monkeypatch.setattr("app.services.command_agent.PlanningService", lambda: FakePlanningService())
 
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "Plan my skating practice"})
+    first = _create_workbench_draft(client, "Plan my skating practice")
     thread_id = _events(first)[-1]["threadId"]
 
     response = client.post(
@@ -713,7 +1091,7 @@ def test_refine_all_tasks_caps_large_current_milestone_at_five(client, monkeypat
     _patch_runtime(monkeypatch, lambda: FakeRuntime(structured_plan=structured_plan))
     monkeypatch.setattr("app.services.command_agent.PlanningService", lambda: FakePlanningService())
 
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "Plan my Python practice"})
+    first = _create_workbench_draft(client, "Plan my Python practice")
     thread_id = _events(first)[-1]["threadId"]
 
     response = client.post(
@@ -749,7 +1127,7 @@ def test_calendar_write_does_not_overwrite_manual_plan(client, monkeypatch):
         "/api/plans",
         json={"date": "2026-07-05", "time": "08:00", "content": "Draft Planix project intro", "source": "manual", "result": "keep me"},
     )
-    first = client.post("/api/command/chat", json={"mode": "auto", "message": "帮我规划本周 AI 实习准备"})
+    first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
 
     response = client.post(
