@@ -210,6 +210,8 @@ Phase 4.9A adds the internal Planix AI SDK / ModelProvider layer. Backend model 
 
 Phase 4.9A.1 lets Settings store API Keys per provider. The active provider remains singular, but DeepSeek, Kimi, Zhipu GLM, OpenAI, and Custom can each keep their own saved key and model/base URL config. Settings shows the current active provider plus saved-key chips, and deleting a chip clears only that provider key.
 
+Phase 4.9B.1 verifies and polishes task-level model routing. Settings can route intent decisions, plan generation, task refinement, calendar patch extraction, memory query/write, model knowledge, and chat to different primary/fallback providers. Runtime and P Mode model-usage cards show the final provider/model, token usage, latency, fallbackUsed, and safe route attempts such as missing-key skips, provider errors, fallback success, or local fallback.
+
 - 提供命令式 AI 对话入口。
 - 支持 Auto Agent Mode、强制 Chat 模式、强制 Workbench 模式。
 - 支持计划草稿生成、展开、修改、细化和上下文追问。
@@ -313,6 +315,7 @@ Demo readiness check:
 - Phase 4.8.2 Unified Memory Store and Memory Agent: `memories` with FTS, grouped memory search, memory write previews, and planning-history archives.
 - Phase 4.9A Planix AI SDK / ModelProvider layer with standardized provider, usage, latency, error type, URL normalization, and local fallback semantics.
 - Phase 4.9A.1 Settings multi-provider API Key persistence and visible provider-key deletion.
+- Phase 4.9B.1 task-level model routing acceptance and observability: canonical `memory_query` / `memory_write`, fallback attempts, and clearer Settings routing hints.
 - Calendar-ready proposal 预览与确认写入。
 - Tauri 桌面端原型。
 - FastAPI sidecar 打包链路。
@@ -324,7 +327,7 @@ Demo readiness check:
 - README 作品集化与真实截图补充。
 - 更清晰的动作审批 UX。
 - P Mode 细化任务体验优化。
-- Phase 4.9B task-level Multi-Model Router / fallback chain.
+- Phase 5 WriteIntent / Undo / Operation Log.
 
 ### 下一步
 

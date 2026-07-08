@@ -66,6 +66,7 @@ const labels: Record<string, string> = {
   'command.noteWriteTarget': 'Ready to record into {year}-{month} notes:',
   'command.modelUsage': 'Model usage',
   'command.model': 'Model',
+  'command.usageTask': 'Task',
   'command.tokens': 'Tokens',
   'command.promptTokens': 'prompt',
   'command.completionTokens': 'completion',
@@ -80,6 +81,7 @@ const labels: Record<string, string> = {
   'command.routeSkipped': 'skipped',
   'command.routeMissingKey': 'missing API key',
   'command.routeLocalFallback': 'local fallback',
+  'command.fallbackUsed': 'Fallback',
   'command.approvalRequired': 'Approval required',
   'command.writeRisk': 'Write',
   'command.recordOperation': 'Record',
@@ -116,6 +118,8 @@ const labels: Record<string, string> = {
   'command.actionContinueViewMessage': '继续查看第 {index} 条笔记',
   'command.usageTaskDecision': 'decision',
   'command.usageTaskPlanGeneration': 'plan generation',
+  'command.usageTaskMemoryQuery': 'memory query',
+  'command.usageTaskMemoryWrite': 'memory write',
   'command.usageTaskQueryNotes': 'note search',
   'command.usageTaskNoteWrite': 'note write',
   'command.memoryLibrary': 'Memory library',
@@ -145,7 +149,9 @@ const labels: Record<string, string> = {
   'common.done': 'Done',
   'common.pending': 'Pending',
   'common.unknown': 'Unknown',
-  'common.empty': 'Empty'
+  'common.empty': 'Empty',
+  'common.yes': 'Yes',
+  'common.no': 'No'
 };
 
 const labelOverrides: Record<string, string> = {
@@ -305,9 +311,9 @@ describe('Plan command cards', () => {
       <ModelUsageBadge usage={[
         { provider: 'deepseek', model: 'chat', promptTokens: 10, completionTokens: 5, totalTokens: 15, latencyMs: 7, mode: 'llm', taskType: 'command_decision' },
         { provider: 'deepseek', model: 'plan', promptTokens: 100, completionTokens: 50, totalTokens: 150, latencyMs: 2100, mode: 'llm', taskType: 'plan_generation' },
-        { provider: 'kimi', model: 'moonshot-v1-8k', totalTokens: 22, latencyMs: 120, mode: 'llm', taskType: 'note_query', fallbackUsed: true, attempts: [
-          { provider: 'zhipu_glm', status: 'skipped', errorType: 'missing_api_key' },
-          { provider: 'kimi', status: 'success' }
+        { provider: 'kimi', model: 'moonshot-v1-8k', totalTokens: 22, latencyMs: 120, mode: 'llm', taskType: 'memory_query', fallbackUsed: true, attempts: [
+          { provider: 'zhipu_glm', model: 'glm-4-flash', status: 'skipped', errorType: 'missing_api_key' },
+          { provider: 'kimi', model: 'moonshot-v1-8k', status: 'success' }
         ] },
         { provider: 'zhipu_glm', model: 'glm-4-flash', totalTokens: 8, latencyMs: 90, mode: 'llm', taskType: 'note_write' }
       ]} t={t} />
@@ -326,9 +332,11 @@ describe('Plan command cards', () => {
     expect(usageHtml).toContain('Model usage');
     expect(usageHtml).toContain('decision 15 Tokens');
     expect(usageHtml).toContain('plan generation 150 Tokens');
-    expect(usageHtml).toContain('note search 22 Tokens');
-    expect(usageHtml).toContain('note write 8 Tokens');
-    expect(usageHtml).toContain('Route: zhipu_glm missing API key -&gt; kimi success');
+    expect(usageHtml).toContain('memory query 22 Tokens');
+    expect(usageHtml).toContain('memory write 8 Tokens');
+    expect(usageHtml).toContain('Task: memory query');
+    expect(usageHtml).toContain('Fallback: Yes');
+    expect(usageHtml).toContain('Route: zhipu_glm / glm-4-flash missing API key -&gt; kimi / moonshot-v1-8k success');
     expect(quickHtml).toContain('Quick actions');
     expect(quickHtml).toContain('记录记忆');
   });

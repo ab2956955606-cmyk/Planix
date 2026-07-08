@@ -74,6 +74,7 @@ class CommandDecisionService:
         self,
         message: str,
         *,
+        task_type: str = "command_decision",
         thread_context: str = "",
         current_draft: dict[str, Any] | None = None,
         last_search_results: list[dict[str, Any]] | None = None,
@@ -137,14 +138,14 @@ class CommandDecisionService:
             ensure_ascii=False,
         )
         result, error = self.client.complete(
-            "command_decision",
+            task_type,
             system,
             user,
             max_tokens=700,
             temperature=0,
             timeout_seconds=20,
             response_format_json=True,
-            task_type="command_decision",
+            task_type=task_type,
         )
         if not result:
             if error and error.local_fallback_allowed is False:
@@ -158,18 +159,18 @@ class CommandDecisionService:
                         clarificationQuestion="模型调用失败且本地兜底已关闭，请检查模型路由或开启本地兜底。",
                         decisionSummary="模型路由失败",
                     ),
-                    usage=local_fallback_usage(self.client, "command_decision", error),
+                    usage=local_fallback_usage(self.client, task_type, error),
                     source="llm_error",
                     error=error.message,
                 )
             return CommandDecisionResult(
                 decision=None,
-                usage=local_fallback_usage(self.client, "command_decision", error),
+                usage=local_fallback_usage(self.client, task_type, error),
                 source="local_fallback",
                 error=error.message if error else "llm unavailable",
             )
 
-        usage = usage_from_llm_result(result, "command_decision")
+        usage = usage_from_llm_result(result, task_type)
         parsed = _parse_json_object(result.content)
         if not parsed:
             return CommandDecisionResult(

@@ -115,8 +115,8 @@ const routingTaskTypes: ModelRoutingTaskType[] = [
   'plan_generation',
   'task_refinement',
   'calendar_patch',
-  'note_query',
-  'note_write',
+  'memory_query',
+  'memory_write',
   'model_knowledge',
   'chat'
 ];
@@ -139,12 +139,36 @@ function routingTaskLabel(taskType: ModelRoutingTaskType, t: (key: string) => st
     plan_generation: t('legacy.routingTaskPlanGeneration'),
     task_refinement: t('legacy.routingTaskRefinement'),
     calendar_patch: t('legacy.routingTaskCalendarPatch'),
-    note_query: t('legacy.routingTaskNoteQuery'),
-    note_write: t('legacy.routingTaskNoteWrite'),
+    memory_query: t('legacy.routingTaskMemoryQuery'),
+    memory_write: t('legacy.routingTaskMemoryWrite'),
+    note_query: t('legacy.routingTaskMemoryQuery'),
+    note_write: t('legacy.routingTaskMemoryWrite'),
     model_knowledge: t('legacy.routingTaskModelKnowledge'),
     chat: t('legacy.routingTaskChat')
   };
   return labels[taskType] || taskType;
+}
+
+function routingTaskDescription(taskType: ModelRoutingTaskType, t: (key: string) => string): string {
+  const descriptions: Record<ModelRoutingTaskType, string> = {
+    command_decision: t('legacy.routingTaskCommandDecisionDesc'),
+    plan_generation: t('legacy.routingTaskPlanGenerationDesc'),
+    task_refinement: t('legacy.routingTaskRefinementDesc'),
+    calendar_patch: t('legacy.routingTaskCalendarPatchDesc'),
+    memory_query: t('legacy.routingTaskMemoryQueryDesc'),
+    memory_write: t('legacy.routingTaskMemoryWriteDesc'),
+    note_query: t('legacy.routingTaskMemoryQueryDesc'),
+    note_write: t('legacy.routingTaskMemoryWriteDesc'),
+    model_knowledge: t('legacy.routingTaskModelKnowledgeDesc'),
+    chat: t('legacy.routingTaskChatDesc')
+  };
+  return descriptions[taskType] || '';
+}
+
+function normalizeRoutingTaskType(taskType: ModelRoutingTaskType): ModelRoutingTaskType {
+  if (taskType === 'note_query') return 'memory_query';
+  if (taskType === 'note_write') return 'memory_write';
+  return taskType;
 }
 
 function routingPrimaryForSettings(settings: AiSettings): RoutedProvider {
@@ -163,7 +187,7 @@ function recommendedRoutingRules(settings: AiSettings): AiModelRoutingRule[] {
 }
 
 function normalizedRoutingRules(settings: AiSettings): AiModelRoutingRule[] {
-  const existing = new Map((settings.routingRules || []).map((rule) => [rule.taskType, rule]));
+  const existing = new Map((settings.routingRules || []).map((rule) => [normalizeRoutingTaskType(rule.taskType), rule]));
   const defaults = recommendedRoutingRules(settings);
   return defaults.map((defaultRule) => {
     const existingRule = existing.get(defaultRule.taskType);
@@ -175,6 +199,7 @@ function normalizedRoutingRules(settings: AiSettings): AiModelRoutingRule[] {
     return {
       ...defaultRule,
       ...existingRule,
+      taskType: defaultRule.taskType,
       fallbackProviders: fallbacks
     };
   });
@@ -1616,6 +1641,11 @@ function ModelSettings(props: {
     if (provider === 'mock') return t('legacy.routingLocalFallback');
     return savedKeyByProvider.get(provider) ? t('legacy.hasKey') : t('legacy.routingMissingKey');
   };
+  const providerHasSavedKey = (provider: AiProvider | ''): boolean => {
+    if (!provider) return true;
+    if (provider === 'mock') return true;
+    return Boolean(savedKeyByProvider.get(provider));
+  };
   const updateRoutingRule = (
     taskType: ModelRoutingTaskType,
     updater: (rule: AiModelRoutingRule) => AiModelRoutingRule
@@ -1781,8 +1811,12 @@ function ModelSettings(props: {
           </div>
           {routingRules.map((rule) => (
             <div className="routing-row" role="row" key={rule.taskType}>
-              <strong>{routingTaskLabel(rule.taskType, t)}</strong>
+              <span className="routing-task-copy">
+                <strong>{routingTaskLabel(rule.taskType, t)}</strong>
+                <small>{routingTaskDescription(rule.taskType, t)}</small>
+              </span>
               <select
+                className={providerHasSavedKey(rule.primaryProvider) ? '' : 'missing-key'}
                 value={rule.primaryProvider}
                 onChange={(event) => updateRoutingRule(rule.taskType, (current) => ({
                   ...current,
@@ -1798,6 +1832,7 @@ function ModelSettings(props: {
               {[0, 1].map((index) => (
                 <select
                   key={`${rule.taskType}-${index}`}
+                  className={providerHasSavedKey(rule.fallbackProviders[index] || '') ? '' : 'missing-key'}
                   value={rule.fallbackProviders[index] || ''}
                   onChange={(event) => setRoutingFallback(rule.taskType, index, event.target.value as AiProvider | '')}
                 >

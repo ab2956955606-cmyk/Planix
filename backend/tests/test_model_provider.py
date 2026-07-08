@@ -402,6 +402,49 @@ def test_model_router_falls_back_after_primary_error(monkeypatch):
     assert result.attempts[0].error_type == "timeout"
 
 
+def test_model_router_primary_success_does_not_use_fallback(monkeypatch):
+    def fake_rule(task_type, active_provider):
+        return ModelRoutingRuleConfig(task_type, "kimi", ("deepseek",), True)
+
+    def fake_settings(provider, active_settings=None):
+        return _settings(
+            provider=provider,
+            base_url=provider_default_base_url(provider),
+            model=provider_default_model(provider),
+            api_key=f"{provider}-key",
+        )
+
+    calls = []
+
+    def fake_complete(self, request):
+        calls.append(self.settings.provider)
+        return (
+            ModelCallResult(
+                text="OK",
+                provider=self.settings.provider,
+                model=self.settings.model,
+                usage=ModelUsage(prompt_tokens=2, completion_tokens=1, total_tokens=3),
+                latency_ms=12,
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(model_provider, "get_model_routing_rule", fake_rule)
+    monkeypatch.setattr(model_provider, "get_effective_ai_settings_for_provider", fake_settings)
+    monkeypatch.setattr(model_provider.OpenAICompatibleProvider, "complete", fake_complete)
+
+    result, error = ModelRouter(_settings(provider="kimi", base_url="https://api.moonshot.ai/v1", model="kimi-k2.7-code")).complete(
+        _request(task_type="memory_query")
+    )
+
+    assert error is None
+    assert result is not None
+    assert result.provider == "kimi"
+    assert result.fallback_used is False
+    assert [attempt.status for attempt in result.attempts] == ["success"]
+    assert calls == ["kimi"]
+
+
 def test_model_router_skips_missing_key_and_records_attempt(monkeypatch):
     def fake_rule(task_type, active_provider):
         return ModelRoutingRuleConfig(task_type, "kimi", ("deepseek",), True)

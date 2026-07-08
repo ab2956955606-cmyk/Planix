@@ -510,6 +510,8 @@ export type ModelRoutingTaskType =
   | 'plan_generation'
   | 'task_refinement'
   | 'calendar_patch'
+  | 'memory_query'
+  | 'memory_write'
   | 'note_query'
   | 'note_write'
   | 'chat'

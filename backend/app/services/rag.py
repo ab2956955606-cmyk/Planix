@@ -125,7 +125,7 @@ class RagService:
                 },
                 ensure_ascii=False,
             ),
-            task_type="note_query",
+            task_type="memory_query",
         )
         if llm_result:
             parsed = _json_object(llm_result.content)

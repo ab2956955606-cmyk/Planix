@@ -10,7 +10,7 @@ Portfolio-facing documentation version: `v3.0.0`. This is a presentation label f
 
 ## Current Phase
 
-Phase 4 has started with **Command Agent / P Mode**. The current implementation includes Phase 4.8.1 P Mode Conversation UX Polish, Phase 4.8.2 Unified Memory Store + Memory Agent, Phase 4.9A Planix AI SDK / ModelProvider Layer, and Phase 4.9A.1 multi-provider API Key persistence. Default `auto` mode asks an LLM-backed `CommandDecisionService` for a structured decision before mapping the request to existing P Mode capabilities. `auto + create_plan` may run the backend Runtime and save a hidden `calendar_plan` draft; forced `chat` mode stays text-only; manual `workbench` mode remains a forced planning entry. Users can expand, regenerate/modify, refine tasks, query Calendar plans, search/write memories, or preview and patch Calendar plans through P Mode permission handling. P Mode also has a hidden right-side conversation drawer for new chat, history, and thread deletion. Backend model calls now go through the internal `ModelRouter` / `ModelProvider` layer while `LlmClient` remains the compatibility facade.
+Phase 4 has started with **Command Agent / P Mode**. The current implementation includes Phase 4.8.1 P Mode Conversation UX Polish, Phase 4.8.2 Unified Memory Store + Memory Agent, Phase 4.9A Planix AI SDK / ModelProvider Layer, Phase 4.9A.1 multi-provider API Key persistence, and Phase 4.9B.1 task-level model routing observability. Default `auto` mode asks an LLM-backed `CommandDecisionService` for a structured decision before mapping the request to existing P Mode capabilities. `auto + create_plan` may run the backend Runtime and save a hidden `calendar_plan` draft; forced `chat` mode stays text-only; manual `workbench` mode remains a forced planning entry. Users can expand, regenerate/modify, refine tasks, query Calendar plans, search/write memories, or preview and patch Calendar plans through P Mode permission handling. P Mode also has a hidden right-side conversation drawer for new chat, history, and thread deletion. Backend model calls now go through the internal `ModelRouter` / `ModelProvider` layer while `LlmClient` remains the compatibility facade.
 
 Allowed in this phase:
 
@@ -34,6 +34,7 @@ Allowed in this phase:
 - Let Phase 4.8.2 store long-term context in `memories` with kinds `note`, `material`, `planning_history`, `preference`, and `review`; Calendar plans remain separate formal action data.
 - Let Phase 4.9A standardize model calls through `backend/app/services/model_provider.py`, supporting `mock`, `deepseek`, `kimi`, `zhipu_glm`, `openai`, and `custom` providers behind `ModelRouter` while preserving the public `LlmClient` facade.
 - Let Phase 4.9A.1 persist provider API Keys independently in `ai_provider_configs`; Settings may show saved-key chips and delete one provider key at a time.
+- Let Phase 4.9B.1 route model calls by task type, including `command_decision`, `plan_generation`, `task_refinement`, `calendar_patch`, `memory_query`, `memory_write`, `model_knowledge`, and `chat`, with fallback attempts surfaced in model usage cards.
 - Phase 3.10 may refine tasks with compact plan context, short time blocks, official/authoritative learning resources, budget explanation, and plan-fit checks.
 - Phase 3.11 demo reliability metrics may be shown in Dashboard proposals, P Mode plan-detail cards, Goals previews, and Settings health/version diagnostics.
 
@@ -46,7 +47,7 @@ Forbidden in this phase:
 - Turning P Workspace into a foreground layout panel or persistent Calendar/Goals/Materials/Notes draft area.
 - Changing `/api/runtime/run` event protocol.
 - Changing Tauri Windows installer sidecar mechanics.
-- Implementing task-level Multi-Model Router selection, backup cloud fallback chains, WriteIntent/Undo, or direct memory-to-plan writes in Phase 4.9A.
+- Implementing model voting, dynamic model lists, WriteIntent/Undo, operation logs, or direct memory-to-plan writes in Phase 4.9B.1.
 
 ## Architecture
 
@@ -168,7 +169,7 @@ There is no compatibility fallback for old names or old environment variables.
 - A saved key enables live model calls automatically unless the provider is `mock`.
 - Provider settings support `mock`, `deepseek`, `kimi`, `zhipu_glm`, `openai`, and `custom`. Switching providers may fill the provider default Base URL only when the existing Base URL is empty or still the old provider default.
 - Provider API Keys are stored per provider in `ai_provider_configs`; active provider stays singular in `ai_settings`. Deleting one provider key must not delete another provider's key or switch the active provider.
-- `ModelRouter` v1 selects only by the saved provider. It must not implement task-level model routing or a backup cloud fallback chain until Phase 4.9B.
+- `ModelRouter` selects by task type when a routing rule exists, tries primary then up to two fallback providers, skips missing keys with safe attempts, and returns local-fallback eligibility to the business layer instead of generating business fallback content itself.
 - `ModelCallRequest.response_format_json` must map to OpenAI-compatible `response_format={"type":"json_object"}` only for existing JSON-output call paths, and model max tokens must stay within the configured cap.
 - Model errors should map to standard `errorType` values such as `auth_error`, `bad_model`, `bad_base_url`, `network_error`, `timeout`, `rate_limit`, `insufficient_balance`, `invalid_key_format`, `invalid_model_output`, and `model_output_truncated`.
 - `record_ai_run` may store provider, model, feature, input/output summaries, and safe error text only. It must never store API keys, Authorization headers, raw headers, or URLs containing secrets.

@@ -222,6 +222,16 @@ def resolve_command_intent(
     return resolved
 
 
+def _decision_routing_task_type(intent: CommandIntent) -> str:
+    if intent == "patch_calendar_plan":
+        return "calendar_patch"
+    if intent in {"query_memory", "query_notes"}:
+        return "memory_query"
+    if intent in {"save_memory", "save_note"}:
+        return "memory_write"
+    return "command_decision"
+
+
 def _intent_reply(intent: CommandIntent, message: str) -> str:
     english = _looks_english(message)
     if english:
@@ -1269,8 +1279,14 @@ class CommandAgentService:
     def _resolve_auto_decision(self, thread_id: str, payload: CommandChatRequest) -> tuple[CommandIntent, CommandDecision, str, ModelUsage | None, str]:
         base_iso = _context_date(payload)
         current_draft = self._get_current_draft(thread_id)
+        pre_intent = resolve_command_intent(
+            payload.message,
+            detect_command_intent(payload.message),
+            has_current_draft=current_draft is not None,
+        )
         decision_result: CommandDecisionResult = CommandDecisionService().decide(
             payload.message,
+            task_type=_decision_routing_task_type(pre_intent),
             thread_context=self._thread_context_summary(thread_id),
             current_draft=self._draft_decision_summary(current_draft),
             last_search_results=self._last_plan_search_results(thread_id),

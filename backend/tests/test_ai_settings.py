@@ -27,6 +27,9 @@ def test_ai_settings_endpoint_returns_json(client):
     assert body["baseUrl"] == "https://api.deepseek.com"
     assert body["routingRules"]
     assert {rule["taskType"] for rule in body["routingRules"]} >= {"command_decision", "plan_generation", "chat"}
+    assert {"memory_query", "memory_write"} <= {rule["taskType"] for rule in body["routingRules"]}
+    assert "note_query" not in {rule["taskType"] for rule in body["routingRules"]}
+    assert "note_write" not in {rule["taskType"] for rule in body["routingRules"]}
     assert all(rule["primaryProvider"] == "deepseek" for rule in body["routingRules"])
 
 
@@ -116,6 +119,56 @@ def test_model_routing_rules_save_without_key_validation(client, monkeypatch):
     assert saved_rules["plan_generation"]["primaryProvider"] == "kimi"
     assert saved_rules["plan_generation"]["fallbackProviders"] == ["deepseek"]
     assert saved_rules["chat"]["localFallbackEnabled"] is False
+
+
+def test_model_routing_legacy_note_rules_are_normalized_to_memory_tasks(client):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM ai_model_routing_rules")
+        conn.execute(
+            """
+            INSERT INTO ai_model_routing_rules(
+              task_type, primary_provider, fallback_providers_json, local_fallback_enabled, updated_at
+            )
+            VALUES ('note_query', 'kimi', '["deepseek"]', 1, CURRENT_TIMESTAMP)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO ai_model_routing_rules(
+              task_type, primary_provider, fallback_providers_json, local_fallback_enabled, updated_at
+            )
+            VALUES ('note_write', 'zhipu_glm', '["deepseek"]', 0, CURRENT_TIMESTAMP)
+            """
+        )
+
+    loaded = client.get("/api/ai/settings")
+
+    assert loaded.status_code == 200
+    rules = {rule["taskType"]: rule for rule in loaded.json()["routingRules"]}
+    assert "note_query" not in rules
+    assert "note_write" not in rules
+    assert rules["memory_query"]["primaryProvider"] == "kimi"
+    assert rules["memory_query"]["fallbackProviders"] == ["deepseek"]
+    assert rules["memory_write"]["primaryProvider"] == "zhipu_glm"
+    assert rules["memory_write"]["localFallbackEnabled"] is False
+
+    saved = client.put(
+        "/api/ai/settings/routing",
+        json={
+            "routingRules": [
+                {
+                    "taskType": "note_query",
+                    "primaryProvider": "openai",
+                    "fallbackProviders": ["deepseek"],
+                    "localFallbackEnabled": True,
+                }
+            ]
+        },
+    )
+    assert saved.status_code == 200
+    saved_rules = {rule["taskType"]: rule for rule in saved.json()["routingRules"]}
+    assert "note_query" not in saved_rules
+    assert saved_rules["memory_query"]["primaryProvider"] == "openai"
 
 
 def test_model_routing_rejects_mock_and_too_many_fallbacks(client):

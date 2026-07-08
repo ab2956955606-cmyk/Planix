@@ -134,6 +134,7 @@ def _patch_runtime(monkeypatch, runtime_factory):
 def _patch_decision(monkeypatch, decision: CommandDecision | None = None, *, error: str = ""):
     class FixedDecisionService:
         def decide(self, *args, **kwargs):
+            task_type = kwargs.get("task_type", "command_decision")
             usage = ModelUsage(
                 provider="test",
                 model="router",
@@ -142,7 +143,7 @@ def _patch_decision(monkeypatch, decision: CommandDecision | None = None, *, err
                 totalTokens=15,
                 latencyMs=7,
                 mode="llm" if decision else "local_fallback",
-                taskType="command_decision",
+                taskType=task_type,
             )
             return SimpleNamespace(
                 decision=decision,
@@ -557,6 +558,42 @@ def test_intent_router_rules():
     assert detect_command_intent("Planix 这个项目怎么介绍？") == "normal_chat"
     assert detect_command_intent("帮我细化全部任务") == "refine_current_plan"
     assert detect_command_intent("refine all tasks") == "refine_current_plan"
+
+
+def test_auto_decision_uses_task_specific_routing_for_patch_and_memory(client, monkeypatch):
+    calls = []
+
+    class RecordingDecisionService:
+        def decide(self, message, **kwargs):
+            task_type = kwargs.get("task_type", "command_decision")
+            calls.append((message, task_type))
+            return SimpleNamespace(
+                decision=None,
+                usage=ModelUsage(
+                    provider="test",
+                    model="router",
+                    totalTokens=1,
+                    mode="local_fallback",
+                    taskType=task_type,
+                ),
+                source="local_fallback",
+                error="",
+            )
+
+    monkeypatch.setattr("app.services.command_agent.CommandDecisionService", lambda: RecordingDecisionService())
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+
+    memory_query = client.post("/api/command/chat", json={"mode": "auto", "message": "查一下我的记忆"})
+    memory_write = client.post("/api/command/chat", json={"mode": "auto", "message": "记住：我晚上 8 点后适合学习"})
+    calendar_patch = client.post("/api/command/chat", json={"mode": "auto", "message": "modify my plan"})
+
+    assert memory_query.status_code == 200
+    assert memory_write.status_code == 200
+    assert calendar_patch.status_code == 200
+    assert [task for _, task in calls] == ["memory_query", "memory_write", "calendar_patch"]
+    assert any(event["type"] == "model_usage" and event["usage"]["taskType"] == "memory_query" for event in _events(memory_query))
+    assert any(event["type"] == "model_usage" and event["usage"]["taskType"] == "memory_write" for event in _events(memory_write))
+    assert any(event["type"] == "model_usage" and event["usage"]["taskType"] == "calendar_patch" for event in _events(calendar_patch))
 
 
 def test_query_plan_searches_calendar_without_runtime_or_draft(client, monkeypatch):

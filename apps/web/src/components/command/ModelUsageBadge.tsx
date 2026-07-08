@@ -47,10 +47,12 @@ function taskLabel(taskType: string | undefined, t: (key: string) => string): st
       return t('command.usageTaskRefinement');
     case 'calendar_patch':
       return t('command.usageTaskCalendarPatch');
+    case 'memory_query':
     case 'note_query':
-      return t('command.usageTaskQueryNotes');
+      return t('command.usageTaskMemoryQuery');
+    case 'memory_write':
     case 'note_write':
-      return t('command.usageTaskNoteWrite');
+      return t('command.usageTaskMemoryWrite');
     case 'chat':
       return t('command.usageTaskChat');
     case 'model_knowledge':
@@ -63,20 +65,21 @@ function taskLabel(taskType: string | undefined, t: (key: string) => string): st
 }
 
 function formatLatency(ms: number): string {
-  if (ms >= 1000) {
-    return `${(ms / 1000).toFixed(1)}s`;
-  }
-  return `${ms}ms`;
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
 
 function attemptLabel(attempt: ModelRouteAttempt, t: (key: string) => string): string {
   const provider = attempt.provider || t('common.unknown');
-  if (attempt.status === 'success') return `${provider} ${t('command.routeSuccess')}`;
+  const model = attempt.model ? ` / ${attempt.model}` : '';
+  const label = `${provider}${model}`;
+  if (attempt.status === 'success') return `${label} ${t('command.routeSuccess')}`;
   if (attempt.status === 'skipped') {
-    const reason = attempt.errorType === 'missing_api_key' ? t('command.routeMissingKey') : attempt.errorType || t('command.routeSkipped');
-    return `${provider} ${reason}`;
+    const reason = attempt.errorType === 'missing_api_key'
+      ? t('command.routeMissingKey')
+      : attempt.errorType || t('command.routeSkipped');
+    return `${label} ${reason}`;
   }
-  return `${provider} ${attempt.errorType || t('command.routeFailed')}`;
+  return `${label} ${attempt.errorType || t('command.routeFailed')}`;
 }
 
 function routeTrace(item: ModelUsage, t: (key: string) => string): string {
@@ -87,11 +90,36 @@ function routeTrace(item: ModelUsage, t: (key: string) => string): string {
   return `${t('command.routeTrace')}: ${chain}${suffix}`;
 }
 
+function tokenSummary(item: ModelUsage, t: (key: string) => string): string {
+  if (typeof item.totalTokens === 'number') {
+    return `${item.totalTokens} ${t('command.tokens')}`;
+  }
+  return t('command.noTokenStatsShort');
+}
+
+function detailLine(item: ModelUsage, t: (key: string) => string): string {
+  const parts = [
+    `${t('command.usageTask')}: ${taskLabel(item.taskType, t)}`,
+    `${t('command.model')}: ${item.provider || t('common.unknown')} / ${item.model || t('common.unknown')}`,
+  ];
+  if (typeof item.promptTokens === 'number' || typeof item.completionTokens === 'number' || typeof item.totalTokens === 'number') {
+    parts.push(`${t('command.tokens')}: ${t('command.promptTokens')} ${item.promptTokens ?? '-'}, ${t('command.completionTokens')} ${item.completionTokens ?? '-'}, ${t('command.totalTokens')} ${item.totalTokens ?? '-'}`);
+  } else {
+    parts.push(t('command.noTokenStats'));
+  }
+  if (typeof item.latencyMs === 'number') {
+    parts.push(`${t('command.latency')}: ${formatLatency(item.latencyMs)}`);
+  }
+  if (typeof item.fallbackUsed === 'boolean') {
+    parts.push(`${t('command.fallbackUsed')}: ${item.fallbackUsed ? t('common.yes') : t('common.no')}`);
+  }
+  return parts.join(' · ');
+}
+
 export function ModelUsageBadge({ usage, t }: ModelUsageBadgeProps) {
   const items = usageItems(usage);
   if (!items.length) return null;
-  const localOnly = items.length > 0 && items.every((item) => item.mode === 'local_fallback');
-  const tokenItems = items.filter((item) => item.mode !== 'local_fallback');
+  const localOnly = items.every((item) => item.mode === 'local_fallback');
   const routeLines = items.map((item) => routeTrace(item, t)).filter(Boolean);
 
   return (
@@ -104,20 +132,11 @@ export function ModelUsageBadge({ usage, t }: ModelUsageBadgeProps) {
       ) : (
         <>
           <p>
-            <strong>{t('command.modelUsage')}：</strong>
-            {tokenItems.map((item, index) => {
-              const total = typeof item.totalTokens === 'number' ? `${item.totalTokens} ${t('command.tokens')}` : t('command.noTokenStatsShort');
-              return `${index ? ' · ' : ''}${taskLabel(item.taskType, t)} ${total}`;
-            }).join('')}
+            <strong>{t('command.modelUsage')}:</strong>{' '}
+            {items.map((item, index) => `${index ? ' · ' : ''}${taskLabel(item.taskType, t)} ${tokenSummary(item, t)}`).join('')}
           </p>
-          {tokenItems.map((item, index) => (
-            <small key={`${item.taskType || 'usage'}-${index}`}>
-              {t('command.model')}: {item.provider || t('common.unknown')} / {item.model || t('common.unknown')}
-              {typeof item.promptTokens === 'number' || typeof item.completionTokens === 'number' || typeof item.totalTokens === 'number'
-                ? ` · ${t('command.tokens')}: ${t('command.promptTokens')} ${item.promptTokens ?? '-'}, ${t('command.completionTokens')} ${item.completionTokens ?? '-'}, ${t('command.totalTokens')} ${item.totalTokens ?? '-'}`
-                : ` · ${t('command.noTokenStats')}`}
-              {typeof item.latencyMs === 'number' ? ` · ${t('command.latency')}: ${formatLatency(item.latencyMs)}` : ''}
-            </small>
+          {items.map((item, index) => (
+            <small key={`${item.taskType || 'usage'}-${index}`}>{detailLine(item, t)}</small>
           ))}
           {routeLines.map((line, index) => <small key={`route-${index}`}>{line}</small>)}
         </>

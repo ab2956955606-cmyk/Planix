@@ -54,10 +54,20 @@ const labels: Record<string, string> = {
   'legacy.routingTaskPlanGeneration': 'Plan generation',
   'legacy.routingTaskRefinement': 'Task refinement',
   'legacy.routingTaskCalendarPatch': 'Calendar patch',
+  'legacy.routingTaskMemoryQuery': 'Memory query',
+  'legacy.routingTaskMemoryWrite': 'Memory write',
   'legacy.routingTaskNoteQuery': 'Query notes',
   'legacy.routingTaskNoteWrite': 'Write notes',
   'legacy.routingTaskModelKnowledge': 'Knowledge',
-  'legacy.routingTaskChat': 'Chat'
+  'legacy.routingTaskChat': 'Chat',
+  'legacy.routingTaskCommandDecisionDesc': 'Understands user intent',
+  'legacy.routingTaskPlanGenerationDesc': 'Generates structuredPlan',
+  'legacy.routingTaskRefinementDesc': 'Breaks tasks down',
+  'legacy.routingTaskCalendarPatchDesc': 'Extracts calendar edits',
+  'legacy.routingTaskMemoryQueryDesc': 'Searches memory',
+  'legacy.routingTaskMemoryWriteDesc': 'Prepares memory records',
+  'legacy.routingTaskModelKnowledgeDesc': 'Adds knowledge',
+  'legacy.routingTaskChatDesc': 'Normal chat'
 };
 
 function t(key: string): string {
@@ -89,6 +99,8 @@ describe('AIWorkspace settings', () => {
     expect(html).toContain('DeepSeek API Key');
     expect(html).toContain('Model Routing');
     expect(html).toContain('Plan generation');
+    expect(html).toContain('Memory query');
+    expect(html).toContain('Searches memory');
     expect(html).toContain('Save routing');
   });
 

@@ -16,11 +16,15 @@ ROUTABLE_TASK_TYPES = [
     "plan_generation",
     "task_refinement",
     "calendar_patch",
-    "note_query",
-    "note_write",
+    "memory_query",
+    "memory_write",
     "chat",
     "model_knowledge",
 ]
+LEGACY_ROUTING_TASK_ALIASES = {
+    "note_query": "memory_query",
+    "note_write": "memory_write",
+}
 DEFAULT_BASE_URLS = {
     "mock": "https://api.deepseek.com",
     "deepseek": "https://api.deepseek.com",
@@ -127,6 +131,10 @@ def _default_model(provider: str) -> str:
     return DEFAULT_MODELS.get(provider, "deepseek-v4-flash")
 
 
+def normalize_routing_task_type(task_type: str) -> str:
+    return LEGACY_ROUTING_TASK_ALIASES.get(task_type, task_type)
+
+
 def _env_base_url() -> str:
     provider = _env_provider()
     default = _default_base_url(provider)
@@ -223,8 +231,9 @@ def _routing_row_to_config(row) -> ModelRoutingRuleConfig | None:
                 break
     primary = row["primary_provider"] if row["primary_provider"] in KEYED_PROVIDERS else "deepseek"
     fallbacks = [provider for provider in fallbacks if provider != primary]
+    task_type = normalize_routing_task_type(row["task_type"])
     return ModelRoutingRuleConfig(
-        task_type=row["task_type"],
+        task_type=task_type,
         primary_provider=primary,
         fallback_providers=tuple(fallbacks),
         local_fallback_enabled=bool(row["local_fallback_enabled"]),
@@ -268,11 +277,15 @@ def _ensure_default_routing_rules(conn) -> None:
 def _routing_rule_rows(conn) -> list[AiModelRoutingRule]:
     _ensure_default_routing_rules(conn)
     rows = conn.execute("SELECT * FROM ai_model_routing_rules ORDER BY task_type").fetchall()
-    by_task = {
-        config.task_type: config
-        for row in rows
-        if (config := _routing_row_to_config(row)) is not None and config.task_type in ROUTABLE_TASK_TYPES
-    }
+    by_task: dict[str, ModelRoutingRuleConfig] = {}
+    for row in rows:
+        config = _routing_row_to_config(row)
+        if not config or config.task_type not in ROUTABLE_TASK_TYPES:
+            continue
+        is_legacy_alias = row["task_type"] in LEGACY_ROUTING_TASK_ALIASES
+        if is_legacy_alias and config.task_type in by_task:
+            continue
+        by_task[config.task_type] = config
     settings_row = conn.execute("SELECT * FROM ai_settings WHERE id = ?", (SETTINGS_ID,)).fetchone()
     active_provider = settings_row["provider"] if settings_row else _env_provider()
     defaults = {rule.task_type: rule for rule in _default_routing_rule_configs(active_provider)}
@@ -372,6 +385,7 @@ def get_effective_ai_settings_for_provider(provider: str, active_settings: Effec
 
 
 def get_model_routing_rule(task_type: str, active_provider: str) -> ModelRoutingRuleConfig:
+    task_type = normalize_routing_task_type(task_type)
     if task_type not in ROUTABLE_TASK_TYPES:
         primary = _routing_primary_for_active(active_provider)
         return ModelRoutingRuleConfig(
@@ -383,6 +397,10 @@ def get_model_routing_rule(task_type: str, active_provider: str) -> ModelRouting
     with get_conn() as conn:
         _ensure_default_routing_rules(conn)
         row = conn.execute("SELECT * FROM ai_model_routing_rules WHERE task_type = ?", (task_type,)).fetchone()
+        if not row:
+            legacy_task = next((legacy for legacy, canonical in LEGACY_ROUTING_TASK_ALIASES.items() if canonical == task_type), "")
+            if legacy_task:
+                row = conn.execute("SELECT * FROM ai_model_routing_rules WHERE task_type = ?", (legacy_task,)).fetchone()
         config = _routing_row_to_config(row)
     if config:
         return config
@@ -555,7 +573,7 @@ def save_ai_settings(payload: AiSettingsUpdate) -> AiSettingsOut:
 
 
 def save_model_routing_rules(payload: AiModelRoutingUpdate) -> AiSettingsOut:
-    incoming = {rule.task_type: rule for rule in payload.routing_rules}
+    incoming = {normalize_routing_task_type(rule.task_type): rule for rule in payload.routing_rules}
     unknown_tasks = set(incoming) - set(ROUTABLE_TASK_TYPES)
     if unknown_tasks:
         raise ValueError(f"Unsupported routing task type: {sorted(unknown_tasks)[0]}")
@@ -563,6 +581,8 @@ def save_model_routing_rules(payload: AiModelRoutingUpdate) -> AiSettingsOut:
         settings_row = conn.execute("SELECT * FROM ai_settings WHERE id = ?", (SETTINGS_ID,)).fetchone()
         active_provider = settings_row["provider"] if settings_row else _env_provider()
         defaults = {rule.task_type: rule for rule in _default_routing_rule_configs(active_provider)}
+        for legacy_task in LEGACY_ROUTING_TASK_ALIASES:
+            conn.execute("DELETE FROM ai_model_routing_rules WHERE task_type = ?", (legacy_task,))
         for task_type in ROUTABLE_TASK_TYPES:
             rule = incoming.get(task_type)
             if rule:

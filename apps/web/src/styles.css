@@ -1874,9 +1874,15 @@ select:focus {
 
 .routing-row {
   display: grid;
-  grid-template-columns: minmax(112px, 0.8fr) repeat(3, minmax(132px, 1fr)) minmax(112px, 0.8fr);
+  grid-template-columns: minmax(160px, 1fr) repeat(3, minmax(132px, 1fr)) minmax(112px, 0.8fr);
   gap: 8px;
   align-items: center;
+}
+
+.routing-task-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .routing-row strong {
@@ -1884,10 +1890,21 @@ select:focus {
   font-size: 12px;
 }
 
+.routing-task-copy small {
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .routing-row select {
   min-height: 36px;
   padding: 8px 9px;
   font-size: 12px;
+}
+
+.routing-row select.missing-key {
+  border-color: rgba(148, 163, 184, 0.35);
+  color: #94a3b8;
 }
 
 .routing-head span {
