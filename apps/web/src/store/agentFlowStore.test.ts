@@ -154,7 +154,22 @@ describe('agentFlowStore', () => {
             milestoneCount: 4,
             coveredWeekCount: 4,
             dateSpanDays: 28,
-            issues: []
+            issues: [],
+            metrics: {
+              durationDays: 30,
+              totalTasks: 12,
+              milestoneCount: 4,
+              coveredWeekCount: 4,
+              dateSpanDays: 28,
+              weakTaskCount: 0,
+              missingDueDateCount: 0,
+              outOfRangeDueDateCount: 0,
+              repairAttempted: true,
+              fallbackUsed: false,
+              qualityStatus: 'repaired',
+              sourceType: 'model_knowledge',
+              localRelevance: 'low'
+            }
           },
           qualityStatus: 'repaired',
           sourceType: 'model_knowledge',
@@ -171,6 +186,10 @@ describe('agentFlowStore', () => {
     expect(proposal?.structuredPlan.milestones[0].tasks[0].title).toBe('Practice variables');
     expect(proposal?.planHorizon?.durationDays).toBe(30);
     expect(proposal?.qualityReport?.totalTasks).toBe(12);
+    expect(proposal?.qualityReport?.metrics?.durationDays).toBe(30);
+    expect(proposal?.qualityReport?.metrics?.repairAttempted).toBe(true);
+    expect(proposal?.qualityReport?.metrics?.fallbackUsed).toBe(false);
+    expect(proposal?.qualityReport?.metrics?.sourceType).toBe('model_knowledge');
     expect(proposal?.qualityStatus).toBe('repaired');
     expect(proposal?.sourceType).toBe('model_knowledge');
     expect(proposal?.localRelevance).toBe('low');

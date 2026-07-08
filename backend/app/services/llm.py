@@ -1,6 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
-from typing import Iterator
+from typing import Any, Iterator
 from uuid import uuid4
 
 import httpx
@@ -8,6 +8,16 @@ import httpx
 from ..api_key import INVALID_API_KEY_MESSAGE, validate_api_key_format
 from ..db import get_conn
 from .ai_settings import EffectiveAiSettings, get_effective_ai_settings
+from .model_provider import (
+    ModelCallRequest,
+    ModelRouter,
+    classify_http_error,
+    effective_max_tokens,
+    message_content,
+    needs_reasoning_budget,
+    normalize_chat_completions_url,
+    usage_from_response,
+)
 
 
 @dataclass(frozen=True)
@@ -15,6 +25,11 @@ class LlmResult:
     content: str
     provider: str
     model: str
+    usage: dict[str, int] | None = None
+    latency_ms: int | None = None
+    attempts: list[dict[str, Any]] | None = None
+    fallback_used: bool | None = None
+    local_fallback_allowed: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -23,6 +38,9 @@ class LlmError:
     error_type: str
     status_code: int = 0
     detail: str = ""
+    attempts: list[dict[str, Any]] | None = None
+    fallback_used: bool | None = None
+    local_fallback_allowed: bool | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -30,84 +48,36 @@ class LlmError:
             "error_type": self.error_type,
             "status_code": self.status_code,
             "detail": self.detail,
+            "attempts": self.attempts or [],
+            "fallback_used": self.fallback_used,
+            "local_fallback_allowed": self.local_fallback_allowed,
         }
 
 
 def _chat_completions_url(base_url: str, provider: str) -> str:
-    """Build the chat completions URL from base URL and provider.
-
-    DeepSeek: https://api.deepseek.com -> /chat/completions
-    OpenAI: https://api.openai.com/v1 -> /chat/completions
-    OpenAI: https://api.openai.com -> /v1/chat/completions
-    Custom: whatever the user sets -> try /v1 first, avoid double-append
-    """
-    cleaned = base_url.rstrip("/")
-    # DeepSeek uses /chat/completions directly, without a /v1 prefix.
-    if provider == "deepseek":
-        if cleaned.endswith("/v1/chat/completions"):
-            cleaned = cleaned.removesuffix("/v1/chat/completions")
-        elif cleaned.endswith("/chat/completions"):
-            return cleaned
-        elif cleaned.endswith("/v1"):
-            cleaned = cleaned.removesuffix("/v1")
-        return f"{cleaned}/chat/completions"
-    # Already includes the full path, so use as-is.
-    if cleaned.endswith("/chat/completions"):
-        return cleaned
-    # OpenAI-compatible default: append /v1/chat/completions.
-    if cleaned.endswith("/v1"):
-        return f"{cleaned}/chat/completions"
-    return f"{cleaned}/v1/chat/completions"
+    return normalize_chat_completions_url(provider, base_url)
 
 
 def _classify_http_error(status_code: int, body: str) -> LlmError:
-    body_lower = body.lower() if body else ""
-    if status_code in (401, 403):
-        return LlmError("API key is invalid or expired.", "auth_error", status_code, detail=body[:200])
-    if status_code == 402 or any(term in body_lower for term in ("insufficient", "quota", "balance", "credit")):
-        return LlmError("The model account has insufficient balance.", "insufficient_balance", status_code, detail=body[:200])
-    if status_code in (400, 422):
-        if any(term in body_lower for term in ("model", "does not exist", "not found")):
-            return LlmError("The model name does not exist or is not supported.", "bad_model", status_code, detail=body[:200])
-        return LlmError("The request is invalid. Check the Base URL and model name.", "unknown", status_code, detail=body[:200])
-    if status_code == 404:
-        if "model" in body_lower and any(term in body_lower for term in ("does not exist", "not found", "not supported")):
-            return LlmError("The model name does not exist or is not supported.", "bad_model", status_code, detail=body[:200])
-        return LlmError("The Base URL endpoint is unavailable. Check the API path.", "bad_base_url", status_code, detail=body[:200])
-    if status_code == 429:
-        return LlmError("The model account has insufficient balance or request quota.", "insufficient_balance", status_code, detail=body[:200])
-    if status_code >= 500:
-        return LlmError("The model service returned a server error. Try again later.", "unknown", status_code, detail=body[:200])
-    return LlmError(f"Request failed (HTTP {status_code}).", "unknown", status_code, detail=body[:200])
+    error = classify_http_error(status_code, body)
+    return LlmError(error.message, error.error_type, error.status_code, error.detail)
 
 
 def _needs_reasoning_budget(settings: EffectiveAiSettings) -> bool:
-    model = settings.model.lower()
-    return settings.provider == "deepseek" and ("v4" in model or "reasoner" in model)
+    return needs_reasoning_budget(settings)
 
 
 def _effective_max_tokens(settings: EffectiveAiSettings, max_tokens: int, *, max_token_cap: int = 4000) -> int:
-    token_limit = max(1, min(max_tokens, max_token_cap))
-    if _needs_reasoning_budget(settings):
-        token_limit = max(token_limit, 512)
-    return token_limit
+    return effective_max_tokens(settings, max_tokens, max_token_cap=max_token_cap)
 
 
 def _message_content(message: dict) -> str:
-    content = message.get("content")
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if isinstance(text, str):
-                    parts.append(text)
-        return "".join(parts).strip()
-    return ""
+    return message_content(message)
+
+
+def _usage_from_response(data: dict) -> dict[str, int] | None:
+    usage = usage_from_response(data)
+    return usage.to_legacy_dict() if usage else None
 
 
 def record_ai_run(
@@ -139,6 +109,14 @@ def record_ai_run(
         )
 
 
+def _settings_for_run(settings: EffectiveAiSettings, provider: str | None, model: str | None) -> EffectiveAiSettings:
+    return replace(
+        settings,
+        provider=provider or settings.provider,
+        model=model or settings.model,
+    )
+
+
 class LlmClient:
     def __init__(self):
         self.settings = get_effective_ai_settings()
@@ -160,119 +138,67 @@ class LlmClient:
         timeout_seconds: int | None = None,
         response_format_json: bool = False,
         max_token_cap: int = 4000,
+        task_type: str | None = None,
     ) -> tuple[LlmResult | None, LlmError | None]:
         """Returns (result, error). On success error is None; on failure result is None."""
-        if not self.is_enabled():
+        request = ModelCallRequest(
+            task_type=task_type or feature,
+            feature=feature,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
+            response_format_json=response_format_json,
+            max_token_cap=max_token_cap,
+        )
+        result, error = ModelRouter(self.settings).complete(request)
+        if result and result.mode == "local_fallback":
             record_ai_run(feature, self.settings, user, success=True, output_summary="local fallback")
             return (None, None)
-
-        api_key_error = validate_api_key_format(self.settings.api_key)
-        if api_key_error:
-            llm_err = LlmError(api_key_error, "invalid_key_format", 0)
+        if error:
+            llm_err = LlmError(
+                error.message,
+                error.error_type,
+                error.status_code,
+                error.detail,
+                attempts=[attempt.to_dict() for attempt in error.attempts],
+                fallback_used=error.fallback_used,
+                local_fallback_allowed=error.local_fallback_allowed,
+            )
+            record_ai_run(
+                feature,
+                _settings_for_run(self.settings, error.provider, error.model),
+                user,
+                success=False,
+                error="model output was truncated" if error.error_type == "model_output_truncated" else llm_err.message,
+            )
+            return (None, llm_err)
+        if not result:
+            llm_err = LlmError("Model call failed without a result.", "unknown", 0)
             record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
             return (None, llm_err)
 
-        payload = {
-            "model": self.settings.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": self.settings.temperature if temperature is None else temperature,
-            "max_tokens": _effective_max_tokens(self.settings, max_tokens, max_token_cap=max_token_cap),
-            "stream": False,
-        }
-        if response_format_json:
-            payload["response_format"] = {"type": "json_object"}
-        request_timeout = timeout_seconds if timeout_seconds is not None else self.settings.timeout_seconds
-        try:
-            with httpx.Client(timeout=max(1, request_timeout), trust_env=False) as client:
-                response = client.post(
-                    _chat_completions_url(self.settings.base_url, self.settings.provider),
-                    headers={
-                        "Authorization": f"Bearer {self.settings.api_key.strip()}",
-                        "Accept-Encoding": "gzip, deflate",
-                    },
-                    json=payload,
-                )
-                if response.status_code != 200:
-                    body = response.text
-                    if response_format_json and response.status_code in (400, 422) and "response_format" in body.lower():
-                        payload.pop("response_format", None)
-                        response = client.post(
-                            _chat_completions_url(self.settings.base_url, self.settings.provider),
-                            headers={
-                                "Authorization": f"Bearer {self.settings.api_key.strip()}",
-                                "Accept-Encoding": "gzip, deflate",
-                            },
-                            json=payload,
-                        )
-                        if response.status_code == 200:
-                            body = ""
-                        else:
-                            body = response.text
-                    if response.status_code == 200:
-                        pass
-                    else:
-                        llm_err = _classify_http_error(response.status_code, body)
-                        record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
-                        return (None, llm_err)
-
-                data = response.json()
-                choice = data["choices"][0]
-                finish_reason = str(choice.get("finish_reason") or "")
-                if finish_reason == "length":
-                    llm_err = LlmError(
-                        "The model output was truncated before completion.",
-                        "model_output_truncated",
-                        0,
-                        detail="finish_reason=length",
-                    )
-                    record_ai_run(feature, self.settings, user, success=False, error="model output was truncated")
-                    return (None, llm_err)
-                message = choice["message"]
-                content = _message_content(message)
-                if not content:
-                    reasoning_len = len(str(message.get("reasoning_content") or ""))
-                    llm_err = LlmError(
-                        "The model returned empty content. Increase max tokens or use a non-reasoning model.",
-                        "empty_content",
-                        0,
-                        detail=f"finish_reason={finish_reason}; reasoning_tokens={reasoning_len}",
-                    )
-                    record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
-                    return (None, llm_err)
-        except httpx.TimeoutException:
-            llm_err = LlmError("The model request timed out. Check the network or increase timeout.", "timeout", 0)
-            record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
-            return (None, llm_err)
-        except (httpx.InvalidURL, httpx.UnsupportedProtocol):
-            llm_err = LlmError("The Base URL is invalid. Check whether the address is correct.", "bad_base_url", 0)
-            record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
-            return (None, llm_err)
-        except httpx.ConnectError:
-            llm_err = LlmError("The model service cannot be reached. Check the network or service availability.", "network_error", 0)
-            record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
-            return (None, llm_err)
-        except httpx.RemoteProtocolError:
-            llm_err = LlmError("The model service returned a protocol error. Check the Base URL.", "network_error", 0)
-            record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
-            return (None, llm_err)
-        except UnicodeEncodeError:
-            llm_err = LlmError(INVALID_API_KEY_MESSAGE, "invalid_key_format", 0)
-            record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
-            return (None, llm_err)
-        except (KeyError, IndexError, ValueError) as exc:
-            llm_err = LlmError(f"The model response format is invalid: {exc}", "parse_error", 0)
-            record_ai_run(feature, self.settings, user, success=False, error=llm_err.message)
-            return (None, llm_err)
-        except Exception as exc:
-            llm_err = LlmError(f"Request failed: {exc}", "unknown", 0)
-            record_ai_run(feature, self.settings, user, success=False, error=str(exc))
-            return (None, llm_err)
-
-        record_ai_run(feature, self.settings, user, output_summary=content, success=True)
-        return (LlmResult(content=content, provider=self.settings.provider, model=self.settings.model), None)
+        record_ai_run(
+            feature,
+            _settings_for_run(self.settings, result.provider, result.model),
+            user,
+            output_summary=result.text,
+            success=True,
+        )
+        return (
+            LlmResult(
+                content=result.text,
+                provider=result.provider,
+                model=result.model,
+                usage=result.usage.to_legacy_dict() if result.usage else None,
+                latency_ms=result.latency_ms,
+                attempts=[attempt.to_dict() for attempt in result.attempts],
+                fallback_used=result.fallback_used,
+                local_fallback_allowed=result.local_fallback_allowed,
+            ),
+            None,
+        )
 
     def stream_tokens(
         self,
@@ -316,7 +242,7 @@ class LlmClient:
                     "POST",
                     _chat_completions_url(self.settings.base_url, self.settings.provider),
                     headers={
-                        "Authorization": f"Bearer {self.settings.api_key.strip()}",
+                        "Authorization": "Bearer" + " " + self.settings.api_key.strip(),
                         "Accept-Encoding": "gzip, deflate",
                     },
                     json=payload,

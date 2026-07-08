@@ -4,7 +4,7 @@
 
 Planix is an AI application portfolio project. The portfolio-facing documentation version is `v3.0.0`, and it presents a RIVA-style AI OS Shell on the frontend connected to a real backend Runtime stream while keeping planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
 
-The current focus has moved into **Phase 4: Command Agent / P Mode** while preserving the completed Phase 3 planning/RAG, Dashboard Runtime, and Calendar write behavior. The active P Mode slice is Phase 4.7: Plan Query + Calendar Patch Loop, with a minimal conversation thread, bottom composer, manually triggered workbench planning drafts, inline draft detail/regeneration, inline task refinement, plan/material/history/note query cards, permission-gated Calendar writing/patching, and a hidden right-side conversation drawer.
+The current focus has moved into **Phase 4: Command Agent / P Mode** while preserving the completed Phase 3 planning/RAG, Dashboard Runtime, and Calendar write behavior. The active backend infrastructure slice is Phase 4.9A.1: multi-provider API Key persistence on top of the Planix AI SDK / ModelProvider Layer, following the Phase 4.8 LLM-First Conversational Agent Router and Phase 4.8.1 P Mode Conversation UX Polish. P Mode keeps a minimal conversation thread, bottom composer, LLM-backed `CommandDecision` routing, auto-mode Runtime planning drafts, forced chat/workbench modes, inline draft detail/regeneration, inline task refinement, plan/material/history/note query cards, permission-gated Calendar writing/patching, permission-gated note appends into `month_notes`, compact model-usage cards, fixed natural-language quick actions, and a hidden right-side conversation drawer. Backend model calls now flow through `ModelRouter` / `ModelProvider` while `LlmClient` remains the compatibility facade.
 
 The project is fully named Planix across frontend, backend, desktop, sidecar, installer, database path, environment variables, and documentation.
 
@@ -22,17 +22,21 @@ The portfolio-facing documentation version is `v3.0.0`. Do not confuse this with
 - `apps/web/src/shell`: Planix RIVA Shell, App Menu, Inspector, hash route
 - `apps/web/src/pages`: Dashboard, Calendar, Notes, Goals, Settings
 - `apps/web/src/pages/CommandPage.tsx`: minimal P Mode route
-- `apps/web/src/components/command`: command composer, permission popover, workbench toggle, and inline thread rendering
-- `apps/web/src/stores/commandAgentStore.ts`: P Mode frontend state for `auto | chat | workbench`, permission selection, thread history drawer, command streaming, runtime mini cards, draft cards, approval cards, and Calendar write result cards
+- `apps/web/src/components/command`: command composer, quick action bar, permission popover, workbench toggle, and inline thread/card rendering
+- `apps/web/src/stores/commandAgentStore.ts`: P Mode frontend state for `auto | chat | workbench`, permission selection, thread history drawer, command streaming, runtime mini cards, decision/usage cards, draft cards, approval cards, note cards, and Calendar write/patch result cards
 - `apps/web/src/components/agent/flow`: Agent Flow Trace observability UI
 - `apps/web/src/store/agentFlowStore.ts`: Runtime event to Trace state mapping
 - `apps/web/src/i18n`: `zh-CN` / `en-US` text system
 - `apps/desktop`: Tauri v2 desktop shell
 - `backend/app`: FastAPI backend
-- `backend/app/routers/command.py`: Phase 4.5 command chat, approval, thread list, thread replay, and thread deletion endpoints
-- `backend/app/services/command_agent.py`: command threads, messages, deterministic intent routing, thread-local context, Runtime handoff, hidden calendar draft creation, automatic inline plan detail, draft regeneration, draft task refinement, Calendar write actions, approval handling, LLM chat, and safe fallback text
+- `backend/app/routers/command.py`: Phase 4.8/4.8.1 command chat, approval, thread list, thread replay, and thread deletion endpoints
+- `backend/app/services/command_agent.py`: command threads, messages, LLM-first decision routing with deterministic fallback, thread-local context, Runtime handoff, hidden calendar draft creation, automatic inline plan detail, draft regeneration, draft task refinement, Calendar/Notes actions, approval handling, LLM chat, and safe fallback text
+- `backend/app/services/command_decision.py`: strict-JSON `CommandDecisionService`, fallback decision handling, and model usage payload helpers
+- `backend/app/services/model_provider.py`: internal AI SDK layer with `ModelRouter`, provider adapters, URL normalization, usage parsing, standard error types, token caps, and local fallback semantics
+- `backend/app/services/llm.py`: compatibility facade that preserves existing `LlmClient.complete()` / `stream_tokens()` behavior
 - SQLite: plans, month notes, planning goals, daily reviews, AI settings, local RAG documents, chunks, FTS5 index, AI run logs, agent runs, agent events
-- AI client: DeepSeek-first OpenAI-compatible client with local structured fallback
+- AI settings persistence: `ai_settings` stores the singular active provider and shared knobs; `ai_provider_configs` stores provider-specific base URL, model, and API Key state.
+- AI client: internal ModelProvider layer for mock, DeepSeek, Kimi, Zhipu GLM, OpenAI, and custom OpenAI-compatible providers with local structured fallback
 - Planning: `StructuredGoalPlan` schema in `backend/app/schemas.py`, helper logic in `backend/app/services/structured_goal_plan.py`, and quality gate logic in `backend/app/services/planning_quality.py`
 - Runtime: `/api/runtime/run` streams NDJSON events from Planner, Memory, Tool Router, Stream Engine, and Runtime Orchestrator
 - Maintenance: `/api/settings/ai-memory-cache/*` and related Settings maintenance endpoints clear AI memory/cache without touching formal user data
@@ -104,6 +108,11 @@ Rules:
 - `PLANIX_GOAL_PLAN_MAX_TOKENS` controls the Goals planning token budget. It defaults to `4096` and clamps to `8000`.
 - If an OpenAI-compatible response ends with `finish_reason="length"`, report `errorType="model_output_truncated"` and use the local structured fallback.
 - A saved API key enables live model calls automatically unless the provider is `mock`.
+- Provider settings support `mock`, `deepseek`, `kimi`, `zhipu_glm`, `openai`, and `custom`. Settings may auto-fill default Base URLs when switching provider only if the old value is empty or still the old provider default.
+- Provider API Keys are persisted per provider. Settings may show saved-key chips and delete one provider key at a time; deleting a key must not switch the active provider or affect other provider keys.
+- Phase 4.9A `ModelRouter` selects only by the saved provider. Do not implement task-level model routing, provider fallback chains, or multi-key settings until Phase 4.9B.
+- ModelProvider request payloads must respect `response_format_json` and `max_token_cap`; moving code into the provider layer must not bypass existing model-output truncation or token-budget safeguards.
+- Model errors should map to standard `errorType` values including `auth_error`, `bad_model`, `bad_base_url`, `network_error`, `timeout`, `rate_limit`, `insufficient_balance`, `invalid_key_format`, `invalid_model_output`, and `model_output_truncated`.
 - Planning fallback must expose safe diagnostics with `fallbackReason`, `errorType`, and host-only `baseUrlHost`; never expose API keys, headers, path/query secrets, or raw request payloads.
 - `structuredPlan` is the fact source for Runtime preview and final output.
 - `planning_goals` stores generated planning history/cache only; it is not a confirmed Goals/Tasks execution table.
@@ -176,7 +185,7 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Keep the P page visually loose: empty state content should sit slightly above center, the thread should have breathing room, and no fixed workspace or draft panel should be introduced.
 - P Mode may expose a hidden right-side conversation drawer for new chat, history, and deleting command threads. The drawer must remain a conversation manager, not a workspace preview or persistent draft panel.
 - P Workspace is an internal draft/audit concept, not a page layout. Phase 4.4 may write hidden `calendar_plan` drafts and permission-gated Calendar write actions only.
-- Command mode is a single `auto | chat | workbench` value. Default `auto` keeps normal chat and clear planning requests conversational; only manually enabled `workbench` runs backend Runtime for initial structured planning drafts.
+- Command mode is a single `auto | chat | workbench` value. Default `auto` runs the LLM-first `CommandDecisionService` before routing: normal chat stays conversational, while `create_plan` may run backend Runtime and create a hidden `calendar_plan` draft. Forced `chat` mode is discussion-only, and manual `workbench` still forces Runtime planning.
 - Chat and Runtime planning may use recent text messages from the current command thread as context. New chats must start clean and must not inherit context from previous threads.
 - After a valid Runtime planning draft is created, show both the compact summary and the full plan as inline cards by default.
 - P Mode Runtime execution events should render as one collapsible inline execution chain after completion. The thread should use a lightweight center arrow toggle for collapse/expand, may show execution details on click, and must not introduce a fixed Trace or Workspace panel.
@@ -185,19 +194,24 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - P Mode `refine all tasks` should avoid unbounded LLM calls; first version caps a batch at 5 tasks and prioritizes the current/first milestone.
 - P Mode plan query commands such as "今天有什么安排", "find Python plan", or "找 AI 实习资料" use `query_plan` in `/api/command/chat`. They search Calendar plans, RAG materials, `planning_goals`, and `month_notes`, emit `plan_search_results`, and must not run Runtime or create a draft.
 - P Mode Calendar patch commands such as "把明天的任务改到后天", "改成 30 分钟", or "删除周五计划" use `patch_calendar_plan` in `/api/command/chat`. They preview title/date/time/duration/delete changes through `command_actions` before execution.
+- P Mode note query commands use `query_notes` in `/api/command/chat` and emit `note_search_results` sourced from `month_notes`, RAG materials, document chunks, and `planning_goals`.
+- P Mode note-save commands use `save_note` in `/api/command/chat`; they create `note_write_preview` and `command_actions(target="notes")`, then append `YYYY-MM-DD + noteText` to the matching `month_notes` row after PermissionGate approval/execution.
+- Phase 4.8.1 QuickActionBar and result row actions must send fixed natural-language messages back through `/api/command/chat`; they must not directly call Calendar or Notes APIs.
+- Phase 4.8.1 result card actions such as note-to-plan references are follow-up chat instructions only. They do not directly write Calendar or Notes data.
 - Calendar patch updates may change only title/content, date, time, and estimated duration. They must preserve `done`, `result/completion`, `source`, and `sourceKey`; deletes and rejected updates must leave the database unchanged.
 - Patch targeting may use the latest `plan_search_results` card for ordinal references such as "first" or "第一个"; ambiguous multi-candidate matches should return a selection/search card and no action.
 - Forced chat mode is discussion-only and must not run Dashboard Runtime, create drafts, write Calendar data, or execute any instruction.
-- Forced workbench mode is the only initial planning entry state that may run backend Runtime and create a hidden `calendar_plan` draft.
+- Forced workbench mode remains the manual planning entry, but `auto` may also run backend Runtime when the LLM decision is `create_plan`.
 - Command permission state is `low | medium | high`; low confirms writes/deletes, medium confirms deletes/dangerous actions, and high confirms dangerous actions only.
 - P Mode Calendar writes must start from the current hidden `calendar_plan` draft, use `command-draft:` source keys, never overwrite manual plans, and never overwrite `completion/result/done`.
 - In a command thread with a current `calendar_plan` draft, phrases like `写入计划`, `保存计划`, `保存`, and `确认写入` should route to Calendar writing through PermissionGate instead of starting a new Runtime planning run.
 - P Mode Calendar writes should include matching refined task payloads from the draft in `plans.refined_task_json`, while preserving `completion/result/done`.
 - P Mode Calendar write failures from `/api/command/chat` or `/api/command/approve` should use the Calendar-specific write error. They must not be reported as draft-save failures.
+- P Mode note writes must never replace existing month notes wholesale except by appending the approved note text to the previous content.
 - Command table startup migrations must preserve old local SQLite data and add `command_actions.draft_id`, `command_actions.error_message`, and `command_approvals.decision` without destructive rebuilds.
 - Calendar month view should load all plans for the visible month so dates with plans are highlighted before the user clicks them.
 - Calendar full-plan clearing prefers `DELETE /api/plans/all`; when an older backend returns 404, the frontend may fall back to deleting known plans individually and should retain failed deletions in state.
-- Settings model input is free text with built-in recommendations for `deepseek-v4-flash` and `deepseek-v4-pro` only.
+- Settings model input is free text with provider-specific recommendations for DeepSeek, Kimi, Zhipu GLM, OpenAI, custom, and mock. Do not restore legacy marketing model display names.
 - Do not change existing request payloads or response schemas unless explicitly required by the phase plan.
 
 ## Runtime Constraints
@@ -221,9 +235,10 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Medium-relevance history can inform the memory summary, but should not enter material search unless it shares clear goal-domain keywords.
 - Rust `stream_agent_runtime` must remain a thin pass-through bridge.
 - If true LLM streaming is unavailable, do not split a completed LLM response into fake token chunks; use Runtime step events plus final output or local structured fallback.
-- `/api/command/chat` streams Phase 4.7 command NDJSON events (`thread`, `assistant_delta`, `runtime_started`, `runtime_event`, `draft_created`, `summary`, `plan_detail`, `refinement_started`, `refined_tasks_result`, `calendar_plan_preview`, `approval_required`, `calendar_write_result`, `plan_search_results`, `plan_patch_preview`, `plan_patch_result`, `execution_result`, `done`, `error`) for P Mode.
+- `/api/command/chat` streams Phase 4.8 command NDJSON events (`thread`, `command_decision`, `model_usage`, `clarify_question`, `assistant_delta`, `runtime_started`, `runtime_event`, `draft_created`, `summary`, `plan_detail`, `refinement_started`, `refined_tasks_result`, `calendar_plan_preview`, `approval_required`, `calendar_write_result`, `plan_search_results`, `note_search_results`, `note_write_preview`, `note_write_result`, `plan_patch_preview`, `plan_patch_result`, `execution_result`, `done`, `error`) for P Mode.
 - `/api/command/approve` approves or rejects pending Calendar write actions. `/api/command/threads` lists command thread summaries, `/api/command/thread/{thread_id}` replays saved messages and may return the current hidden draft, and `DELETE /api/command/thread/{thread_id}` deletes command-thread data without deleting Calendar plans.
-- Phase 4.7 stores `command_threads`, `command_messages`, hidden `command_drafts`, Calendar write/patch `command_actions`, and `command_approvals`. Do not register `/api/command/drafts` or use `command_outputs` until a later phase explicitly enables them.
+- Phase 4.8 stores `command_threads`, `command_messages`, hidden `command_drafts`, Calendar and Notes write/patch `command_actions`, and `command_approvals`. Do not register `/api/command/drafts` or use `command_outputs` until a later phase explicitly enables them.
+- Phase 4.9A is not the task-level Multi-Model Router phase. Do not add provider fallback chains, multi-key settings, WriteIntent/Undo, or direct note-to-plan writes while adding the internal ModelProvider layer.
 
 ## Settings Maintenance
 

@@ -29,6 +29,15 @@ function renderMode(): string {
   return renderToStaticMarkup(<ModeProbe />);
 }
 
+function MessageKindsProbe(): ReactElement {
+  const command = useCommandAgent();
+  return <span>{command.messages.map((message) => message.kind || message.role).join(',')}</span>;
+}
+
+function renderMessageKinds(): string {
+  return renderToStaticMarkup(<MessageKindsProbe />);
+}
+
 describe('commandAgentStore workbench mode', () => {
   it('defaults to auto and only sends workbench after manual toggle', async () => {
     apiMocks.runCommandChat.mockResolvedValue(undefined);
@@ -53,5 +62,32 @@ describe('commandAgentStore workbench mode', () => {
       message: 'Plan my month',
       mode: 'auto'
     });
+  });
+
+  it('stores new command decision and usage events from the stream', async () => {
+    apiMocks.runCommandChat.mockImplementationOnce(async (_payload, handlers) => {
+      handlers.onEvent({
+        type: 'command_decision',
+        intent: 'query_plan',
+        confidence: 0.86,
+        targetType: 'calendar_date',
+        action: 'query',
+        decisionSummary: 'View today',
+        source: 'llm'
+      });
+      handlers.onEvent({
+        type: 'model_usage',
+        usage: { provider: 'test', model: 'router', mode: 'llm', taskType: 'command_decision' }
+      });
+      handlers.onEvent({ type: 'done', threadId: 'thread-test' });
+    });
+    apiMocks.listCommandThreads.mockResolvedValue([]);
+
+    commandAgentActions.newThread();
+    await commandAgentActions.sendCommand('Today?', (key) => key);
+
+    const html = renderMessageKinds();
+    expect(html).toContain('command_decision');
+    expect(html).toContain('model_usage');
   });
 });

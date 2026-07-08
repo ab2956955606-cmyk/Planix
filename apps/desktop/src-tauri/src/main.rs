@@ -638,16 +638,18 @@ fn main() {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
-            if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
-                if !key.is_empty() {
-                    sidecar.env("DEEPSEEK_API_KEY", key);
-                    write_log(&log_path, "forwarded DEEPSEEK_API_KEY to sidecar");
-                }
-            }
-            if let Ok(key) = std::env::var("AI_API_KEY") {
-                if !key.is_empty() {
-                    sidecar.env("AI_API_KEY", key);
-                    write_log(&log_path, "forwarded AI_API_KEY to sidecar");
+            for key_name in [
+                "AI_API_KEY",
+                "DEEPSEEK_API_KEY",
+                "MOONSHOT_API_KEY",
+                "ZHIPU_API_KEY",
+                "OPENAI_API_KEY",
+            ] {
+                if let Ok(key) = std::env::var(key_name) {
+                    if !key.is_empty() {
+                        sidecar.env(key_name, key);
+                        write_log(&log_path, format!("forwarded {} to sidecar", key_name));
+                    }
                 }
             }
             if let Ok(use_real) = std::env::var("USE_REAL_LLM") {

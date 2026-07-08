@@ -1,8 +1,9 @@
 import json
 import sqlite3
+from types import SimpleNamespace
 
 from app.db import get_conn, init_db
-from app.schemas import RefinedTask
+from app.schemas import CommandDecision, ModelUsage, RefinedTask
 from app.services.command_agent import CommandAgentService, detect_command_intent, resolve_command_intent
 
 
@@ -129,6 +130,29 @@ def _patch_runtime(monkeypatch, runtime_factory):
     monkeypatch.setattr("app.services.command_agent.RuntimeOrchestrator", runtime_factory)
 
 
+def _patch_decision(monkeypatch, decision: CommandDecision | None = None, *, error: str = ""):
+    class FixedDecisionService:
+        def decide(self, *args, **kwargs):
+            usage = ModelUsage(
+                provider="test",
+                model="router",
+                promptTokens=10,
+                completionTokens=5,
+                totalTokens=15,
+                latencyMs=7,
+                mode="llm" if decision else "local_fallback",
+                taskType="command_decision",
+            )
+            return SimpleNamespace(
+                decision=decision,
+                usage=usage,
+                source="llm" if decision else "local_fallback",
+                error=error,
+            )
+
+    monkeypatch.setattr("app.services.command_agent.CommandDecisionService", lambda: FixedDecisionService())
+
+
 DEFAULT_PLANNING_MESSAGE = "\u5e2e\u6211\u89c4\u5212\u672c\u5468 AI \u5b9e\u4e60\u51c6\u5907"
 
 
@@ -180,9 +204,9 @@ def test_command_chat_streams_and_replays_thread(client):
     assert thread.status_code == 200
     body = thread.json()
     assert body["id"] == thread_id
-    assert len(body["messages"]) == 2
+    assert len(body["messages"]) >= 2
     assert body["messages"][0]["role"] == "user"
-    assert body["messages"][1]["role"] == "assistant"
+    assert any(message["role"] == "assistant" for message in body["messages"])
     assert body["currentDraft"] is None
     assert "drafts" not in body
     assert "actions" not in body
@@ -285,22 +309,31 @@ def test_chat_mode_planning_request_does_not_run_runtime(client, monkeypatch):
         assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
 
 
-def test_auto_planning_request_uses_chat_without_runtime_or_draft(client, monkeypatch):
-    ExplodingRuntime.calls = 0
-    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+def test_auto_planning_request_runs_runtime_and_creates_hidden_draft(client, monkeypatch):
+    FakeRuntime.calls = 0
+    _patch_runtime(monkeypatch, lambda: FakeRuntime())
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(
+            intent="create_plan",
+            confidence=0.91,
+            targetType="unknown",
+            action="create",
+            decisionSummary="我理解你想创建一个学习规划。",
+        ),
+    )
 
     response = client.post("/api/command/chat", json={"mode": "auto", "message": DEFAULT_PLANNING_MESSAGE})
 
     assert response.status_code == 200
     events = _events(response)
-    assert ExplodingRuntime.calls == 0
-    assert any(event["type"] == "assistant_delta" for event in events)
-    assert not any(
-        event["type"] in {"runtime_started", "runtime_event", "draft_created", "summary", "plan_detail"}
-        for event in events
-    )
+    assert FakeRuntime.calls == 1
+    assert any(event["type"] == "command_decision" and event["intent"] == "create_plan" for event in events)
+    assert any(event["type"] == "runtime_started" for event in events)
+    assert any(event["type"] == "draft_created" for event in events)
+    assert any(event["type"] == "model_usage" for event in events)
     with get_conn() as conn:
-        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 1
         assert conn.execute("SELECT COUNT(*) AS count FROM command_actions").fetchone()["count"] == 0
         assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
 
@@ -496,6 +529,7 @@ def test_intent_router_rules():
     assert detect_command_intent(MSG_TODAY_PLANS) == "query_plan"
     assert detect_command_intent(MSG_FIND_PYTHON) == "query_plan"
     assert detect_command_intent(MSG_PATCH_TO_DAY_AFTER) == "patch_calendar_plan"
+    assert detect_command_intent("修改我的计划") == "patch_calendar_plan"
     assert detect_command_intent("删除周五的计划") == "patch_calendar_plan"
     assert detect_command_intent("重新生成一个轻松版本") == "regenerate_draft"
     assert detect_command_intent("展开看看完整计划") == "show_current_plan"
@@ -506,6 +540,8 @@ def test_intent_router_rules():
     assert detect_command_intent("确认写入") == "sync_to_calendar"
     assert detect_command_intent("保存到日程") == "sync_to_calendar"
     assert detect_command_intent("把这个计划写进日历") == "sync_to_calendar"
+    assert detect_command_intent("查一下 Python 笔记") == "query_notes"
+    assert detect_command_intent("把这段保存成笔记") == "save_note"
     assert resolve_command_intent(
         "保存",
         detect_command_intent("保存"),
@@ -546,7 +582,49 @@ def test_query_plan_searches_calendar_without_runtime_or_draft(client, monkeypat
         assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
 
 
-def test_query_plan_searches_materials_history_and_month_notes(client):
+def test_llm_decision_routes_query_plan_without_runtime(client, monkeypatch):
+    ExplodingRuntime.calls = 0
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(
+            intent="query_plan",
+            confidence=0.88,
+            targetType="calendar_date",
+            action="query",
+            decisionSummary="我理解你想查看今天的安排。",
+        ),
+    )
+    client.post(
+        "/api/plans",
+        json={"date": "2026-07-05", "time": "09:00", "content": PY_STUDY, "source": "manual"},
+    )
+
+    response = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "message": MSG_TODAY_PLANS, "context": {"date": "2026-07-05"}},
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert ExplodingRuntime.calls == 0
+    assert any(event["type"] == "command_decision" and event["source"] == "llm" for event in events)
+    result = next(event for event in events if event["type"] == "plan_search_results")
+    assert result["calendarPlans"][0]["title"] == PY_STUDY
+
+
+def test_query_plan_searches_materials_history_and_month_notes(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(
+            intent="query_plan",
+            confidence=0.9,
+            targetType="material",
+            action="query",
+            extractedParams={"query": "Python AI 实习"},
+            decisionSummary="我理解你想查计划和资料。",
+        ),
+    )
     client.post(
         "/api/rag/documents",
         json={"title": "Python 面试资料", "content": "Python portfolio and AI internship notes.", "sourceType": "paste"},
@@ -578,6 +656,77 @@ def test_query_plan_searches_materials_history_and_month_notes(client):
     assert result["materials"]
     assert result["goalHistory"][0]["title"] == "Python AI internship plan"
     assert result["monthNotes"][0]["month"] == 7
+
+
+def test_llm_decision_query_notes_returns_note_results(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(
+            intent="query_notes",
+            confidence=0.93,
+            targetType="note",
+            action="query",
+            extractedParams={"query": "Python AI"},
+            decisionSummary="我理解你想查找 Python AI 资料。",
+        ),
+    )
+    client.post(
+        "/api/rag/documents",
+        json={"title": "Python AI notes", "content": "Python AI internship portfolio material.", "sourceType": "paste"},
+    )
+    with get_conn() as conn:
+        conn.execute("INSERT INTO month_notes(year, month, content) VALUES (2026, 7, 'Python AI 月笔记')")
+
+    response = client.post("/api/command/chat", json={"mode": "auto", "message": "找资料", "context": {"date": "2026-07-05"}})
+
+    assert response.status_code == 200
+    result = next(event for event in _events(response) if event["type"] == "note_search_results")
+    assert result["materials"]
+    assert result["monthNotes"]
+
+
+def test_save_note_preview_reject_and_approve_writes_month_note(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(
+            intent="save_note",
+            confidence=0.9,
+            targetType="note",
+            action="save",
+            extractedParams={"noteText": "Python 面试重点是项目复盘", "date": "2026-07-05"},
+            needsConfirmation=True,
+            decisionSummary="我理解你想保存一条笔记。",
+        ),
+    )
+    preview = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "permission": "low", "message": "保存笔记", "context": {"date": "2026-07-05"}},
+    )
+    assert preview.status_code == 200
+    preview_events = _events(preview)
+    note_preview = next(event for event in preview_events if event["type"] == "note_write_preview")
+    approval = next(event for event in preview_events if event["type"] == "approval_required")
+    assert note_preview["year"] == 2026
+    assert note_preview["month"] == 7
+
+    rejected = client.post("/api/command/approve", json={"actionId": approval["actionId"], "decision": "reject", "permission": "low"})
+    assert rejected.status_code == 200
+    with get_conn() as conn:
+        row = conn.execute("SELECT content FROM month_notes WHERE year = 2026 AND month = 7").fetchone()
+        assert row is None
+
+    preview = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "permission": "low", "message": "保存笔记", "context": {"date": "2026-07-05"}},
+    )
+    action_id = next(event for event in _events(preview) if event["type"] == "approval_required")["actionId"]
+    approved = client.post("/api/command/approve", json={"actionId": action_id, "decision": "approve", "permission": "low"})
+
+    assert approved.status_code == 200
+    assert any(event["type"] == "note_write_result" and event["status"] == "success" for event in _events(approved))
+    with get_conn() as conn:
+        row = conn.execute("SELECT content FROM month_notes WHERE year = 2026 AND month = 7").fetchone()
+        assert "Python 面试重点是项目复盘" in row["content"]
 
 
 def test_patch_calendar_plan_low_permission_previews_and_requires_approval(client):
@@ -782,6 +931,28 @@ def test_patch_calendar_multiple_candidates_returns_selection_card_without_actio
     assert response.status_code == 200
     result = next(event for event in _events(response) if event["type"] == "plan_search_results")
     assert len(result["calendarPlans"]) == 2
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_actions").fetchone()["count"] == 0
+
+
+def test_generic_modify_plan_without_context_clarifies_without_action(client, monkeypatch):
+    _patch_decision(monkeypatch, None)
+
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "permission": "medium",
+            "message": "修改我的计划",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    clarify = next(event for event in events if event["type"] == "clarify_question")
+    assert clarify["question"] == "你想修改哪一个计划？可以先说“查看今天计划”，再告诉我修改第几个。"
+    assert not any(event["type"] == "plan_patch_preview" for event in events)
     with get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) AS count FROM command_actions").fetchone()["count"] == 0
 

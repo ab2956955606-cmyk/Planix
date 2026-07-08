@@ -89,6 +89,23 @@ def init_db(conn: sqlite3.Connection) -> None:
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS ai_provider_configs (
+          provider TEXT PRIMARY KEY,
+          base_url TEXT NOT NULL DEFAULT '',
+          model TEXT NOT NULL DEFAULT '',
+          api_key_encrypted TEXT NOT NULL DEFAULT '',
+          api_key_source TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_model_routing_rules (
+          task_type TEXT PRIMARY KEY,
+          primary_provider TEXT NOT NULL,
+          fallback_providers_json TEXT NOT NULL DEFAULT '[]',
+          local_fallback_enabled INTEGER NOT NULL DEFAULT 1,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS user_preferences (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL,
@@ -257,6 +274,19 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "ai_settings", "temperature", "REAL NOT NULL DEFAULT 0.3")
     ensure_column(conn, "ai_settings", "timeout_seconds", "INTEGER NOT NULL DEFAULT 40")
     ensure_column(conn, "ai_settings", "api_key_source", "TEXT NOT NULL DEFAULT 'legacy'")
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO ai_provider_configs(
+          provider, base_url, model, api_key_encrypted, api_key_source, updated_at
+        )
+        SELECT provider, base_url, model, api_key_encrypted, api_key_source, updated_at
+        FROM ai_settings
+        WHERE id = 'local-default'
+          AND provider != 'mock'
+          AND api_key_source = 'user'
+          AND api_key_encrypted != ''
+        """
+    )
     ensure_column(conn, "daily_reviews", "done_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "daily_reviews", "total_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "daily_reviews", "suggestions_json", "TEXT NOT NULL DEFAULT '[]'")

@@ -24,6 +24,7 @@ def create_material_draft(payload: AiMaterialDraftRequest) -> AiMaterialDraftOut
         max_token_cap=4000,
         temperature=0.25,
         response_format_json=True,
+        task_type="model_knowledge",
     )
     if llm_result:
         parsed = _json_object(llm_result.content)
@@ -57,6 +58,7 @@ def enrich_with_model_knowledge(
         max_token_cap=3000,
         temperature=0.25,
         response_format_json=True,
+        task_type="model_knowledge",
     )
     if llm_result:
         parsed = _json_object(llm_result.content)

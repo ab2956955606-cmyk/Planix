@@ -1,4 +1,5 @@
 from app.db import get_conn
+from app.schemas import PlanQualityMetrics, PlanQualityReport
 from app.services import planning as planning_module
 from app.services.ai_settings import EffectiveAiSettings
 from app.services.llm import LlmError, LlmResult
@@ -509,6 +510,10 @@ def test_goal_plan_llm_success_has_no_fallback_diagnostics(client, monkeypatch):
     assert body["baseUrlHost"] is None
     assert body["qualityStatus"] == "passed"
     assert body["qualityReport"]["ok"] is True
+    assert body["qualityReport"]["metrics"]["durationDays"] == body["planHorizon"]["durationDays"]
+    assert body["qualityReport"]["metrics"]["qualityStatus"] == "passed"
+    assert body["qualityReport"]["metrics"]["sourceType"] in {"local_context", "model_knowledge", "insufficient_context"}
+    assert body["qualityReport"]["metrics"]["fallbackUsed"] is False
     assert body["phases"][0]["title"] == "Month 1"
     assert body["tasks"][0]["title"] == "Build Python artifact 1"
 
@@ -550,9 +555,13 @@ def test_goal_plan_sparse_llm_output_triggers_one_repair(client, monkeypatch):
     assert body["structuredPlan"]["goalTitle"] == "Repaired"
     assert body["qualityReport"]["ok"] is True
     assert body["qualityReport"]["totalTasks"] == 24
+    assert body["qualityReport"]["metrics"]["repairAttempted"] is True
+    assert body["qualityReport"]["metrics"]["fallbackUsed"] is False
+    assert body["qualityReport"]["metrics"]["qualityStatus"] == "repaired"
+    assert body["qualityReport"]["metrics"]["totalTasks"] == 24
 
 
-def test_goal_plan_repair_failure_uses_quality_local_fallback(client, monkeypatch):
+def test_golden_demo_python_90_day_plan_quality(client, monkeypatch):
     class FailedRepairClient:
         settings = _settings()
         calls = 0
@@ -597,10 +606,53 @@ def test_goal_plan_repair_failure_uses_quality_local_fallback(client, monkeypatc
     assert body["errorType"] == "plan_quality_failed"
     assert body["qualityStatus"] == "local_fallback"
     assert body["qualityReport"]["ok"] is True
+    assert body["planHorizon"]["durationDays"] == 90
     assert len(body["structuredPlan"]["milestones"]) >= 3
     assert len(tasks) >= 24
     assert len(dates) > 1
     assert body["qualityReport"]["coveredWeekCount"] >= 10
+    assert body["qualityReport"]["metrics"]["durationDays"] == 90
+    assert body["qualityReport"]["metrics"]["totalTasks"] >= 24
+    assert body["qualityReport"]["metrics"]["coveredWeekCount"] >= 10
+    assert body["qualityReport"]["metrics"]["repairAttempted"] is True
+    assert body["qualityReport"]["metrics"]["fallbackUsed"] is True
+    assert body["qualityReport"]["metrics"]["qualityStatus"] == "local_fallback"
+    assert body["qualityReport"]["metrics"]["sourceType"] == "local_fallback"
+
+
+def test_quality_metrics_serialization():
+    report = PlanQualityReport(
+        ok=True,
+        score=100,
+        totalTasks=24,
+        milestoneCount=3,
+        coveredWeekCount=10,
+        dateSpanDays=84,
+        issues=[],
+        metrics=PlanQualityMetrics(
+            durationDays=90,
+            totalTasks=24,
+            milestoneCount=3,
+            coveredWeekCount=10,
+            dateSpanDays=84,
+            weakTaskCount=0,
+            missingDueDateCount=0,
+            outOfRangeDueDateCount=0,
+            repairAttempted=True,
+            fallbackUsed=False,
+            qualityStatus="repaired",
+            sourceType="model_knowledge",
+            localRelevance="low",
+        ),
+    )
+
+    dumped = report.model_dump(by_alias=True)
+
+    assert dumped["totalTasks"] == 24
+    assert dumped["metrics"]["durationDays"] == 90
+    assert dumped["metrics"]["coveredWeekCount"] == 10
+    assert dumped["metrics"]["repairAttempted"] is True
+    assert dumped["metrics"]["qualityStatus"] == "repaired"
 
 
 def test_goal_plan_llm_error_types_are_reported_safely(client, monkeypatch):

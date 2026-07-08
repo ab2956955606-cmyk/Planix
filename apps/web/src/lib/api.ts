@@ -3,6 +3,7 @@ import type {
   AgentRuntimeEvent,
   AiMaterialDraft,
   AiMaterialDraftRequest,
+  AiModelRoutingInput,
   AiSettings,
   AiSettingsInput,
   AiSettingsTestResult,
@@ -96,11 +97,17 @@ export type CommandChatEvent =
   | { type: 'refinement_started'; draftId: string; total: number }
   | { type: 'refined_tasks_result'; draftId: string; total: number; succeeded: number; failed: number; items: unknown[]; errors?: unknown[] }
   | { type: 'calendar_plan_preview'; actionId: string; draftId: string; title: string; plans: unknown[] }
-  | { type: 'approval_required'; actionId: string; draftId: string; permission: CommandPermission; risk: string; summary: string }
+  | { type: 'approval_required'; actionId: string; draftId: string; permission: CommandPermission; risk: string; summary: string; target?: string; operation?: string }
   | { type: 'calendar_write_result'; actionId?: string; created: number; updated: number; failed: number; affectedDates?: string[]; errors?: string[]; plans?: unknown[] }
+  | { type: 'command_decision'; intent: string; confidence: number; targetType?: string; action?: string; decisionSummary?: string; source?: string; error?: string; extractedParams?: unknown; needsConfirmation?: boolean; needsClarification?: boolean; clarificationQuestion?: string }
   | { type: 'plan_search_results'; query: string; summary: string; dateRange?: unknown; calendarPlans?: unknown[]; materials?: unknown[]; goalHistory?: unknown[]; monthNotes?: unknown[] }
+  | { type: 'note_search_results'; query: string; summary: string; materials?: unknown[]; goalHistory?: unknown[]; monthNotes?: unknown[] }
   | { type: 'plan_patch_preview'; actionId: string; operation: 'update' | 'delete'; risk: 'write' | 'delete'; before: unknown; after?: unknown; changes?: Record<string, unknown> }
   | { type: 'plan_patch_result'; actionId?: string; operation: 'update' | 'delete'; status: 'success' | 'failed'; before?: unknown; after?: unknown; changes?: Record<string, unknown>; error?: string }
+  | { type: 'note_write_preview'; actionId: string; operation: 'create' | 'update'; risk: 'write'; year: number; month: number; date: string; noteText: string; before?: string; after?: string }
+  | { type: 'note_write_result'; actionId?: string; operation?: 'create' | 'update'; status: 'success' | 'failed'; year?: number; month?: number; date?: string; noteText?: string; before?: string; after?: string; updatedAt?: string; error?: string }
+  | { type: 'model_usage'; usage: unknown }
+  | { type: 'clarify_question'; question: string; decision?: unknown }
   | { type: 'execution_result'; actionId?: string; status: 'success' | 'failed' | 'rejected'; text: string }
   | { type: 'done'; threadId: string }
   | { type: 'error'; error: string };
@@ -471,6 +478,14 @@ export async function fetchAiSettings(): Promise<AiSettings> {
 
 export async function saveAiSettings(payload: AiSettingsInput): Promise<AiSettings> {
   return callApi<AiSettings>('PUT', '/api/ai/settings', payload, 15000);
+}
+
+export async function saveAiSettingsRouting(payload: AiModelRoutingInput): Promise<AiSettings> {
+  return callApi<AiSettings>('PUT', '/api/ai/settings/routing', payload, 15000);
+}
+
+export async function deleteAiSettingsKey(provider: AiSettings['provider']): Promise<AiSettings> {
+  return callApi<AiSettings>('DELETE', `/api/ai/settings/key/${encodeURIComponent(provider)}`, undefined, 15000);
 }
 
 export async function testAiSettings(): Promise<AiSettingsTestResult> {

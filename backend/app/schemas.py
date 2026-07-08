@@ -7,7 +7,58 @@ from .api_key import INVALID_API_KEY_MESSAGE, validate_api_key_format
 
 PlanPriority = Literal["low", "medium", "high"]
 PlanSource = Literal["manual", "ai"]
-AiProvider = Literal["mock", "deepseek", "openai", "custom"]
+AiProvider = Literal["mock", "deepseek", "kimi", "zhipu_glm", "openai", "custom"]
+
+
+ModelUsageMode = Literal["llm", "local_fallback"]
+ModelUsageTaskType = Literal[
+    "command_decision",
+    "plan_generation",
+    "task_refinement",
+    "calendar_patch",
+    "note_query",
+    "note_write",
+    "chat",
+    "model_knowledge",
+    "settings_test",
+]
+ModelRoutingTaskType = Literal[
+    "command_decision",
+    "plan_generation",
+    "task_refinement",
+    "calendar_patch",
+    "note_query",
+    "note_write",
+    "chat",
+    "model_knowledge",
+]
+ModelRouteAttemptStatus = Literal["success", "error", "skipped"]
+
+
+class ModelRouteAttempt(BaseModel):
+    provider: str
+    model: str | None = None
+    status: ModelRouteAttemptStatus
+    error_type: str | None = Field(default=None, alias="errorType")
+    latency_ms: int | None = Field(default=None, alias="latencyMs")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ModelUsage(BaseModel):
+    provider: str
+    model: str
+    prompt_tokens: int | None = Field(default=None, alias="promptTokens")
+    completion_tokens: int | None = Field(default=None, alias="completionTokens")
+    total_tokens: int | None = Field(default=None, alias="totalTokens")
+    latency_ms: int | None = Field(default=None, alias="latencyMs")
+    mode: ModelUsageMode
+    task_type: ModelUsageTaskType = Field(alias="taskType")
+    fallback_used: bool | None = Field(default=None, alias="fallbackUsed")
+    local_fallback_allowed: bool | None = Field(default=None, alias="localFallbackAllowed")
+    attempts: list[ModelRouteAttempt] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class AiPayload(BaseModel):
@@ -184,6 +235,7 @@ class RefinedTask(BaseModel):
     learning_resources: list[LearningResource] = Field(default_factory=list, alias="learningResources")
     budget_explanation: str | None = Field(default=None, alias="budgetExplanation")
     plan_fit_check: PlanFitCheck | None = Field(default=None, alias="planFitCheck")
+    model_usage: ModelUsage | None = Field(default=None, alias="modelUsage")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -303,6 +355,56 @@ class AiSettingsUpdate(BaseModel):
         return cleaned
 
 
+class AiSavedProvider(BaseModel):
+    provider: AiProvider
+    base_url: str = Field(alias="baseUrl")
+    model: str
+    has_api_key: bool = Field(alias="hasApiKey")
+    updated_at: str = Field(alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AiModelRoutingRule(BaseModel):
+    task_type: ModelRoutingTaskType = Field(alias="taskType")
+    primary_provider: AiProvider = Field(alias="primaryProvider")
+    fallback_providers: list[AiProvider] = Field(default_factory=list, alias="fallbackProviders")
+    local_fallback_enabled: bool = Field(default=True, alias="localFallbackEnabled")
+    updated_at: str = Field(default="", alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("primary_provider")
+    @classmethod
+    def validate_primary_provider(cls, value: AiProvider) -> AiProvider:
+        if value == "mock":
+            raise ValueError("mock cannot be used as a routed model provider")
+        return value
+
+    @field_validator("fallback_providers")
+    @classmethod
+    def validate_fallback_providers(cls, value: list[AiProvider]) -> list[AiProvider]:
+        cleaned: list[AiProvider] = []
+        for provider in value:
+            if provider == "mock":
+                raise ValueError("mock cannot be used as a routed model provider")
+            if provider not in cleaned:
+                cleaned.append(provider)
+        if len(cleaned) > 2:
+            raise ValueError("fallbackProviders can include at most 2 providers")
+        return cleaned
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.primary_provider in self.fallback_providers:
+            raise ValueError("primaryProvider cannot also be a fallback provider")
+
+
+class AiModelRoutingUpdate(BaseModel):
+    routing_rules: list[AiModelRoutingRule] = Field(alias="routingRules")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class AiSettingsOut(BaseModel):
     provider: AiProvider
     base_url: str = Field(alias="baseUrl")
@@ -311,6 +413,8 @@ class AiSettingsOut(BaseModel):
     temperature: float
     timeout_seconds: int = Field(alias="timeoutSeconds")
     updated_at: str = Field(alias="updatedAt")
+    saved_providers: list[AiSavedProvider] = Field(default_factory=list, alias="savedProviders")
+    routing_rules: list[AiModelRoutingRule] = Field(default_factory=list, alias="routingRules")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -484,6 +588,7 @@ class GoalPlanOut(BaseModel):
     quality_status: PlanQualityStatus | None = Field(default=None, alias="qualityStatus")
     source_type: PlanSourceType | None = Field(default=None, alias="sourceType")
     local_relevance: LocalRelevance | None = Field(default=None, alias="localRelevance")
+    model_usage: ModelUsage | None = Field(default=None, alias="modelUsage")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -555,6 +660,38 @@ CommandActionTarget = Literal["calendar", "notes", "materials", "goals", "settin
 CommandActionOperation = Literal["read", "create", "update", "delete", "navigate", "run", "create_or_update_plans"]
 CommandActionRisk = Literal["read", "write", "delete", "dangerous"]
 CommandActionStatus = Literal["proposed", "waiting_approval", "running", "success", "failed", "rejected"]
+CommandDecisionIntent = Literal[
+    "create_plan",
+    "save_plan_to_calendar",
+    "query_plan",
+    "patch_calendar_plan",
+    "refine_plan",
+    "refine_task",
+    "query_notes",
+    "save_note",
+    "modify_current_draft",
+    "chat",
+    "clarify",
+]
+CommandDecisionTargetType = Literal[
+    "current_draft",
+    "calendar_plan",
+    "calendar_date",
+    "note",
+    "material",
+    "unknown",
+]
+CommandDecisionAction = Literal[
+    "create",
+    "save",
+    "query",
+    "update",
+    "delete",
+    "refine",
+    "reschedule",
+    "summarize",
+    "answer",
+]
 CommandOutputKind = Literal[
     "assistant_text",
     "runtime_trace",
@@ -563,12 +700,61 @@ CommandOutputKind = Literal[
     "calendar_plan_preview",
     "approval_request",
     "calendar_write_result",
+    "command_decision",
     "plan_search_results",
+    "note_search_results",
     "plan_patch_preview",
     "plan_patch_result",
+    "note_write_preview",
+    "note_write_result",
+    "model_usage",
+    "clarify_question",
     "execution_result",
     "error",
 ]
+
+
+class CommandDecisionDateRange(BaseModel):
+    start: str = ""
+    end: str = ""
+
+
+class CommandDecisionPatchFields(BaseModel):
+    title: str | None = None
+    date: str | None = None
+    time: str | None = None
+    estimated_minutes: int | None = Field(default=None, alias="estimatedMinutes")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CommandDecisionParams(BaseModel):
+    title: str | None = None
+    date: str | None = None
+    date_range: CommandDecisionDateRange | None = Field(default=None, alias="dateRange")
+    time: str | None = None
+    estimated_minutes: int | None = Field(default=None, alias="estimatedMinutes")
+    target_index: int | None = Field(default=None, alias="targetIndex")
+    query: str | None = None
+    refinement_instruction: str | None = Field(default=None, alias="refinementInstruction")
+    patch_fields: CommandDecisionPatchFields | None = Field(default=None, alias="patchFields")
+    note_text: str | None = Field(default=None, alias="noteText")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CommandDecision(BaseModel):
+    intent: CommandDecisionIntent
+    confidence: float = Field(default=0, ge=0, le=1)
+    target_type: CommandDecisionTargetType = Field(default="unknown", alias="targetType")
+    action: CommandDecisionAction = "answer"
+    extracted_params: CommandDecisionParams = Field(default_factory=CommandDecisionParams, alias="extractedParams")
+    needs_confirmation: bool = Field(default=False, alias="needsConfirmation")
+    needs_clarification: bool = Field(default=False, alias="needsClarification")
+    clarification_question: str | None = Field(default=None, alias="clarificationQuestion")
+    decision_summary: str = Field(default="", alias="decisionSummary")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CommandChatRequest(BaseModel):

@@ -16,6 +16,7 @@ from ..schemas import (
     GoalPlanOut,
     GoalPlanRequest,
     LearningResource,
+    ModelUsage,
     PhaseItem,
     PlanFitCheck,
     PlanCreate,
@@ -40,6 +41,7 @@ from .planning_quality import (
     build_density_policy,
     detect_plan_horizon,
     validate_structured_plan_quality,
+    with_demo_quality_metrics,
 )
 from .rag import RagService
 from .structured_goal_plan import (
@@ -259,6 +261,36 @@ OFFICIAL_RESOURCE_DOMAINS = {
     "sqlite.org",
     "developer.mozilla.org",
 }
+
+
+def _model_usage_from_result(result, task_type: str) -> ModelUsage:
+    usage = result.usage or {}
+    return ModelUsage(
+        provider=result.provider,
+        model=result.model,
+        promptTokens=usage.get("promptTokens"),
+        completionTokens=usage.get("completionTokens"),
+        totalTokens=usage.get("totalTokens"),
+        latencyMs=result.latency_ms,
+        mode="llm",
+        taskType=task_type,
+        fallbackUsed=getattr(result, "fallback_used", None),
+        localFallbackAllowed=getattr(result, "local_fallback_allowed", None),
+        attempts=getattr(result, "attempts", None) or [],
+    )
+
+
+def _local_model_usage(client: LlmClient, task_type: str, error: object | None = None) -> ModelUsage:
+    attempts = getattr(error, "attempts", None) or []
+    return ModelUsage(
+        provider=client.settings.provider,
+        model=client.settings.model,
+        mode="local_fallback",
+        taskType=task_type,
+        fallbackUsed=True if attempts else None,
+        localFallbackAllowed=getattr(error, "local_fallback_allowed", None),
+        attempts=attempts,
+    )
 
 
 def _clean_text(value: object, max_length: int = 500) -> str:
@@ -984,6 +1016,7 @@ def _repair_goal_plan(
         temperature=0.15,
         timeout_seconds=_goal_plan_timeout(llm_client.settings.timeout_seconds),
         response_format_json=True,
+        task_type="plan_generation",
     )
     parsed = _json_object(result.content) if result else None
     if not parsed:
@@ -1053,6 +1086,12 @@ class PlanningService:
             temperature=0.2,
             timeout_seconds=_goal_plan_timeout(llm_client.settings.timeout_seconds),
             response_format_json=True,
+            task_type="plan_generation",
+        )
+        model_usage = (
+            _model_usage_from_result(llm_result, "plan_generation")
+            if llm_result
+            else _local_model_usage(llm_client, "plan_generation", llm_error)
         )
 
         mode = "mock"
@@ -1063,7 +1102,10 @@ class PlanningService:
         error_message = None
         base_url_host = None
         parsed = _json_object(llm_result.content) if llm_result else None
+        if not parsed and llm_error and llm_error.local_fallback_allowed is False:
+            raise RuntimeError(llm_error.message)
         quality_status = "local_fallback"
+        repair_attempted = False
         if parsed:
             mode = "llm"
             provider = llm_result.provider if llm_result else None
@@ -1078,6 +1120,7 @@ class PlanningService:
             if quality_report.ok:
                 quality_status = "passed"
             else:
+                repair_attempted = True
                 repaired = _repair_goal_plan(
                     llm_client,
                     payload=payload,
@@ -1137,6 +1180,16 @@ class PlanningService:
             summary = structured_plan.goal_description
         source_type = _goal_plan_source_type(mode, quality_status, str(source_grounding["sourceType"]))
         local_relevance = str(source_grounding["localRelevance"])
+        fallback_used = quality_status == "local_fallback" or mode != "llm"
+        quality_report = with_demo_quality_metrics(
+            quality_report,
+            horizon=horizon,
+            quality_status=quality_status,
+            source_type=source_type,
+            local_relevance=local_relevance,
+            repair_attempted=repair_attempted,
+            fallback_used=fallback_used,
+        )
 
         plan_id = str(uuid4())
         with get_conn() as conn:
@@ -1182,6 +1235,7 @@ class PlanningService:
             qualityStatus=quality_status,
             sourceType=source_type,
             localRelevance=local_relevance,
+            modelUsage=model_usage,
         )
 
     def refine_task(self, payload: RefineTaskRequest) -> RefinedTask:
@@ -1237,9 +1291,12 @@ class PlanningService:
             temperature=0.2,
             timeout_seconds=min(max(llm_client.settings.timeout_seconds, 30), 60),
             response_format_json=True,
+            task_type="task_refinement",
         )
 
         parsed = _json_object(llm_result.content) if llm_result else None
+        if not parsed and llm_error and llm_error.local_fallback_allowed is False:
+            raise RuntimeError(llm_error.message)
         if parsed:
             try:
                 refined = _refined_task_from_parsed(parsed, payload)
@@ -1303,6 +1360,7 @@ class PlanningService:
             ),
             max_tokens=1800,
             temperature=0.2,
+            task_type="chat",
         )
 
         mode = "mock"

@@ -71,6 +71,22 @@ export interface PlanQualityIssue {
   severity: 'warning' | 'error';
 }
 
+export interface PlanQualityMetrics {
+  durationDays?: number;
+  totalTasks?: number;
+  milestoneCount?: number;
+  coveredWeekCount?: number;
+  dateSpanDays?: number;
+  weakTaskCount?: number;
+  missingDueDateCount?: number;
+  outOfRangeDueDateCount?: number;
+  repairAttempted?: boolean;
+  fallbackUsed?: boolean;
+  qualityStatus?: PlanQualityStatus;
+  sourceType?: PlanSourceType;
+  localRelevance?: LocalRelevance;
+}
+
 export interface PlanQualityReport {
   ok: boolean;
   score: number;
@@ -79,6 +95,7 @@ export interface PlanQualityReport {
   coveredWeekCount: number;
   dateSpanDays: number;
   issues: PlanQualityIssue[];
+  metrics?: PlanQualityMetrics;
 }
 
 export interface RuntimePlanProposal {
@@ -444,14 +461,51 @@ export interface PlannerResponse {
   results?: Array<{ case: string; score: number; reason: string }>;
 }
 
+export type AiProvider = 'mock' | 'deepseek' | 'kimi' | 'zhipu_glm' | 'openai' | 'custom';
+export type ModelRoutingTaskType =
+  | 'command_decision'
+  | 'plan_generation'
+  | 'task_refinement'
+  | 'calendar_patch'
+  | 'note_query'
+  | 'note_write'
+  | 'chat'
+  | 'model_knowledge';
+
+export interface ModelRouteAttempt {
+  provider: string;
+  model?: string;
+  status: 'success' | 'error' | 'skipped';
+  errorType?: string;
+  latencyMs?: number;
+}
+
+export interface AiModelRoutingRule {
+  taskType: ModelRoutingTaskType;
+  primaryProvider: AiProvider;
+  fallbackProviders: AiProvider[];
+  localFallbackEnabled: boolean;
+  updatedAt?: string;
+}
+
+export interface AiSavedProvider {
+  provider: AiProvider;
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+  updatedAt: string;
+}
+
 export interface AiSettings {
-  provider: 'mock' | 'deepseek' | 'openai' | 'custom';
+  provider: AiProvider;
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
   temperature: number;
   timeoutSeconds: number;
   updatedAt: string;
+  savedProviders: AiSavedProvider[];
+  routingRules?: AiModelRoutingRule[];
 }
 
 export interface AiSettingsInput {
@@ -461,6 +515,10 @@ export interface AiSettingsInput {
   apiKey?: string;
   temperature: number;
   timeoutSeconds: number;
+}
+
+export interface AiModelRoutingInput {
+  routingRules: AiModelRoutingRule[];
 }
 
 export interface AiSettingsTestResult {

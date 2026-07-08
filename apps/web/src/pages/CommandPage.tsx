@@ -27,6 +27,7 @@ export function CommandPage({ t }: CommandPageProps) {
         messages={command.messages}
         sending={command.sending}
         onApprove={(actionId, decision) => commandAgentActions.approveAction(actionId, decision, t)}
+        onSend={(value) => commandAgentActions.sendCommand(value, t)}
         t={t}
       />
       <CommandComposer

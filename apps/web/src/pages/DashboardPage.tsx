@@ -177,7 +177,7 @@ export function DashboardPage(props: DashboardPageProps) {
   );
 }
 
-function RuntimeProposalPreview(props: {
+export function RuntimeProposalPreview(props: {
   proposal?: RuntimePlanProposal;
   isRunning: boolean;
   status: string;
@@ -195,8 +195,11 @@ function RuntimeProposalPreview(props: {
     ? t('dashboard.runtimeProposalModeLocalFallback')
     : t('dashboard.runtimeProposalModeLlm');
   const qualityLabel = proposal ? runtimeProposalQualityLabel(proposal, t) : '';
+  const metrics = proposal?.qualityReport?.metrics;
   const horizonDays = proposal?.planHorizon?.durationDays ?? proposal?.structuredPlan.durationDays;
   const coverageRange = proposal ? runtimeProposalCoverageRange(proposal) : '';
+  const sourceLabel = proposal ? runtimeProposalSourceLabel(proposal.sourceType, t) : '';
+  const notice = proposal ? runtimeProposalNotice(proposal, t) : '';
 
   return (
     <div className="runtime-proposal-preview">
@@ -229,8 +232,17 @@ function RuntimeProposalPreview(props: {
             <span>{t('dashboard.runtimeProposalMode')}: {modeLabel}</span>
             <span>{t('dashboard.runtimeProposalQuality')}: {qualityLabel}</span>
             {horizonDays ? <span>{t('dashboard.runtimeProposalHorizon')}: {horizonDays} {t('dashboard.runtimeProposalDays')}</span> : null}
+            <span>{t('dashboard.runtimeProposalTaskCount')}: {metrics?.totalTasks ?? proposal.qualityReport?.totalTasks ?? tasks.length}</span>
+            {(metrics?.coveredWeekCount ?? proposal.qualityReport?.coveredWeekCount) !== undefined ? (
+              <span>{t('dashboard.runtimeProposalCoveredWeeks')}: {metrics?.coveredWeekCount ?? proposal.qualityReport?.coveredWeekCount}</span>
+            ) : null}
+            {(metrics?.dateSpanDays ?? proposal.qualityReport?.dateSpanDays) !== undefined ? (
+              <span>{t('dashboard.runtimeProposalDateSpan')}: {metrics?.dateSpanDays ?? proposal.qualityReport?.dateSpanDays} {t('dashboard.runtimeProposalDays')}</span>
+            ) : null}
+            {sourceLabel ? <span>{t('dashboard.runtimeProposalSourceType')}: {sourceLabel}</span> : null}
             {coverageRange ? <span>{t('dashboard.runtimeProposalCoverage')}: {coverageRange}</span> : null}
           </div>
+          {notice ? <p className="runtime-proposal-summary">{notice}</p> : null}
         </>
       )}
       {status && <p className={`inline-status ${writing ? 'calendar-write-status' : ''}`}>{status}</p>}
@@ -259,6 +271,21 @@ function runtimeProposalQualityLabel(proposal: RuntimePlanProposal, t: (key: str
   if (proposal.qualityStatus === 'repaired') return t('dashboard.runtimeProposalQualityRepaired');
   if (proposal.qualityStatus === 'local_fallback' || proposal.mode === 'local_fallback') return t('dashboard.runtimeProposalQualityLocalFallback');
   return t('dashboard.runtimeProposalQualityPassed');
+}
+
+function runtimeProposalSourceLabel(sourceType: RuntimePlanProposal['sourceType'], t: (key: string) => string): string {
+  if (sourceType === 'local_context') return t('dashboard.runtimeProposalSourceLocal');
+  if (sourceType === 'local_fallback') return t('dashboard.runtimeProposalSourceFallback');
+  if (sourceType === 'insufficient_context') return t('dashboard.runtimeProposalSourceInsufficient');
+  if (sourceType === 'model_knowledge') return t('dashboard.runtimeProposalSourceModel');
+  return '';
+}
+
+function runtimeProposalNotice(proposal: RuntimePlanProposal, t: (key: string) => string): string {
+  if (proposal.sourceType === 'insufficient_context') return t('dashboard.runtimeProposalNoticeInsufficient');
+  if (proposal.qualityStatus === 'repaired') return t('dashboard.runtimeProposalNoticeRepaired');
+  if (proposal.qualityStatus === 'local_fallback' || proposal.mode === 'local_fallback') return t('dashboard.runtimeProposalNoticeFallback');
+  return '';
 }
 
 function runtimeProposalCoverageRange(proposal: RuntimePlanProposal): string {

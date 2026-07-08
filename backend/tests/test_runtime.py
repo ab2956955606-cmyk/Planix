@@ -122,6 +122,10 @@ def test_runtime_tools_are_readonly_or_preview_and_do_not_write_plans(client):
     assert proposal["memoryContextSummary"]
     assert proposal["planHorizon"]["durationDays"] >= 1
     assert proposal["qualityReport"]["ok"] is True
+    assert proposal["qualityReport"]["metrics"]["durationDays"] == proposal["planHorizon"]["durationDays"]
+    assert proposal["qualityReport"]["metrics"]["totalTasks"] == proposal["qualityReport"]["totalTasks"]
+    assert proposal["qualityReport"]["metrics"]["qualityStatus"] in {"passed", "repaired", "local_fallback"}
+    assert proposal["qualityReport"]["metrics"]["sourceType"] in {"local_context", "model_knowledge", "local_fallback", "insufficient_context"}
     assert proposal["qualityStatus"] in {"passed", "repaired", "local_fallback"}
     assert proposal["sourceType"] in {"local_context", "model_knowledge", "local_fallback", "insufficient_context"}
     assert proposal["localRelevance"] in {"high", "medium", "low"}

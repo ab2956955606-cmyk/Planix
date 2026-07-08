@@ -437,6 +437,31 @@ function normalizeQualityReport(value: unknown): RuntimePlanProposal['qualityRep
       }))
       .filter((issue) => issue.code || issue.message)
     : [];
+  const rawMetrics = isRecord(value.metrics) ? value.metrics : undefined;
+  const qualityStatus = ['passed', 'repaired', 'local_fallback'].includes(String(rawMetrics?.qualityStatus))
+    ? rawMetrics?.qualityStatus as PlanQualityStatus
+    : undefined;
+  const sourceType = ['local_context', 'model_knowledge', 'local_fallback', 'insufficient_context'].includes(String(rawMetrics?.sourceType))
+    ? rawMetrics?.sourceType as RuntimePlanProposal['sourceType']
+    : undefined;
+  const localRelevance = ['high', 'medium', 'low'].includes(String(rawMetrics?.localRelevance))
+    ? rawMetrics?.localRelevance as RuntimePlanProposal['localRelevance']
+    : undefined;
+  const metrics = rawMetrics ? {
+    durationDays: positiveNumber(rawMetrics.durationDays),
+    totalTasks: positiveNumber(rawMetrics.totalTasks),
+    milestoneCount: positiveNumber(rawMetrics.milestoneCount),
+    coveredWeekCount: positiveNumber(rawMetrics.coveredWeekCount),
+    dateSpanDays: positiveNumber(rawMetrics.dateSpanDays),
+    weakTaskCount: positiveNumber(rawMetrics.weakTaskCount),
+    missingDueDateCount: positiveNumber(rawMetrics.missingDueDateCount),
+    outOfRangeDueDateCount: positiveNumber(rawMetrics.outOfRangeDueDateCount),
+    repairAttempted: typeof rawMetrics.repairAttempted === 'boolean' ? rawMetrics.repairAttempted : undefined,
+    fallbackUsed: typeof rawMetrics.fallbackUsed === 'boolean' ? rawMetrics.fallbackUsed : undefined,
+    qualityStatus,
+    sourceType,
+    localRelevance
+  } : undefined;
   return {
     ok: value.ok,
     score,
@@ -444,7 +469,8 @@ function normalizeQualityReport(value: unknown): RuntimePlanProposal['qualityRep
     milestoneCount,
     coveredWeekCount,
     dateSpanDays,
-    issues
+    issues,
+    metrics
   };
 }
 

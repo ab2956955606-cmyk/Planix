@@ -34,11 +34,16 @@ interface PlanSearchResultsCardProps {
   materials?: unknown;
   goalHistory?: unknown;
   monthNotes?: unknown;
+  onSend?: (value: string) => void;
   t: (key: string) => string;
 }
 
 function listOf<T>(value: unknown): T[] {
   return Array.isArray(value) ? value.filter((item): item is T => Boolean(item && typeof item === 'object')) : [];
+}
+
+function formatIndexMessage(template: string, index: number): string {
+  return template.replace('{index}', String(index + 1));
 }
 
 export function PlanSearchResultsCard({
@@ -47,6 +52,7 @@ export function PlanSearchResultsCard({
   materials,
   goalHistory,
   monthNotes,
+  onSend,
   t
 }: PlanSearchResultsCardProps) {
   const plans = listOf<CalendarPlanResult>(calendarPlans);
@@ -69,10 +75,29 @@ export function PlanSearchResultsCard({
           <ul className="command-plan-list">
             {plans.map((plan, index) => (
               <li key={plan.id || `${plan.title}-${index}`}>
-                <span>{index + 1}. {plan.title || t('command.untitledPlan')}</span>
-                <small>
-                  {plan.date || t('command.noDate')} {plan.time || '09:00'} - {plan.estimatedMinutes || 30} {t('command.minutes')} - {plan.done ? t('common.done') : t('common.pending')}
-                </small>
+                <div className="command-result-title">
+                  <span>{index + 1}. {plan.title || t('command.untitledPlan')}</span>
+                  <em>{plan.done ? t('common.done') : t('common.pending')}</em>
+                </div>
+                <dl className="command-result-meta">
+                  <div>
+                    <dt>{t('command.resultDate')}</dt>
+                    <dd>{plan.date || t('command.noDate')}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('command.resultTime')}</dt>
+                    <dd>{plan.time || '09:00'}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('command.resultDuration')}</dt>
+                    <dd>{plan.estimatedMinutes || 30} {t('command.minutes')}</dd>
+                  </div>
+                </dl>
+                <div className="command-row-actions" aria-label={t('command.resultActions')}>
+                  <button type="button" disabled={!onSend} onClick={() => onSend?.(formatIndexMessage(t('command.actionRefinePlanMessage'), index))}>{t('command.actionRefine')}</button>
+                  <button type="button" disabled={!onSend} onClick={() => onSend?.(formatIndexMessage(t('command.actionModifyPlanMessage'), index))}>{t('command.actionModify')}</button>
+                  <button type="button" disabled={!onSend} onClick={() => onSend?.(formatIndexMessage(t('command.actionDeletePlanMessage'), index))}>{t('command.actionDelete')}</button>
+                </div>
               </li>
             ))}
           </ul>

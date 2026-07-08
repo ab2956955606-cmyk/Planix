@@ -18,6 +18,7 @@ import {
 import type {
   AiSettings,
   AiSettingsInput,
+  AiModelRoutingRule,
   AppliedPlan,
   AppData,
   DailyReviewResponse,
@@ -33,6 +34,7 @@ import type {
   RefinePlanContext,
   RefinedTask,
   Language,
+  ModelRoutingTaskType,
   StructuredGoalPlan
 } from '../types';
 import {
@@ -45,8 +47,10 @@ import {
   createGoalPlan,
   createRagDocument,
   deleteRagDocument,
+  deleteAiSettingsKey,
   evaluatePlanner,
   fetchAiSettings,
+  fetchBackendHealth,
   fetchDailyReview,
   fetchMemoryCacheStats,
   fetchRagDocuments,
@@ -56,11 +60,19 @@ import {
   clearPreferenceMemory,
   clearRuntimeRuns,
   saveAiSettings,
+  saveAiSettingsRouting,
   saveMemory,
   testAiSettings,
   refineTask,
   uploadRagDocument
 } from '../lib/api';
+import {
+  normalizeBaseUrlForCompare,
+  providerDefaultBaseUrls,
+  providerDefaultModels,
+  providerModelRecommendations,
+  upgradeLegacyKimiDefaults
+} from '../lib/aiSettingsDefaults';
 import { refineTaskErrorText } from '../lib/refineTaskErrors';
 import { RefinedTaskPreview } from './RefinedTaskPreview';
 
@@ -89,8 +101,88 @@ const defaultSettings: AiSettings = {
   hasApiKey: false,
   temperature: 0.3,
   timeoutSeconds: 40,
-  updatedAt: ''
+  updatedAt: '',
+  savedProviders: [],
+  routingRules: []
 };
+
+type AiProvider = AiSettings['provider'];
+type RoutedProvider = Exclude<AiProvider, 'mock'>;
+
+const routableProviders: RoutedProvider[] = ['deepseek', 'kimi', 'zhipu_glm', 'openai', 'custom'];
+const routingTaskTypes: ModelRoutingTaskType[] = [
+  'command_decision',
+  'plan_generation',
+  'task_refinement',
+  'calendar_patch',
+  'note_query',
+  'note_write',
+  'model_knowledge',
+  'chat'
+];
+
+function providerLabel(provider: AiProvider, t: (key: string) => string): string {
+  const labels: Record<AiProvider, string> = {
+    deepseek: t('legacy.providerDeepSeek'),
+    kimi: t('legacy.providerKimi'),
+    zhipu_glm: t('legacy.providerZhipu'),
+    openai: t('legacy.providerOpenAI'),
+    custom: t('legacy.providerCustom'),
+    mock: t('legacy.providerMock')
+  };
+  return labels[provider] || provider;
+}
+
+function routingTaskLabel(taskType: ModelRoutingTaskType, t: (key: string) => string): string {
+  const labels: Record<ModelRoutingTaskType, string> = {
+    command_decision: t('legacy.routingTaskCommandDecision'),
+    plan_generation: t('legacy.routingTaskPlanGeneration'),
+    task_refinement: t('legacy.routingTaskRefinement'),
+    calendar_patch: t('legacy.routingTaskCalendarPatch'),
+    note_query: t('legacy.routingTaskNoteQuery'),
+    note_write: t('legacy.routingTaskNoteWrite'),
+    model_knowledge: t('legacy.routingTaskModelKnowledge'),
+    chat: t('legacy.routingTaskChat')
+  };
+  return labels[taskType] || taskType;
+}
+
+function routingPrimaryForSettings(settings: AiSettings): RoutedProvider {
+  return settings.provider === 'mock' ? 'deepseek' : settings.provider;
+}
+
+function recommendedRoutingRules(settings: AiSettings): AiModelRoutingRule[] {
+  const primary = routingPrimaryForSettings(settings);
+  const fallbackProviders: AiProvider[] = primary === 'deepseek' ? [] : ['deepseek'];
+  return routingTaskTypes.map((taskType) => ({
+    taskType,
+    primaryProvider: primary,
+    fallbackProviders,
+    localFallbackEnabled: true
+  }));
+}
+
+function normalizedRoutingRules(settings: AiSettings): AiModelRoutingRule[] {
+  const existing = new Map((settings.routingRules || []).map((rule) => [rule.taskType, rule]));
+  const defaults = recommendedRoutingRules(settings);
+  return defaults.map((defaultRule) => {
+    const existingRule = existing.get(defaultRule.taskType);
+    if (!existingRule || existingRule.primaryProvider === 'mock') return defaultRule;
+    const fallbacks = (existingRule.fallbackProviders || [])
+      .filter((provider): provider is RoutedProvider => provider !== 'mock' && routableProviders.includes(provider as RoutedProvider))
+      .filter((provider, index, providers) => provider !== existingRule.primaryProvider && providers.indexOf(provider) === index)
+      .slice(0, 2);
+    return {
+      ...defaultRule,
+      ...existingRule,
+      fallbackProviders: fallbacks
+    };
+  });
+}
+
+function isAiProvider(value: unknown): value is AiProvider {
+  return typeof value === 'string' && value in providerDefaultModels;
+}
 
 function apiDetailToText(detail: unknown): string {
   if (!detail) return '';
@@ -110,6 +202,36 @@ function apiDetailToText(detail: unknown): string {
     return apiDetailToText(record.detail ?? record.message);
   }
   return String(detail);
+}
+
+function apiDetailRecord(detail: unknown): Record<string, unknown> | null {
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null;
+  const record = detail as Record<string, unknown>;
+  const nested = record.detail;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    return nested as Record<string, unknown>;
+  }
+  return record;
+}
+
+function modelSettingsErrorMessage(errorType: string, t: (key: string) => string): string {
+  const errorMessages: Record<string, string> = {
+    no_key: t('legacy.noApiKey'),
+    invalid_key_format: t('legacy.invalidKeyFormat'),
+    auth_error: t('legacy.authError'),
+    insufficient_balance: t('legacy.insufficientBalance'),
+    bad_model: t('legacy.badModel'),
+    bad_base_url: t('legacy.badBaseUrl'),
+    bad_request: t('legacy.badRequest'),
+    timeout: t('legacy.timeoutError'),
+    network_error: t('legacy.networkError'),
+    server_error: t('legacy.serverError'),
+    rate_limit: t('legacy.rateLimited'),
+    rate_limited: t('legacy.rateLimited'),
+    invalid_model_output: t('legacy.modelTestFailed'),
+    model_output_truncated: t('legacy.modelTestFailed')
+  };
+  return errorMessages[errorType] || '';
 }
 
 function isTimeoutLikeError(error: unknown): boolean {
@@ -243,7 +365,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
   const [settings, setSettings] = useState<AiSettings>(defaultSettings);
   const [apiKey, setApiKey] = useState('');
   const [settingsStatus, setSettingsStatus] = useState('');
-  const [settingsBusy, setSettingsBusy] = useState<'save' | 'test' | 'clear' | ''>('');
+  const [settingsBusy, setSettingsBusy] = useState<'save' | 'test' | 'clear' | 'routing' | ''>('');
   const [reviewStatus, setReviewStatus] = useState('');
   const [memoryStats, setMemoryStats] = useState<MemoryCacheStats | null>(null);
   const [memoryResetResult, setMemoryResetResult] = useState<MemoryResetResult | null>(null);
@@ -282,8 +404,9 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     fetchAiSettings()
       .then((loaded) => {
         if (cancelled) return;
-        setSettings(loaded);
-        onSettingsChange?.(loaded);
+        const normalized = upgradeLegacyKimiDefaults(loaded);
+        setSettings(normalized);
+        onSettingsChange?.(normalized);
       })
       .catch(() => undefined);
     return () => {
@@ -672,10 +795,34 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     if (err instanceof ApiNetworkError) {
       setSettingsStatus(err.message || t('legacy.backendOffline'));
     } else if (err instanceof ApiHttpError) {
+      const detailRecord = apiDetailRecord(err.detail);
+      const errorType = typeof detailRecord?.errorType === 'string' ? detailRecord.errorType : '';
+      const provider = detailRecord?.provider;
+      const model = detailRecord?.model;
+      const modelError = errorType ? modelSettingsErrorMessage(errorType, t) : '';
+      if (err.status === 400 && modelError) {
+        const isKimiBadModel = errorType === 'bad_model' && provider === 'kimi';
+        const isKimiBadRequest = errorType === 'bad_request' && provider === 'kimi';
+        const contextParts = [
+          isAiProvider(provider) ? providerLabel(provider, t) : '',
+          typeof model === 'string' ? model : ''
+        ].filter(Boolean);
+        const context = contextParts.length ? ` (${contextParts.join(' / ')})` : '';
+        const suggestion = isKimiBadModel
+          ? ` ${t('legacy.kimiModelSuggestion')}`
+          : isKimiBadRequest ? ` ${t('legacy.kimiRequestSuggestion')}` : '';
+        setSettingsStatus(`${t('legacy.settingsValidationFailed')}: ${modelError}${context}${suggestion}`);
+        return;
+      }
       const detailStr = apiDetailToText(err.detail);
       const detailDisplay = detailStr ? `: ${detailStr}` : '';
       if (err.status === 422) {
-        setSettingsStatus(detailStr.includes('plain ASCII without spaces') ? t('legacy.invalidKeyFormat') : `${t('legacy.settingsFieldInvalid')}${detailDisplay}`);
+        const looksLikeStaleProviderSchema = detailStr.includes("Input should be 'mock', 'deepseek', 'openai' or 'custom'");
+        setSettingsStatus(
+          looksLikeStaleProviderSchema
+            ? t('legacy.staleProviderBackend')
+            : detailStr.includes('plain ASCII without spaces') ? t('legacy.invalidKeyFormat') : `${t('legacy.settingsFieldInvalid')}${detailDisplay}`
+        );
       } else if (err.status === 500) {
         setSettingsStatus(`${t('legacy.backendSaveFailed')}${detailDisplay}`);
       } else {
@@ -691,13 +838,14 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     if (!validated) return null;
     try {
       const saved = await saveAiSettings(buildSettingsPayload(validated, options));
-      setSettings(saved);
-      onSettingsChange?.(saved);
+      const normalized = upgradeLegacyKimiDefaults(saved);
+      setSettings(normalized);
+      onSettingsChange?.(normalized);
       setApiKey('');
       if (options.showSuccess) {
         setSettingsStatus(options.clearKey ? t('legacy.keyCleared') : t('legacy.settingsSaved'));
       }
-      return saved;
+      return normalized;
     } catch (err) {
       handleSettingsSaveError(err);
       return null;
@@ -714,11 +862,36 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     }
   }
 
-  async function clearSavedApiKey() {
+  async function saveRoutingSettings(routingRules: AiModelRoutingRule[], options: { showSuccess?: boolean } = {}) {
+    setSettingsStatus('');
+    setSettingsBusy('routing');
+    try {
+      const saved = await saveAiSettingsRouting({ routingRules });
+      const normalized = upgradeLegacyKimiDefaults(saved);
+      setSettings(normalized);
+      onSettingsChange?.(normalized);
+      if (options.showSuccess) {
+        setSettingsStatus(t('legacy.routingSaved'));
+      }
+    } catch (err) {
+      handleSettingsSaveError(err);
+    } finally {
+      setSettingsBusy('');
+    }
+  }
+
+  async function clearSavedApiKey(provider: AiProvider = settings.provider) {
     setSettingsStatus('');
     setSettingsBusy('clear');
     try {
-      await saveSettingsToBackend({ clearKey: true, showSuccess: true });
+      const saved = await deleteAiSettingsKey(provider);
+      const normalized = upgradeLegacyKimiDefaults(saved);
+      setSettings(normalized);
+      onSettingsChange?.(normalized);
+      setApiKey('');
+      setSettingsStatus(t('legacy.keyCleared'));
+    } catch (err) {
+      handleSettingsSaveError(err);
     } finally {
       setSettingsBusy('');
     }
@@ -734,21 +907,8 @@ export function AIWorkspace(props: AIWorkspaceProps) {
       if (test.ok) {
         setSettingsStatus(test.message);
       } else {
-        const errorMessages: Record<string, string> = {
-          no_key: t('legacy.noApiKey'),
-          invalid_key_format: t('legacy.invalidKeyFormat'),
-          auth_error: t('legacy.authError'),
-          insufficient_balance: t('legacy.insufficientBalance'),
-          bad_model: t('legacy.badModel'),
-          bad_base_url: t('legacy.badBaseUrl'),
-          bad_request: t('legacy.badRequest'),
-          timeout: t('legacy.timeoutError'),
-          network_error: t('legacy.networkError'),
-          server_error: t('legacy.serverError'),
-          rate_limited: t('legacy.rateLimited')
-        };
         const errorType = test.errorType ?? '';
-        setSettingsStatus(errorMessages[errorType] || test.message || t('legacy.modelTestFailed'));
+        setSettingsStatus(modelSettingsErrorMessage(errorType, t) || test.message || t('legacy.modelTestFailed'));
       }
     } catch (err) {
       if (err instanceof ApiNetworkError) {
@@ -816,6 +976,7 @@ export function AIWorkspace(props: AIWorkspaceProps) {
             setApiKey={setApiKey}
             clearSettingsStatus={() => setSettingsStatus('')}
             saveModelSettings={saveModelSettings}
+            saveRoutingSettings={saveRoutingSettings}
             clearSavedApiKey={clearSavedApiKey}
             testModel={testModel}
             settingsBusy={settingsBusy}
@@ -1390,15 +1551,41 @@ function ModelSettings(props: {
   setApiKey: (value: string) => void;
   clearSettingsStatus: () => void;
   saveModelSettings: () => void;
-  clearSavedApiKey: () => void;
+  saveRoutingSettings: (routingRules: AiModelRoutingRule[], options?: { showSuccess?: boolean }) => void;
+  clearSavedApiKey: (provider?: AiProvider) => void;
   testModel: () => void;
-  settingsBusy: 'save' | 'test' | 'clear' | '';
+  settingsBusy: 'save' | 'test' | 'clear' | 'routing' | '';
   t: (key: string) => string;
 }) {
-  const { settings, apiKey, settingsStatus, setSettings, setApiKey, clearSettingsStatus, saveModelSettings, clearSavedApiKey, testModel, settingsBusy, t } = props;
+  const { settings, apiKey, settingsStatus, setSettings, setApiKey, clearSettingsStatus, saveModelSettings, saveRoutingSettings, clearSavedApiKey, testModel, settingsBusy, t } = props;
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [backendHealth, setBackendHealth] = useState<Awaited<ReturnType<typeof fetchBackendHealth>> | null>(null);
   const hasConfiguredKey = settings.provider !== 'mock' && settings.hasApiKey;
-  const recommendedModels = ['deepseek-v4-flash', 'deepseek-v4-pro'];
+  const savedProviderConfigs = settings.savedProviders || [];
+  const savedKeyProviders = savedProviderConfigs.filter((item) => item.hasApiKey);
+  const recommendedModels = providerModelRecommendations[settings.provider] || providerModelRecommendations.custom;
+  const routingRules = normalizedRoutingRules(settings);
+  const savedKeyByProvider = new Map(savedProviderConfigs.map((item) => [item.provider, item.hasApiKey]));
+  const apiKeyLabel = (() => {
+    if (settings.provider === 'kimi') return t('legacy.kimiApiKey');
+    if (settings.provider === 'zhipu_glm') return t('legacy.zhipuApiKey');
+    if (settings.provider === 'deepseek') return t('legacy.deepseekApiKey');
+    if (settings.provider === 'openai') return t('legacy.openaiApiKey');
+    return t('legacy.apiKey');
+  })();
+  useEffect(() => {
+    let cancelled = false;
+    fetchBackendHealth()
+      .then((health) => {
+        if (!cancelled) setBackendHealth(health);
+      })
+      .catch(() => {
+        if (!cancelled) setBackendHealth(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const updateSettings = (updater: (settings: AiSettings) => AiSettings) => {
     clearSettingsStatus();
     setSettings(updater);
@@ -1407,6 +1594,59 @@ function ModelSettings(props: {
     clearSettingsStatus();
     setApiKey(value);
   };
+  const switchProvider = (provider: AiProvider) => {
+    updateSettings((current) => {
+      const savedConfig = (current.savedProviders || []).find((item) => item.provider === provider);
+      const currentBaseUrl = normalizeBaseUrlForCompare(current.baseUrl);
+      const oldDefaultBaseUrl = normalizeBaseUrlForCompare(providerDefaultBaseUrls[current.provider] || '');
+      const nextDefaultBaseUrl = providerDefaultBaseUrls[provider];
+      const shouldUseProviderDefault = provider !== 'custom' && (!currentBaseUrl || currentBaseUrl === oldDefaultBaseUrl);
+      const knownDefaultModels = Object.values(providerDefaultModels);
+      const shouldUseModelDefault = !current.model.trim() || knownDefaultModels.includes(current.model.trim());
+      return {
+        ...current,
+        provider,
+        baseUrl: savedConfig?.baseUrl || (shouldUseProviderDefault ? nextDefaultBaseUrl : current.baseUrl),
+        model: savedConfig?.model || (shouldUseModelDefault ? providerDefaultModels[provider] : current.model),
+        hasApiKey: Boolean(savedConfig?.hasApiKey)
+      };
+    });
+  };
+  const providerKeyHint = (provider: AiProvider): string => {
+    if (provider === 'mock') return t('legacy.routingLocalFallback');
+    return savedKeyByProvider.get(provider) ? t('legacy.hasKey') : t('legacy.routingMissingKey');
+  };
+  const updateRoutingRule = (
+    taskType: ModelRoutingTaskType,
+    updater: (rule: AiModelRoutingRule) => AiModelRoutingRule
+  ) => {
+    updateSettings((current) => {
+      const rules = normalizedRoutingRules(current).map((rule) => {
+        if (rule.taskType !== taskType) return rule;
+        const next = updater(rule);
+        const fallbacks = (next.fallbackProviders || [])
+          .filter((provider) => provider !== 'mock' && provider !== next.primaryProvider)
+          .filter((provider, index, providers) => providers.indexOf(provider) === index)
+          .slice(0, 2);
+        return { ...next, fallbackProviders: fallbacks };
+      });
+      return { ...current, routingRules: rules };
+    });
+  };
+  const setRoutingFallback = (taskType: ModelRoutingTaskType, index: number, provider: AiProvider | '') => {
+    updateRoutingRule(taskType, (rule) => {
+      const fallbacks = [...(rule.fallbackProviders || [])];
+      if (provider) {
+        fallbacks[index] = provider;
+      } else {
+        fallbacks.splice(index, 1);
+      }
+      return { ...rule, fallbackProviders: fallbacks };
+    });
+  };
+  const restoreRecommendedRouting = () => {
+    updateSettings((current) => ({ ...current, routingRules: recommendedRoutingRules(current) }));
+  };
 
   return (
     <div className="model-settings">
@@ -1414,14 +1654,33 @@ function ModelSettings(props: {
         <span><Settings size={15} />{t('legacy.aiSettings')}</span>
         <strong>{hasConfiguredKey ? t('legacy.hasKey') : t('legacy.noKey')}</strong>
       </div>
+      <div className="provider-current">
+        <span>{t('legacy.currentProvider')}</span>
+        <strong>{providerLabel(settings.provider, t)} / {settings.model} / {hasConfiguredKey ? t('legacy.hasKey') : t('legacy.noKey')}</strong>
+      </div>
+      <div className="settings-title">
+        <span><PlugZap size={15} />{t('legacy.apiHealth')}</span>
+        <strong>{backendHealth?.version || t('legacy.backendOffline')}</strong>
+      </div>
+      {backendHealth?.features && (
+        <div className="runtime-proposal-meta">
+          {Object.entries(backendHealth.features)
+            .filter(([, enabled]) => enabled)
+            .map(([feature]) => (
+              <span key={feature}>{feature}</span>
+            ))}
+        </div>
+      )}
       <div className="settings-grid">
         <label>
           <span>{t('legacy.provider')}</span>
-          <select value={settings.provider} onChange={(event) => updateSettings((current) => ({ ...current, provider: event.target.value as AiSettings['provider'] }))}>
-            <option value="deepseek">DeepSeek</option>
-            <option value="openai">OpenAI</option>
-            <option value="custom">Custom</option>
-            <option value="mock">Mock</option>
+          <select value={settings.provider} onChange={(event) => switchProvider(event.target.value as AiProvider)}>
+            <option value="deepseek">{t('legacy.providerDeepSeek')}</option>
+            <option value="kimi">{t('legacy.providerKimi')}</option>
+            <option value="zhipu_glm">{t('legacy.providerZhipu')}</option>
+            <option value="openai">{t('legacy.providerOpenAI')}</option>
+            <option value="custom">{t('legacy.providerCustom')}</option>
+            <option value="mock">{t('legacy.providerMock')}</option>
           </select>
         </label>
         <label>
@@ -1441,7 +1700,7 @@ function ModelSettings(props: {
             <input
               value={settings.model}
               onChange={(event) => updateSettings((current) => ({ ...current, model: event.target.value }))}
-              placeholder="deepseek-v4-flash"
+              placeholder={providerDefaultModels[settings.provider]}
             />
             <button
               type="button"
@@ -1471,7 +1730,7 @@ function ModelSettings(props: {
           </div>
         </label>
         <label>
-          <span><KeyRound size={13} />{t('legacy.apiKey')}</span>
+          <span><KeyRound size={13} />{apiKeyLabel}</span>
           <input type="password" value={apiKey} onChange={(event) => updateApiKey(event.target.value)} placeholder={t('legacy.apiKeyPlaceholder')} />
         </label>
         <label>
@@ -1486,8 +1745,96 @@ function ModelSettings(props: {
       <div className="settings-actions">
         <button onClick={saveModelSettings} disabled={Boolean(settingsBusy)}><Save size={16} />{settingsBusy === 'save' ? t('legacy.savingSettings') : t('legacy.saveSettings')}</button>
         <button onClick={testModel} disabled={Boolean(settingsBusy)}><PlugZap size={16} />{settingsBusy === 'test' ? t('legacy.testingModel') : t('legacy.testModel')}</button>
-        <button onClick={clearSavedApiKey} disabled={Boolean(settingsBusy) || !hasConfiguredKey}><Trash2 size={16} />{settingsBusy === 'clear' ? t('legacy.clearingKey') : t('legacy.clearKey')}</button>
+        <button onClick={() => clearSavedApiKey(settings.provider)} disabled={Boolean(settingsBusy) || !hasConfiguredKey}><Trash2 size={16} />{settingsBusy === 'clear' ? t('legacy.clearingKey') : t('legacy.clearKey')}</button>
         {settingsStatus && <span>{settingsStatus}</span>}
+      </div>
+      <div className="saved-provider-keys">
+        <span>{t('legacy.savedApiKeys')}</span>
+        <div>
+          {savedKeyProviders.length ? savedKeyProviders.map((item) => (
+            <button
+              key={item.provider}
+              type="button"
+              className="saved-provider-key"
+              disabled={Boolean(settingsBusy)}
+              title={`${providerLabel(item.provider, t)} / ${item.model}`}
+              onClick={() => clearSavedApiKey(item.provider)}
+            >
+              <span>{providerLabel(item.provider, t)}</span>
+              <X size={13} aria-label={t('legacy.removeProviderKey')} />
+            </button>
+          )) : <em>{t('legacy.noSavedApiKeys')}</em>}
+        </div>
+      </div>
+      <div className="model-routing-settings">
+        <div className="settings-title">
+          <span><RotateCcw size={15} />{t('legacy.modelRouting')}</span>
+          <strong>{t('legacy.modelRoutingHint')}</strong>
+        </div>
+        <div className="routing-grid" role="table" aria-label={t('legacy.modelRouting')}>
+          <div className="routing-row routing-head" role="row">
+            <span>{t('legacy.routingTask')}</span>
+            <span>{t('legacy.routingPrimary')}</span>
+            <span>{t('legacy.routingFallbackOne')}</span>
+            <span>{t('legacy.routingFallbackTwo')}</span>
+            <span>{t('legacy.routingLocalFallback')}</span>
+          </div>
+          {routingRules.map((rule) => (
+            <div className="routing-row" role="row" key={rule.taskType}>
+              <strong>{routingTaskLabel(rule.taskType, t)}</strong>
+              <select
+                value={rule.primaryProvider}
+                onChange={(event) => updateRoutingRule(rule.taskType, (current) => ({
+                  ...current,
+                  primaryProvider: event.target.value as AiProvider
+                }))}
+              >
+                {routableProviders.map((provider) => (
+                  <option key={provider} value={provider}>
+                    {providerLabel(provider, t)} / {providerKeyHint(provider)}
+                  </option>
+                ))}
+              </select>
+              {[0, 1].map((index) => (
+                <select
+                  key={`${rule.taskType}-${index}`}
+                  value={rule.fallbackProviders[index] || ''}
+                  onChange={(event) => setRoutingFallback(rule.taskType, index, event.target.value as AiProvider | '')}
+                >
+                  <option value="">{t('legacy.routingNoFallback')}</option>
+                  {routableProviders.map((provider) => (
+                    <option key={provider} value={provider}>
+                      {providerLabel(provider, t)} / {providerKeyHint(provider)}
+                    </option>
+                  ))}
+                </select>
+              ))}
+              <label className="routing-toggle">
+                <input
+                  type="checkbox"
+                  checked={rule.localFallbackEnabled}
+                  onChange={(event) => updateRoutingRule(rule.taskType, (current) => ({
+                    ...current,
+                    localFallbackEnabled: event.target.checked
+                  }))}
+                />
+                <span>{rule.localFallbackEnabled ? t('legacy.enabled') : t('legacy.disabled')}</span>
+              </label>
+            </div>
+          ))}
+        </div>
+        <div className="settings-actions">
+          <button
+            type="button"
+            onClick={() => saveRoutingSettings(routingRules, { showSuccess: true })}
+            disabled={Boolean(settingsBusy)}
+          >
+            <Save size={16} />{settingsBusy === 'routing' ? t('legacy.savingRouting') : t('legacy.saveRouting')}
+          </button>
+          <button type="button" onClick={restoreRecommendedRouting} disabled={Boolean(settingsBusy)}>
+            <RotateCcw size={16} />{t('legacy.restoreRecommendedRouting')}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1521,10 +1868,52 @@ function GoalPlanView(props: {
     onDeleteRefinement,
     t
   } = props;
+  const metrics = plan.qualityReport?.metrics;
+  const durationDays = metrics?.durationDays ?? plan.planHorizon?.durationDays ?? plan.structuredPlan?.durationDays;
+  const totalTasks = metrics?.totalTasks ?? plan.qualityReport?.totalTasks ?? plan.structuredPlan?.milestones.reduce(
+    (count, milestone) => count + (milestone.tasks?.length || 0),
+    0
+  );
+  const coveredWeekCount = metrics?.coveredWeekCount ?? plan.qualityReport?.coveredWeekCount;
+  const dateSpanDays = metrics?.dateSpanDays ?? plan.qualityReport?.dateSpanDays;
+  const qualityLabel = plan.qualityStatus === 'repaired'
+    ? t('dashboard.runtimeProposalQualityRepaired')
+    : plan.qualityStatus === 'local_fallback'
+      ? t('dashboard.runtimeProposalQualityLocalFallback')
+      : plan.qualityReport || plan.qualityStatus
+        ? t('dashboard.runtimeProposalQualityPassed')
+        : '';
+  const sourceLabel = plan.sourceType === 'local_context'
+    ? t('dashboard.runtimeProposalSourceLocal')
+    : plan.sourceType === 'local_fallback'
+      ? t('dashboard.runtimeProposalSourceFallback')
+      : plan.sourceType === 'insufficient_context'
+        ? t('dashboard.runtimeProposalSourceInsufficient')
+        : plan.sourceType === 'model_knowledge'
+          ? t('dashboard.runtimeProposalSourceModel')
+          : '';
+  const notice = plan.sourceType === 'insufficient_context'
+    ? t('dashboard.runtimeProposalNoticeInsufficient')
+    : plan.qualityStatus === 'repaired'
+      ? t('dashboard.runtimeProposalNoticeRepaired')
+      : plan.qualityStatus === 'local_fallback'
+        ? t('dashboard.runtimeProposalNoticeFallback')
+        : '';
   return (
     <div className="result-view">
       <h3>{plan.summary}</h3>
       {plan.provider && <p><strong>{plan.provider}</strong> / {plan.model}</p>}
+      {(qualityLabel || durationDays || totalTasks !== undefined || sourceLabel) && (
+        <div className="runtime-proposal-meta goal-quality-meta">
+          {qualityLabel ? <span>{t('dashboard.runtimeProposalQuality')}: {qualityLabel}</span> : null}
+          {durationDays ? <span>{t('dashboard.runtimeProposalHorizon')}: {durationDays} {t('dashboard.runtimeProposalDays')}</span> : null}
+          {totalTasks !== undefined ? <span>{t('dashboard.runtimeProposalTaskCount')}: {totalTasks}</span> : null}
+          {coveredWeekCount !== undefined ? <span>{t('dashboard.runtimeProposalCoveredWeeks')}: {coveredWeekCount}</span> : null}
+          {dateSpanDays !== undefined ? <span>{t('dashboard.runtimeProposalDateSpan')}: {dateSpanDays} {t('dashboard.runtimeProposalDays')}</span> : null}
+          {sourceLabel ? <span>{t('dashboard.runtimeProposalSourceType')}: {sourceLabel}</span> : null}
+        </div>
+      )}
+      {notice ? <p className="runtime-proposal-summary">{notice}</p> : null}
       {plan.structuredPlan ? (
         <StructuredGoalPlanView
           plan={plan.structuredPlan}

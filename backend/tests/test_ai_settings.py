@@ -1,9 +1,21 @@
-from backend.app.db import get_conn
-from backend.app.services.ai_settings import EffectiveAiSettings
-from backend.app.services import llm as llm_module
-from backend.app.services.llm import _chat_completions_url
-from backend.app.services.llm import _classify_http_error
-from backend.app.services.llm import _effective_max_tokens, _message_content
+import pytest
+
+from app.db import get_conn
+from app.services import ai_settings as ai_settings_module
+from app.services.ai_settings import EffectiveAiSettings, PendingProviderConfig, _validate_provider_config as real_validate_provider_config
+from app.services import llm as llm_module
+from app.services.llm import _chat_completions_url
+from app.services.llm import _classify_http_error
+from app.services.llm import _effective_max_tokens, _message_content
+
+
+def _allow_settings_validation(*args, **kwargs):
+    return None
+
+
+@pytest.fixture(autouse=True)
+def allow_settings_validation(monkeypatch):
+    monkeypatch.setattr(ai_settings_module, "_validate_provider_config", _allow_settings_validation)
 
 
 def test_ai_settings_endpoint_returns_json(client):
@@ -13,6 +25,9 @@ def test_ai_settings_endpoint_returns_json(client):
     body = response.json()
     assert body["provider"] == "deepseek"
     assert body["baseUrl"] == "https://api.deepseek.com"
+    assert body["routingRules"]
+    assert {rule["taskType"] for rule in body["routingRules"]} >= {"command_decision", "plan_generation", "chat"}
+    assert all(rule["primaryProvider"] == "deepseek" for rule in body["routingRules"])
 
 
 def test_ai_settings_are_saved_without_exposing_key(client):
@@ -39,6 +54,336 @@ def test_ai_settings_are_saved_without_exposing_key(client):
     assert "apiKey" not in loaded.json()
 
 
+def test_kimi_and_zhipu_settings_are_saved_and_loaded(client):
+    kimi = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "kimi",
+            "baseUrl": "https://api.moonshot.ai/v1",
+            "model": "kimi-k2.7-code",
+            "apiKey": "moonshot-test-local",
+            "temperature": 0.2,
+            "timeoutSeconds": 30,
+        },
+    )
+    assert kimi.status_code == 200
+    assert kimi.json()["provider"] == "kimi"
+    assert kimi.json()["baseUrl"] == "https://api.moonshot.ai/v1"
+    assert kimi.json()["hasApiKey"] is True
+
+    zhipu = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "zhipu_glm",
+            "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+            "model": "glm-4-flash",
+            "apiKey": "zhipu-test-local",
+            "temperature": 0.2,
+            "timeoutSeconds": 30,
+        },
+    )
+    assert zhipu.status_code == 200
+    loaded = client.get("/api/ai/settings")
+    assert loaded.json()["provider"] == "zhipu_glm"
+    assert loaded.json()["baseUrl"] == "https://open.bigmodel.cn/api/paas/v4"
+    assert loaded.json()["hasApiKey"] is True
+    saved_providers = loaded.json()["savedProviders"]
+    assert {item["provider"] for item in saved_providers if item["hasApiKey"]} == {"kimi", "zhipu_glm"}
+
+
+def test_model_routing_rules_save_without_key_validation(client, monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("routing save must not validate provider keys")
+
+    monkeypatch.setattr(ai_settings_module, "_validate_provider_config", fail_if_called)
+    loaded = client.get("/api/ai/settings").json()
+    rules = loaded["routingRules"]
+    next_rules = []
+    for rule in rules:
+        next_rules.append(
+            {
+                **rule,
+                "primaryProvider": "kimi" if rule["taskType"] == "plan_generation" else rule["primaryProvider"],
+                "fallbackProviders": ["deepseek"] if rule["taskType"] == "plan_generation" else rule["fallbackProviders"],
+                "localFallbackEnabled": rule["taskType"] != "chat",
+            }
+        )
+
+    saved = client.put("/api/ai/settings/routing", json={"routingRules": next_rules})
+
+    assert saved.status_code == 200
+    saved_rules = {rule["taskType"]: rule for rule in saved.json()["routingRules"]}
+    assert saved_rules["plan_generation"]["primaryProvider"] == "kimi"
+    assert saved_rules["plan_generation"]["fallbackProviders"] == ["deepseek"]
+    assert saved_rules["chat"]["localFallbackEnabled"] is False
+
+
+def test_model_routing_rejects_mock_and_too_many_fallbacks(client):
+    loaded = client.get("/api/ai/settings").json()
+    rule = loaded["routingRules"][0]
+
+    bad_primary = client.put(
+        "/api/ai/settings/routing",
+        json={"routingRules": [{**rule, "primaryProvider": "mock"}]},
+    )
+    assert bad_primary.status_code == 422
+
+    bad_fallbacks = client.put(
+        "/api/ai/settings/routing",
+        json={
+            "routingRules": [
+                {
+                    **rule,
+                    "fallbackProviders": ["kimi", "zhipu_glm", "openai"],
+                }
+            ]
+        },
+    )
+    assert bad_fallbacks.status_code == 422
+
+
+def test_save_validates_provider_key_before_writing(client, monkeypatch):
+    def fail_validation(candidate, *, temperature, timeout_seconds):
+        raise ai_settings_module.AiSettingsSaveValidationError(
+            message="API key is invalid or expired.",
+            error_type="auth_error",
+            provider=candidate.provider,
+            model=candidate.model,
+            status_code=401,
+        )
+
+    monkeypatch.setattr(ai_settings_module, "_validate_provider_config", fail_validation)
+    saved = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "deepseek",
+            "baseUrl": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "apiKey": "sk-wrong-provider",
+            "temperature": 0.2,
+            "timeoutSeconds": 30,
+        },
+    )
+
+    assert saved.status_code == 400
+    detail = saved.json()["detail"]
+    assert detail["errorType"] == "auth_error"
+    assert detail["provider"] == "deepseek"
+    assert "sk-wrong-provider" not in str(detail)
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM ai_provider_configs WHERE provider = 'deepseek'").fetchone()
+    assert row is None
+
+
+def test_save_validation_failure_does_not_overwrite_existing_provider_config(client, monkeypatch):
+    first = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "kimi",
+            "baseUrl": "https://api.moonshot.ai/v1",
+            "model": "kimi-k2.7-code",
+            "apiKey": "moonshot-test-local",
+            "temperature": 0.2,
+            "timeoutSeconds": 30,
+        },
+    )
+    assert first.status_code == 200
+
+    def fail_validation(candidate, *, temperature, timeout_seconds):
+        raise ai_settings_module.AiSettingsSaveValidationError(
+            message="Model name does not exist.",
+            error_type="bad_model",
+            provider=candidate.provider,
+            model=candidate.model,
+            status_code=404,
+        )
+
+    monkeypatch.setattr(ai_settings_module, "_validate_provider_config", fail_validation)
+    changed = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "kimi",
+            "baseUrl": "https://api.moonshot.ai/v1",
+            "model": "bad-model",
+            "temperature": 0.2,
+            "timeoutSeconds": 30,
+        },
+    )
+
+    assert changed.status_code == 400
+    loaded = client.get("/api/ai/settings").json()
+    assert loaded["provider"] == "kimi"
+    assert loaded["model"] == "kimi-k2.7-code"
+    assert loaded["hasApiKey"] is True
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM ai_provider_configs WHERE provider = 'kimi'").fetchone()
+    assert row["model"] == "kimi-k2.7-code"
+    assert row["api_key_encrypted"] == "moonshot-test-local"
+
+
+def test_successful_save_validation_writes_provider_config(client, monkeypatch):
+    calls = []
+
+    def pass_validation(candidate, *, temperature, timeout_seconds):
+        calls.append((candidate.provider, candidate.model, temperature, timeout_seconds))
+
+    monkeypatch.setattr(ai_settings_module, "_validate_provider_config", pass_validation)
+    saved = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "zhipu_glm",
+            "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+            "model": "glm-4-flash",
+            "apiKey": "zhipu-test-local",
+            "temperature": 0.4,
+            "timeoutSeconds": 35,
+        },
+    )
+
+    assert saved.status_code == 200
+    assert calls == [("zhipu_glm", "glm-4-flash", 0.4, 35)]
+    assert saved.json()["hasApiKey"] is True
+
+
+def test_kimi_save_validation_does_not_force_temperature_zero(monkeypatch):
+    requests = []
+
+    class FakeRouter:
+        def __init__(self, settings, *, routing_enabled=True):
+            self.settings = settings
+            self.routing_enabled = routing_enabled
+
+        def complete(self, request):
+            requests.append(request)
+
+            class Result:
+                mode = "llm"
+
+            return Result(), None
+
+    monkeypatch.setattr("app.services.model_provider.ModelRouter", FakeRouter)
+    real_validate_provider_config(
+        PendingProviderConfig(
+            provider="kimi",
+            base_url="https://api.moonshot.ai/v1",
+            model="kimi-k2.6",
+            api_key="moonshot-test-local",
+            api_key_source="user",
+            should_validate=True,
+        ),
+        temperature=0.3,
+        timeout_seconds=30,
+    )
+
+    assert requests
+    assert requests[0].temperature is None
+
+
+def test_provider_keys_are_preserved_per_provider_and_reused_on_switch(client):
+    kimi = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "kimi",
+            "baseUrl": "https://api.moonshot.ai/v1",
+            "model": "kimi-k2.7-code",
+            "apiKey": "moonshot-test-local",
+            "temperature": 0.2,
+            "timeoutSeconds": 30,
+        },
+    )
+    assert kimi.status_code == 200
+    zhipu = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "zhipu_glm",
+            "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+            "model": "glm-4-flash",
+            "apiKey": "zhipu-test-local",
+            "temperature": 0.4,
+            "timeoutSeconds": 35,
+        },
+    )
+    assert zhipu.status_code == 200
+
+    switched = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "kimi",
+            "baseUrl": "https://api.moonshot.ai/v1",
+            "model": "kimi-k2.7-code",
+            "temperature": 0.5,
+            "timeoutSeconds": 40,
+        },
+    )
+    assert switched.status_code == 200
+    body = switched.json()
+    assert body["provider"] == "kimi"
+    assert body["hasApiKey"] is True
+    assert {item["provider"] for item in body["savedProviders"] if item["hasApiKey"]} == {"kimi", "zhipu_glm"}
+
+
+def test_delete_provider_key_does_not_delete_other_provider_keys(client):
+    client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "kimi",
+            "baseUrl": "https://api.moonshot.ai/v1",
+            "model": "kimi-k2.7-code",
+            "apiKey": "moonshot-test-local",
+            "temperature": 0.2,
+            "timeoutSeconds": 30,
+        },
+    )
+    client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "zhipu_glm",
+            "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+            "model": "glm-4-flash",
+            "apiKey": "zhipu-test-local",
+            "temperature": 0.2,
+            "timeoutSeconds": 30,
+        },
+    )
+
+    deleted = client.delete("/api/ai/settings/key/kimi")
+    assert deleted.status_code == 200
+    body = deleted.json()
+    assert body["provider"] == "zhipu_glm"
+    assert body["hasApiKey"] is True
+    saved = {item["provider"]: item["hasApiKey"] for item in body["savedProviders"]}
+    assert saved["kimi"] is False
+    assert saved["zhipu_glm"] is True
+
+    deleted_active = client.delete("/api/ai/settings/key/zhipu_glm")
+    assert deleted_active.status_code == 200
+    active = deleted_active.json()
+    assert active["provider"] == "zhipu_glm"
+    assert active["hasApiKey"] is False
+
+
+def test_legacy_user_key_is_migrated_to_provider_config(client):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO ai_settings(
+              id, provider, base_url, model, api_key_encrypted, api_key_source,
+              temperature, timeout_seconds, updated_at
+            )
+            VALUES (
+              'local-default', 'deepseek', 'https://api.deepseek.com',
+              'deepseek-v4-flash', 'sk-user-local', 'user', 0.3, 20, CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+    loaded = client.get("/api/ai/settings")
+    assert loaded.status_code == 200
+    body = loaded.json()
+    assert body["hasApiKey"] is True
+    assert any(item["provider"] == "deepseek" and item["hasApiKey"] for item in body["savedProviders"])
+
+
 def test_ai_settings_test_uses_mock_without_key(client):
     saved = client.put(
         "/api/ai/settings",
@@ -59,6 +404,26 @@ def test_ai_settings_test_uses_mock_without_key(client):
     body = tested.json()
     assert body["ok"] is True
     assert body["mode"] == "mock"
+
+
+def test_mock_provider_save_does_not_validate_key(client, monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("mock settings should not validate a provider key")
+
+    monkeypatch.setattr(ai_settings_module, "_validate_provider_config", fail_if_called)
+    saved = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "mock",
+            "baseUrl": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "apiKey": "",
+            "temperature": 0.3,
+            "timeoutSeconds": 20,
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["hasApiKey"] is False
 
 
 def test_blank_api_key_clears_saved_key(client):
@@ -90,6 +455,38 @@ def test_blank_api_key_clears_saved_key(client):
     assert cleared.status_code == 200
     assert cleared.json()["hasApiKey"] is False
     assert client.get("/api/ai/settings").json()["hasApiKey"] is False
+
+
+def test_blank_api_key_clear_does_not_validate_provider_key(client, monkeypatch):
+    client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "deepseek",
+            "baseUrl": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "apiKey": "sk-test-local",
+            "temperature": 0.3,
+            "timeoutSeconds": 20,
+        },
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("clearing a key should not validate provider credentials")
+
+    monkeypatch.setattr(ai_settings_module, "_validate_provider_config", fail_if_called)
+    cleared = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "deepseek",
+            "baseUrl": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "apiKey": "",
+            "temperature": 0.3,
+            "timeoutSeconds": 20,
+        },
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["hasApiKey"] is False
 
 
 def test_missing_api_key_preserves_saved_user_key(client):
@@ -189,7 +586,7 @@ def test_http_errors_are_classified_for_safe_frontend_messages():
     assert _classify_http_error(404, "model does not exist").error_type == "bad_model"
     assert _classify_http_error(404, "model not found").error_type == "bad_model"
     assert _classify_http_error(404, "endpoint not found").error_type == "bad_base_url"
-    assert _classify_http_error(429, "quota exceeded").error_type == "insufficient_balance"
+    assert _classify_http_error(429, "quota exceeded").error_type == "rate_limit"
     assert _classify_http_error(402, "").error_type == "insufficient_balance"
 
 
@@ -369,7 +766,7 @@ def test_llm_rejects_invalid_key_format_before_request(monkeypatch):
             provider="deepseek",
             base_url="https://api.deepseek.com",
             model="deepseek-v4-flash",
-            api_key="已保存 DeepSeek",
+            api_key="saved DeepSeek key",
             temperature=0.1,
             timeout_seconds=10,
             updated_at="",

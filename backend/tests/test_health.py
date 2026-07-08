@@ -3,8 +3,16 @@ def test_health_endpoint(client):
         body = client.get(path).json()
         assert body["status"] == "ok"
         assert body["app"] == "planix-api"
+        assert body["name"] == "planix-api"
         assert isinstance(body["pid"], int)
-        assert body["version"] == "1.1.4"
+        assert body["version"] == "3.11-demo-reliability"
+        assert body["startupTime"]
+        assert body["features"] == {
+            "planQualityGate": True,
+            "contextAwareRefinement": True,
+            "calendarDraftContextRecovery": True,
+            "demoMetrics": True,
+        }
 
 
 def test_cors_allows_local_frontend_origins(client):

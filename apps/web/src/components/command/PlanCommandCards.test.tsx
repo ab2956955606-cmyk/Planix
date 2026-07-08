@@ -1,10 +1,26 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
+import { AgentThread } from './AgentThread';
+import { ApprovalCard } from './ApprovalCard';
+import { CommandDecisionCard } from './CommandDecisionCard';
+import { ModelUsageBadge } from './ModelUsageBadge';
+import { NoteSearchResultsCard } from './NoteSearchResultsCard';
+import { NoteWritePreviewCard } from './NoteWritePreviewCard';
+import { NoteWriteResultCard } from './NoteWriteResultCard';
 import { PlanPatchPreviewCard } from './PlanPatchPreviewCard';
 import { PlanPatchResultCard } from './PlanPatchResultCard';
 import { PlanSearchResultsCard } from './PlanSearchResultsCard';
+import { QuickActionBar } from './QuickActionBar';
 
 const labels: Record<string, string> = {
+  'command.title': 'Planix',
+  'command.empty': '你可以直接说：',
+  'command.examplePlan': '帮我规划 30 天学 Python',
+  'command.exampleQuery': '今天有什么计划？',
+  'command.examplePatch': '把明天的任务改到后天',
+  'command.exampleRefine': '把这个任务拆细一点',
+  'command.exampleNote': '记一下：我晚上 8 点后适合学习',
   'command.planSearchResults': 'Search results',
   'command.calendarPlans': 'Calendar plans',
   'command.goalHistory': 'Goal history',
@@ -25,15 +41,121 @@ const labels: Record<string, string> = {
   'command.planPatchFailed': 'Patch failed',
   'command.statusSuccess': 'Success',
   'command.statusError': 'Error',
+  'command.intentDecision': 'Intent decision',
+  'command.llmDecision': 'LLM decision',
+  'command.localFallbackRule': 'Local fallback rule',
+  'command.decisionUnderstand': 'I understand: ',
+  'command.decisionExecute': 'I will: ',
+  'command.decisionExecutePrefix': 'Handle',
+  'command.decisionIntentQueryPlan': 'view plans',
+  'command.decisionIntentChat': 'chat',
+  'command.decisionExecuteQueryCalendar': 'query Calendar',
+  'command.decisionExecuteChat': 'continue chat',
+  'command.intent': 'Intent',
+  'command.action': 'Action',
+  'command.target': 'Target',
+  'command.confidence': 'Confidence',
+  'command.noteSearchResults': 'Note results',
+  'command.noteWritePreview': 'Note save preview',
+  'command.noteWriteResult': 'Note save result',
+  'command.noteSaved': 'Saved',
+  'command.noteWriteFailed': 'Failed to save note',
+  'command.noteWriteTarget': 'Ready to record into {year}-{month} notes:',
+  'command.modelUsage': 'Model usage',
+  'command.model': 'Model',
+  'command.tokens': 'Tokens',
+  'command.promptTokens': 'prompt',
+  'command.completionTokens': 'completion',
+  'command.totalTokens': 'total',
+  'command.latency': 'Latency',
+  'command.noTokenStats': 'No token stats',
+  'command.noTokenStatsShort': 'no token stats',
+  'command.localFallbackNoTokens': 'Local fallback, no tokens',
+  'command.routeTrace': 'Route',
+  'command.routeSuccess': 'success',
+  'command.routeFailed': 'failed',
+  'command.routeSkipped': 'skipped',
+  'command.routeMissingKey': 'missing API key',
+  'command.routeLocalFallback': 'local fallback',
+  'command.approvalRequired': 'Approval required',
+  'command.writeRisk': 'Write',
+  'command.recordOperation': 'Record',
+  'command.confirmRecord': '确认记录',
+  'command.confirmModify': '确认修改',
+  'command.confirmDelete': '确认删除',
+  'command.confirmWrite': '确认写入',
+  'command.approve': 'Confirm',
+  'command.reject': 'Cancel',
+  'command.running': 'Running',
+  'command.quickActions': 'Quick actions',
+  'command.quickWriteCalendar': '写入日历',
+  'command.quickViewPlans': '查看计划',
+  'command.quickModifyPlan': '修改计划',
+  'command.quickRefinePlan': '细化计划',
+  'command.quickSearchNotes': '查笔记',
+  'command.quickRecordNote': '记录笔记',
+  'command.quickWriteCalendarMessage': '写入日历',
+  'command.quickViewPlansMessage': '查看我的计划',
+  'command.quickModifyPlanMessage': '修改我的计划',
+  'command.quickRefinePlanMessage': '细化当前计划',
+  'command.quickSearchNotesMessage': '查询我的笔记',
+  'command.quickRecordNoteMessage': '记录一条笔记',
+  'command.resultDate': 'Date',
+  'command.resultTime': 'Time',
+  'command.resultDuration': 'Duration',
+  'command.resultSource': 'Source',
+  'command.resultActions': 'Actions',
+  'command.actionRefine': 'Refine',
+  'command.actionModify': 'Edit',
+  'command.actionDelete': 'Delete',
+  'command.actionUseInPlan': 'Use in plan',
+  'command.actionContinueView': 'Continue',
+  'command.actionRefinePlanMessage': '细化第 {index} 个计划',
+  'command.actionModifyPlanMessage': '修改第 {index} 个计划',
+  'command.actionDeletePlanMessage': '删除第 {index} 个计划',
+  'command.actionUseInPlanMessage': '把第 {index} 条笔记引用到规划',
+  'command.actionContinueViewMessage': '继续查看第 {index} 条笔记',
+  'command.usageTaskDecision': 'decision',
+  'command.usageTaskPlanGeneration': 'plan generation',
+  'command.usageTaskQueryNotes': 'note search',
+  'command.usageTaskNoteWrite': 'note write',
   'common.done': 'Done',
-  'common.pending': 'Pending'
+  'common.pending': 'Pending',
+  'common.unknown': 'Unknown',
+  'common.empty': 'Empty'
 };
 
 function t(key: string): string {
   return labels[key] ?? key;
 }
 
+function collectButtons(node: ReactNode): ReactElement[] {
+  const buttons: ReactElement[] = [];
+  function visit(value: ReactNode) {
+    Children.forEach(value, (child) => {
+      if (!isValidElement(child)) return;
+      if (child.type === 'button') {
+        buttons.push(child);
+      }
+      visit(child.props.children);
+    });
+  }
+  visit(node);
+  return buttons;
+}
+
 describe('Plan command cards', () => {
+  it('renders the P Mode empty state with concrete examples', () => {
+    const html = renderToStaticMarkup(
+      <AgentThread messages={[]} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
+    );
+
+    expect(html).toContain('你可以直接说');
+    expect(html).toContain('帮我规划 30 天学 Python');
+    expect(html).toContain('把明天的任务改到后天');
+    expect(html).toContain('记一下：我晚上 8 点后适合学习');
+  });
+
   it('renders calendar, material, goal history, and month note search results', () => {
     const html = renderToStaticMarkup(
       <PlanSearchResultsCard
@@ -51,6 +173,7 @@ describe('Plan command cards', () => {
         materials={[{ title: 'Python notes', chunk: 'Use pathlib and pytest.' }]}
         goalHistory={[{ title: 'AI internship plan', summary: 'Portfolio milestones.' }]}
         monthNotes={[{ year: 2026, month: 7, content: 'Interview prep focus.' }]}
+        onSend={() => undefined}
         t={t}
       />
     );
@@ -58,7 +181,12 @@ describe('Plan command cards', () => {
     expect(html).toContain('Search results');
     expect(html).toContain('Calendar plans');
     expect(html).toContain('Python practice');
+    expect(html).toContain('Date');
+    expect(html).toContain('Duration');
     expect(html).toContain('45 minutes');
+    expect(html).toContain('Refine');
+    expect(html).toContain('Edit');
+    expect(html).toContain('Delete');
     expect(html).toContain('Goal history');
     expect(html).toContain('AI internship plan');
     expect(html).toContain('Materials');
@@ -110,5 +238,102 @@ describe('Plan command cards', () => {
     expect(deleteHtml).toContain('Plan deleted');
     expect(failedHtml).toContain('Error');
     expect(failedHtml).toContain('No supported plan changes');
+  });
+
+  it('renders decision, note, usage, and quick action cards', () => {
+    const decisionHtml = renderToStaticMarkup(
+      <CommandDecisionCard
+        intent="query_plan"
+        confidence={0.86}
+        targetType="calendar_date"
+        action="query"
+        decisionSummary="View today"
+        source="llm"
+        t={t}
+      />
+    );
+    const notesHtml = renderToStaticMarkup(
+      <NoteSearchResultsCard
+        summary="Found notes"
+        materials={[{ title: 'Python note', chunk: 'Portfolio material' }]}
+        monthNotes={[{ year: 2026, month: 7, content: 'Interview notes' }]}
+        onSend={() => undefined}
+        t={t}
+      />
+    );
+    const previewHtml = renderToStaticMarkup(
+      <NoteWritePreviewCard year={2026} month={7} date="2026-07-05" noteText="Save this" before="" after="2026-07-05 Save this" t={t} />
+    );
+    const resultHtml = renderToStaticMarkup(
+      <NoteWriteResultCard status="success" year={2026} month={7} noteText="Save this" t={t} />
+    );
+    const usageHtml = renderToStaticMarkup(
+      <ModelUsageBadge usage={[
+        { provider: 'deepseek', model: 'chat', promptTokens: 10, completionTokens: 5, totalTokens: 15, latencyMs: 7, mode: 'llm', taskType: 'command_decision' },
+        { provider: 'deepseek', model: 'plan', promptTokens: 100, completionTokens: 50, totalTokens: 150, latencyMs: 2100, mode: 'llm', taskType: 'plan_generation' },
+        { provider: 'kimi', model: 'moonshot-v1-8k', totalTokens: 22, latencyMs: 120, mode: 'llm', taskType: 'note_query', fallbackUsed: true, attempts: [
+          { provider: 'zhipu_glm', status: 'skipped', errorType: 'missing_api_key' },
+          { provider: 'kimi', status: 'success' }
+        ] },
+        { provider: 'zhipu_glm', model: 'glm-4-flash', totalTokens: 8, latencyMs: 90, mode: 'llm', taskType: 'note_write' }
+      ]} t={t} />
+    );
+    const quickHtml = renderToStaticMarkup(<QuickActionBar onSend={() => undefined} t={t} />);
+
+    expect(decisionHtml).toContain('Intent decision');
+    expect(decisionHtml).toContain('I understand');
+    expect(decisionHtml).toContain('query Calendar');
+    expect(notesHtml).toContain('Note results');
+    expect(notesHtml).toContain('Python note');
+    expect(notesHtml).toContain('Use in plan');
+    expect(previewHtml).toContain('Note save preview');
+    expect(previewHtml).toContain('Ready to record into 2026-7 notes');
+    expect(resultHtml).toContain('Saved');
+    expect(usageHtml).toContain('Model usage');
+    expect(usageHtml).toContain('decision 15 Tokens');
+    expect(usageHtml).toContain('plan generation 150 Tokens');
+    expect(usageHtml).toContain('note search 22 Tokens');
+    expect(usageHtml).toContain('note write 8 Tokens');
+    expect(usageHtml).toContain('Route: zhipu_glm missing API key -&gt; kimi success');
+    expect(quickHtml).toContain('Quick actions');
+    expect(quickHtml).toContain('记录笔记');
+  });
+
+  it('sends fixed natural language messages from quick and row actions', () => {
+    const sent: string[] = [];
+    const quick = QuickActionBar({ onSend: (value) => sent.push(value), t });
+    collectButtons(quick).forEach((button) => button.props.onClick());
+    expect(sent).toEqual(['写入日历', '查看我的计划', '修改我的计划', '细化当前计划', '查询我的笔记', '记录一条笔记']);
+
+    sent.length = 0;
+    const planCard = PlanSearchResultsCard({
+      calendarPlans: [{ id: 'p1', date: '2026-07-08', time: '09:00', title: 'Python', estimatedMinutes: 30 }],
+      onSend: (value) => sent.push(value),
+      t
+    });
+    collectButtons(planCard).forEach((button) => button.props.onClick());
+    expect(sent).toEqual(['细化第 1 个计划', '修改第 1 个计划', '删除第 1 个计划']);
+
+    sent.length = 0;
+    const noteCard = NoteSearchResultsCard({
+      monthNotes: [{ year: 2026, month: 7, content: 'Evening learning' }],
+      onSend: (value) => sent.push(value),
+      t
+    });
+    collectButtons(noteCard).forEach((button) => button.props.onClick());
+    expect(sent).toEqual(['把第 1 条笔记引用到规划', '继续查看第 1 条笔记']);
+  });
+
+  it('renders approval labels by action target and operation', () => {
+    const noop = () => undefined;
+    const note = renderToStaticMarkup(<ApprovalCard summary="Record" actionId="a1" target="notes" operation="update" risk="write" sending={false} onDecision={noop} t={t} />);
+    const update = renderToStaticMarkup(<ApprovalCard summary="Update" actionId="a1" target="calendar" operation="update" risk="write" sending={false} onDecision={noop} t={t} />);
+    const del = renderToStaticMarkup(<ApprovalCard summary="Delete" actionId="a1" target="calendar" operation="delete" risk="delete" sending={false} onDecision={noop} t={t} />);
+    const write = renderToStaticMarkup(<ApprovalCard summary="Write" actionId="a1" target="calendar" operation="create_or_update_plans" risk="write" sending={false} onDecision={noop} t={t} />);
+
+    expect(note).toContain('确认记录');
+    expect(update).toContain('确认修改');
+    expect(del).toContain('确认删除');
+    expect(write).toContain('确认写入');
   });
 });

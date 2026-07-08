@@ -18,7 +18,7 @@ export interface CommandThreadMessage {
   role: 'user' | 'assistant' | 'card';
   content: string;
   createdAt: number;
-  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'plan_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'execution_result';
+  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'command_decision' | 'plan_search_results' | 'note_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'note_write_preview' | 'note_write_result' | 'model_usage' | 'clarify_question' | 'execution_result';
   status?: 'running' | 'success' | 'error';
   title?: string;
   draftId?: string;
@@ -111,9 +111,15 @@ const CARD_KINDS = new Set([
   'calendar_preview',
   'approval',
   'calendar_write_result',
+  'command_decision',
   'plan_search_results',
+  'note_search_results',
   'plan_patch_preview',
   'plan_patch_result',
+  'note_write_preview',
+  'note_write_result',
+  'model_usage',
+  'clarify_question',
   'execution_result'
 ]);
 
@@ -343,12 +349,32 @@ function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
       payload: { ...event }
     });
   }
+  if (event.type === 'command_decision') {
+    addMessage({
+      role: 'card',
+      kind: 'command_decision',
+      status: 'success',
+      title: t('command.intentDecision'),
+      content: event.decisionSummary || event.intent,
+      payload: { ...event }
+    });
+  }
   if (event.type === 'plan_search_results') {
     addMessage({
       role: 'card',
       kind: 'plan_search_results',
       status: 'success',
       title: t('command.planSearchResults'),
+      content: event.summary,
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'note_search_results') {
+    addMessage({
+      role: 'card',
+      kind: 'note_search_results',
+      status: 'success',
+      title: t('command.noteSearchResults'),
       content: event.summary,
       payload: { ...event }
     });
@@ -372,6 +398,48 @@ function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
       title: t('command.planPatchResult'),
       content: event.error || event.status,
       actionId: event.actionId,
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'note_write_preview') {
+    addMessage({
+      role: 'card',
+      kind: 'note_write_preview',
+      status: 'running',
+      title: t('command.noteWritePreview'),
+      content: event.noteText,
+      actionId: event.actionId,
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'note_write_result') {
+    addMessage({
+      role: 'card',
+      kind: 'note_write_result',
+      status: event.status === 'success' ? 'success' : 'error',
+      title: t('command.noteWriteResult'),
+      content: event.error || event.noteText || event.status,
+      actionId: event.actionId,
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'model_usage') {
+    addMessage({
+      role: 'card',
+      kind: 'model_usage',
+      status: 'success',
+      title: t('command.modelUsage'),
+      content: '',
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'clarify_question') {
+    addMessage({
+      role: 'card',
+      kind: 'clarify_question',
+      status: 'running',
+      title: t('command.clarifyQuestion'),
+      content: event.question,
       payload: { ...event }
     });
   }
@@ -431,9 +499,15 @@ function createStreamHandler(t: (key: string) => string) {
         event.type === 'calendar_plan_preview' ||
         event.type === 'approval_required' ||
         event.type === 'calendar_write_result' ||
+        event.type === 'command_decision' ||
         event.type === 'plan_search_results' ||
+        event.type === 'note_search_results' ||
         event.type === 'plan_patch_preview' ||
         event.type === 'plan_patch_result' ||
+        event.type === 'note_write_preview' ||
+        event.type === 'note_write_result' ||
+        event.type === 'model_usage' ||
+        event.type === 'clarify_question' ||
         event.type === 'execution_result'
       ) {
         sawOutput = true;

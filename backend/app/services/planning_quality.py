@@ -10,6 +10,7 @@ from ..schemas import (
     PlanDensityPolicy,
     PlanHorizon,
     PlanQualityIssue,
+    PlanQualityMetrics,
     PlanQualityReport,
     PlanSourceType,
     StructuredGoalPlan,
@@ -204,7 +205,45 @@ def validate_structured_plan_quality(
         coveredWeekCount=covered_week_count,
         dateSpanDays=date_span_days,
         issues=issues,
+        metrics=PlanQualityMetrics(
+            durationDays=horizon.duration_days,
+            totalTasks=total_tasks,
+            milestoneCount=milestone_count,
+            coveredWeekCount=covered_week_count,
+            dateSpanDays=date_span_days,
+            weakTaskCount=weak_titles,
+            missingDueDateCount=missing_due_dates,
+            outOfRangeDueDateCount=out_of_range_dates,
+        ),
     )
+
+
+def with_demo_quality_metrics(
+    report: PlanQualityReport,
+    *,
+    horizon: PlanHorizon,
+    quality_status: str | None,
+    source_type: str | None,
+    local_relevance: str | None,
+    repair_attempted: bool,
+    fallback_used: bool,
+) -> PlanQualityReport:
+    base = report.metrics or PlanQualityMetrics()
+    metrics = base.model_copy(
+        update={
+            "duration_days": base.duration_days or horizon.duration_days,
+            "total_tasks": base.total_tasks if base.total_tasks is not None else report.total_tasks,
+            "milestone_count": base.milestone_count if base.milestone_count is not None else report.milestone_count,
+            "covered_week_count": base.covered_week_count if base.covered_week_count is not None else report.covered_week_count,
+            "date_span_days": base.date_span_days if base.date_span_days is not None else report.date_span_days,
+            "repair_attempted": repair_attempted,
+            "fallback_used": fallback_used,
+            "quality_status": quality_status,
+            "source_type": source_type,
+            "local_relevance": local_relevance,
+        }
+    )
+    return report.model_copy(update={"metrics": metrics})
 
 
 def assess_local_source_grounding(goal: str, local_sources: list[dict[str, Any]]) -> dict[str, Any]:

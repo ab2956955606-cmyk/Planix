@@ -5,9 +5,14 @@ import type { PlanHorizon, PlanQualityReport, PlanQualityStatus, PlanSourceType 
 import { ApprovalCard } from './ApprovalCard';
 import { CalendarPlanPreviewCard } from './CalendarPlanPreviewCard';
 import { CalendarWriteResultCard } from './CalendarWriteResultCard';
+import { CommandDecisionCard } from './CommandDecisionCard';
 import { ExecutionMiniCard } from './ExecutionMiniCard';
 import { InlinePlanDetailCard } from './InlinePlanDetailCard';
 import { InlinePlanSummaryCard } from './InlinePlanSummaryCard';
+import { ModelUsageBadge } from './ModelUsageBadge';
+import { NoteSearchResultsCard } from './NoteSearchResultsCard';
+import { NoteWritePreviewCard } from './NoteWritePreviewCard';
+import { NoteWriteResultCard } from './NoteWriteResultCard';
 import { PlanPatchPreviewCard } from './PlanPatchPreviewCard';
 import { PlanPatchResultCard } from './PlanPatchResultCard';
 import { PlanSearchResultsCard } from './PlanSearchResultsCard';
@@ -17,6 +22,7 @@ interface AgentThreadProps {
   messages: CommandThreadMessage[];
   sending: boolean;
   onApprove: (actionId: string, decision: 'approve' | 'reject') => void;
+  onSend: (value: string) => void;
   t: (key: string) => string;
 }
 
@@ -26,11 +32,13 @@ function payloadOf(message: CommandThreadMessage): Record<string, unknown> {
 
 type RenderItem =
   | { type: 'message'; message: CommandThreadMessage }
-  | { type: 'execution_group'; id: string; messages: CommandThreadMessage[] };
+  | { type: 'execution_group'; id: string; messages: CommandThreadMessage[] }
+  | { type: 'usage_group'; id: string; messages: CommandThreadMessage[] };
 
 function groupMessages(messages: CommandThreadMessage[]): RenderItem[] {
   const items: RenderItem[] = [];
   let executionGroup: CommandThreadMessage[] = [];
+  let usageGroup: CommandThreadMessage[] = [];
 
   const flushExecutionGroup = () => {
     if (!executionGroup.length) return;
@@ -41,16 +49,32 @@ function groupMessages(messages: CommandThreadMessage[]): RenderItem[] {
     });
     executionGroup = [];
   };
+  const flushUsageGroup = () => {
+    if (!usageGroup.length) return;
+    items.push({
+      type: 'usage_group',
+      id: usageGroup[0].id,
+      messages: usageGroup
+    });
+    usageGroup = [];
+  };
 
   for (const message of messages) {
     if (message.role === 'card' && message.kind === 'runtime') {
+      flushUsageGroup();
       executionGroup.push(message);
       continue;
     }
     flushExecutionGroup();
+    if (message.role === 'card' && message.kind === 'model_usage') {
+      usageGroup.push(message);
+      continue;
+    }
+    flushUsageGroup();
     items.push({ type: 'message', message });
   }
   flushExecutionGroup();
+  flushUsageGroup();
   return items;
 }
 
@@ -110,19 +134,25 @@ function ExecutionGroupCard({ messages, t }: { messages: CommandThreadMessage[];
   );
 }
 
-export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProps) {
+export function AgentThread({ messages, sending, onApprove, onSend, t }: AgentThreadProps) {
   if (!messages.length) {
+    const examples = [
+      t('command.examplePlan'),
+      t('command.exampleQuery'),
+      t('command.examplePatch'),
+      t('command.exampleRefine'),
+      t('command.exampleNote')
+    ];
     return (
       <div className="agent-thread empty">
         <div className="command-empty-state">
           <h1>{t('command.title')}</h1>
           <p>{t('command.empty')}</p>
-          <div className="command-examples">
-            <button type="button">{t('command.examplePlan')}</button>
-            <button type="button">{t('command.exampleQuery')}</button>
-            <button type="button">{t('command.exampleRegenerate')}</button>
-            <button type="button">{t('command.exampleWrite')}</button>
-          </div>
+          <ul className="command-examples">
+            {examples.map((example) => (
+              <li key={example}>{example}</li>
+            ))}
+          </ul>
         </div>
       </div>
     );
@@ -135,6 +165,13 @@ export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProp
           return (
             <article className="command-message card" key={`execution-${item.id}`}>
               <ExecutionGroupCard messages={item.messages} t={t} />
+            </article>
+          );
+        }
+        if (item.type === 'usage_group') {
+          return (
+            <article className="command-message card" key={`usage-${item.id}`}>
+              <ModelUsageBadge usage={item.messages.map((message) => payloadOf(message).usage)} t={t} />
             </article>
           );
         }
@@ -200,6 +237,8 @@ export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProp
               summary={message.content}
               actionId={message.actionId}
               risk={String(payloadOf(message).risk || '')}
+              target={String(payloadOf(message).target || '')}
+              operation={String(payloadOf(message).operation || '')}
               sending={sending}
               onDecision={onApprove}
               t={t}
@@ -218,6 +257,18 @@ export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProp
             />
           )}
 
+          {message.role === 'card' && message.kind === 'command_decision' && (
+            <CommandDecisionCard
+              intent={String(payloadOf(message).intent || '')}
+              confidence={payloadOf(message).confidence}
+              targetType={String(payloadOf(message).targetType || '')}
+              action={String(payloadOf(message).action || '')}
+              decisionSummary={String(payloadOf(message).decisionSummary || message.content || '')}
+              source={String(payloadOf(message).source || '')}
+              t={t}
+            />
+          )}
+
           {message.role === 'card' && message.kind === 'plan_search_results' && (
             <PlanSearchResultsCard
               summary={String(payloadOf(message).summary || message.content || '')}
@@ -225,6 +276,18 @@ export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProp
               materials={payloadOf(message).materials}
               goalHistory={payloadOf(message).goalHistory}
               monthNotes={payloadOf(message).monthNotes}
+              onSend={onSend}
+              t={t}
+            />
+          )}
+
+          {message.role === 'card' && message.kind === 'note_search_results' && (
+            <NoteSearchResultsCard
+              summary={String(payloadOf(message).summary || message.content || '')}
+              materials={payloadOf(message).materials}
+              goalHistory={payloadOf(message).goalHistory}
+              monthNotes={payloadOf(message).monthNotes}
+              onSend={onSend}
               t={t}
             />
           )}
@@ -247,6 +310,42 @@ export function AgentThread({ messages, sending, onApprove, t }: AgentThreadProp
               error={typeof payloadOf(message).error === 'string' ? payloadOf(message).error as string : undefined}
               t={t}
             />
+          )}
+
+          {message.role === 'card' && message.kind === 'note_write_preview' && (
+            <NoteWritePreviewCard
+              year={payloadOf(message).year}
+              month={payloadOf(message).month}
+              date={payloadOf(message).date}
+              noteText={payloadOf(message).noteText}
+              before={payloadOf(message).before}
+              after={payloadOf(message).after}
+              t={t}
+            />
+          )}
+
+          {message.role === 'card' && message.kind === 'note_write_result' && (
+            <NoteWriteResultCard
+              status={String(payloadOf(message).status || '')}
+              year={payloadOf(message).year}
+              month={payloadOf(message).month}
+              noteText={payloadOf(message).noteText}
+              error={typeof payloadOf(message).error === 'string' ? payloadOf(message).error as string : undefined}
+              t={t}
+            />
+          )}
+
+          {message.role === 'card' && message.kind === 'model_usage' && (
+            <ModelUsageBadge usage={payloadOf(message).usage} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'clarify_question' && (
+            <div className="command-inline-card clarify-question">
+              <div className="command-card-heading">
+                <strong>{t('command.clarifyQuestion')}</strong>
+              </div>
+              <p>{message.content}</p>
+            </div>
           )}
 
           {message.role === 'card' && message.kind === 'execution_result' && (

@@ -2,6 +2,7 @@ import { ArrowUp, MessageCircle, Plus } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { CommandMode, CommandPermission } from '../../types';
 import { PermissionPopover } from './PermissionPopover';
+import { QuickActionBar } from './QuickActionBar';
 import { WorkbenchToggle } from './WorkbenchToggle';
 
 interface CommandComposerProps {
@@ -107,6 +108,7 @@ export function CommandComposer(props: CommandComposerProps) {
           <ArrowUp size={18} />
         </button>
       </div>
+      <QuickActionBar disabled={sending} onSend={onSend} t={t} />
     </div>
   );
 }

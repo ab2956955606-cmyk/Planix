@@ -67,6 +67,7 @@ class PlannerAgent:
             ),
             max_tokens=2400,
             temperature=0.2,
+            task_type="plan_generation",
         )
         if llm_result:
             parsed = _json_object(llm_result.content)
@@ -103,6 +104,7 @@ class PlannerAgent:
             ),
             max_tokens=1200,
             temperature=0.2,
+            task_type="chat",
         )
         if llm_result:
             parsed = _json_object(llm_result.content)

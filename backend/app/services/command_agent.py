@@ -14,17 +14,22 @@ from ..schemas import (
     AgentRunRequest,
     CommandApproveRequest,
     CommandChatRequest,
+    CommandDecision,
     CommandDraftOut,
     CommandMessageOut,
     CommandPermission,
     CommandThreadSummaryOut,
+    ModelUsage,
+    MonthNotePut,
     PlanCreate,
     PlanRefinedTaskUpdate,
     PlanUpdate,
     RefinedTask,
     RefineTaskRequest,
 )
+from .command_decision import CommandDecisionResult, CommandDecisionService, local_fallback_usage, usage_from_llm_result
 from .llm import LlmClient
+from .month_notes import get_month_note, upsert_month_note
 from .permission_gate import command_action_requires_approval
 from .plans import create_plan, delete_plan, save_plan_refined_task, update_plan
 from .planning import PlanningService, build_refine_plan_context
@@ -40,7 +45,10 @@ CommandIntent = Literal[
     "sync_to_calendar",
     "refine_current_plan",
     "query_plan",
+    "query_notes",
     "patch_calendar_plan",
+    "save_note",
+    "clarify",
     "navigate_ui",
     "unsupported_command",
 ]
@@ -120,6 +128,8 @@ def detect_command_intent(message: str) -> CommandIntent:
     text = message.strip().lower()
     if not text:
         return "normal_chat"
+    if re.search(r"(保存|存下|记下|save).{0,12}(笔记|note)", text) or re.search(r"(笔记|note).{0,12}(保存|存下|save)", text):
+        return "save_note"
 
     if re.search(r"(确认写入|confirm write|confirm .{0,16}write)", text):
         return "sync_to_calendar"
@@ -148,6 +158,8 @@ def detect_command_intent(message: str) -> CommandIntent:
         return "regenerate_draft"
     if re.search(r"(展开|完整计划|查看计划|计划详情|show.*plan|full.*plan|detail)", text):
         return "show_current_plan"
+    if re.search(r"(查|找|搜索|看看|query|search|find).{0,16}(笔记|资料|材料|note|notes|material|materials)", text):
+        return "query_notes"
     if _looks_like_query(text):
         return "query_plan"
     if _looks_like_calendar_patch(text):
@@ -254,8 +266,12 @@ def _stream_failure_message(payload: CommandChatRequest, intent: CommandIntent |
         return "展开计划失败，请重启后端服务后重试。"
     if payload.mode == "auto" and intent == "query_plan":
         return "查询计划失败，请检查后端服务或本地数据。"
+    if payload.mode == "auto" and intent == "query_notes":
+        return "查询笔记失败，请检查后端服务或本地资料。"
     if payload.mode == "auto" and intent == "patch_calendar_plan":
         return "修改日历计划失败，请检查后端服务或计划数据。"
+    if payload.mode == "auto" and intent == "save_note":
+        return "保存笔记失败，请检查后端服务或月笔记数据。"
     if payload.mode == "auto" and intent in {"regenerate_draft", "modify_current_draft"}:
         return "重新生成计划失败，请重启后端服务后重试。"
     if payload.mode == "workbench":
@@ -266,6 +282,8 @@ def _stream_failure_message(payload: CommandChatRequest, intent: CommandIntent |
 def _approval_failure_message(action: Any | None) -> str:
     if action and action["target"] == "calendar":
         return CALENDAR_WRITE_ERROR_MESSAGE
+    if action and action["target"] == "notes":
+        return "保存笔记失败，请检查后端服务或月笔记数据。"
     return COMMAND_STREAM_ERROR_MESSAGE
 
 
@@ -274,6 +292,76 @@ def _context_date(payload: CommandChatRequest) -> str:
     if isinstance(value, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", value):
         return value
     return _today()
+
+
+def _usage_payload(usage: ModelUsage | None) -> dict[str, Any] | None:
+    if not usage:
+        return None
+    return usage.model_dump(by_alias=True, exclude_none=True)
+
+
+def _decision_payload(decision: CommandDecision, source: str, error: str = "") -> dict[str, Any]:
+    payload = decision.model_dump(by_alias=True, exclude_none=True)
+    payload["source"] = source
+    if error:
+        payload["error"] = error
+    return payload
+
+
+def _decision_to_intent(decision: CommandDecision) -> CommandIntent:
+    mapping: dict[str, CommandIntent] = {
+        "create_plan": "planning_request",
+        "save_plan_to_calendar": "sync_to_calendar",
+        "query_plan": "query_plan",
+        "query_notes": "query_notes",
+        "patch_calendar_plan": "patch_calendar_plan",
+        "refine_plan": "refine_current_plan",
+        "refine_task": "refine_current_plan",
+        "save_note": "save_note",
+        "modify_current_draft": "modify_current_draft",
+        "chat": "normal_chat",
+        "clarify": "clarify",
+    }
+    return mapping.get(decision.intent, "normal_chat")
+
+
+def _fallback_decision(intent: CommandIntent, message: str) -> CommandDecision:
+    summary = _intent_reply(intent, message) or ("我会先按本地规则处理这条请求。" if not _looks_english(message) else "I will handle this with a local fallback rule.")
+    intent_map: dict[CommandIntent, str] = {
+        "planning_request": "create_plan",
+        "sync_to_calendar": "save_plan_to_calendar",
+        "query_plan": "query_plan",
+        "query_notes": "query_notes",
+        "patch_calendar_plan": "patch_calendar_plan",
+        "refine_current_plan": "refine_task",
+        "regenerate_draft": "modify_current_draft",
+        "modify_current_draft": "modify_current_draft",
+        "show_current_plan": "chat",
+        "save_note": "save_note",
+        "clarify": "clarify",
+    }
+    action_map: dict[CommandIntent, str] = {
+        "planning_request": "create",
+        "sync_to_calendar": "save",
+        "query_plan": "query",
+        "query_notes": "query",
+        "patch_calendar_plan": "update",
+        "refine_current_plan": "refine",
+        "regenerate_draft": "update",
+        "modify_current_draft": "update",
+        "save_note": "save",
+        "clarify": "answer",
+    }
+    return CommandDecision(
+        intent=intent_map.get(intent, "chat"),
+        confidence=0.55 if intent != "normal_chat" else 0.5,
+        targetType="unknown",
+        action=action_map.get(intent, "answer"),
+        needsConfirmation=intent in {"sync_to_calendar", "patch_calendar_plan", "save_note"},
+        needsClarification=intent == "clarify",
+        clarificationQuestion="你想让我查计划、修改计划，还是做一个新规划？" if intent == "clarify" else None,
+        decisionSummary=summary,
+    )
 
 
 WEEKDAY_INDEX = {
@@ -624,6 +712,8 @@ def _looks_like_calendar_patch(text: str) -> bool:
     lowered = text.lower()
     if re.search(r"(重新生成|再生成|换个版本|更轻松|更激进|regenerate)", lowered):
         return False
+    if _looks_like_generic_calendar_patch(lowered):
+        return True
     if re.search(r"(删除|删掉|取消|移除|delete|remove|cancel).{0,20}(计划|任务|日程|安排|plan|task|schedule)?", lowered):
         return True
     patch_words = r"(改到|改为|改成|调整到|移到|挪到|推到|改名|标题|名称|时长|时间|分钟|小时|reschedule|move|rename|change|update)"
@@ -633,6 +723,13 @@ def _looks_like_calendar_patch(text: str) -> bool:
     ):
         return True
     return False
+
+
+def _looks_like_generic_calendar_patch(text: str) -> bool:
+    lowered = text.lower().strip()
+    if re.search(r"(修改|调整|改一下|改动|edit|modify|change|update).{0,8}(我的|当前|日历)?(计划|任务|日程|安排|plan|task|schedule)", lowered):
+        return True
+    return bool(re.fullmatch(r"(修改|调整|改一下|edit|modify|change|update)\s*(计划|任务|plan|task)", lowered))
 
 
 def _is_record(value: Any) -> bool:
@@ -804,6 +901,12 @@ def _patch_result_text(result: dict[str, Any]) -> str:
     return "已更新日历计划。"
 
 
+def _note_result_text(result: dict[str, Any]) -> str:
+    if result.get("status") == "failed":
+        return str(result.get("error") or "保存笔记失败。")
+    return "已保存到月笔记。"
+
+
 def _extract_ordinal(message: str) -> int | None:
     lowered = message.lower()
     number_match = re.search(r"(?:第\s*)?(\d+)(?:\s*(?:个|项|条|号|task))", lowered)
@@ -901,6 +1004,12 @@ def _patch_changes_from_message(message: str, base_iso: str) -> dict[str, Any]:
 
 def _is_delete_request(message: str) -> bool:
     return bool(re.search(r"(删除|删掉|取消|移除|delete|remove|cancel)", message, re.I))
+
+
+def _note_text_from_message(message: str) -> str:
+    cleaned = re.sub(r"(请|帮我|把|将|这段|这个|内容|保存|存下|记下|作为|成|到|笔记|note|save)", " ", message, flags=re.I)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ：:，,。.")
+    return cleaned[:2000]
 
 
 def _truncate_context_line(value: str, limit: int = 220) -> str:
@@ -1075,17 +1184,127 @@ class CommandAgentService:
                 lines.append(f"{role}: {content}")
         return "\n".join(lines)
 
+    def _draft_decision_summary(self, draft: CommandDraftOut | None) -> dict[str, Any] | None:
+        if not draft:
+            return None
+        structured_plan = draft.payload.get("structuredPlan")
+        return {
+            "id": draft.id,
+            "title": draft.title,
+            "version": draft.version,
+            "status": draft.status,
+            "taskCount": _task_count(structured_plan) if _valid_structured_plan(structured_plan) else 0,
+        }
+
+    def _calendar_decision_summary(self, base_iso: str) -> list[dict[str, Any]]:
+        base = _base_date(base_iso)
+        start = (base - timedelta(days=1)).isoformat()
+        end = (base + timedelta(days=7)).isoformat()
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, date, time, content, done, estimated_minutes, source
+                FROM plans
+                WHERE date >= ? AND date <= ?
+                ORDER BY date ASC, time ASC, created_at ASC
+                LIMIT 16
+                """,
+                (start, end),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "date": row["date"],
+                "time": row["time"],
+                "title": row["content"],
+                "done": bool(row["done"]),
+                "estimatedMinutes": int(row["estimated_minutes"] or 0),
+                "source": row["source"],
+            }
+            for row in rows
+        ]
+
+    def _notes_decision_summary(self) -> list[dict[str, Any]]:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT year, month, content, updated_at
+                FROM month_notes
+                WHERE content != ''
+                ORDER BY year DESC, month DESC
+                LIMIT 6
+                """
+            ).fetchall()
+        return [
+            {
+                "year": row["year"],
+                "month": row["month"],
+                "content": _truncate_context_line(row["content"], 260),
+                "updatedAt": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def _resolve_auto_decision(self, thread_id: str, payload: CommandChatRequest) -> tuple[CommandIntent, CommandDecision, str, ModelUsage | None, str]:
+        base_iso = _context_date(payload)
+        current_draft = self._get_current_draft(thread_id)
+        decision_result: CommandDecisionResult = CommandDecisionService().decide(
+            payload.message,
+            thread_context=self._thread_context_summary(thread_id),
+            current_draft=self._draft_decision_summary(current_draft),
+            last_search_results=self._last_plan_search_results(thread_id),
+            context_date=base_iso,
+            calendar_summary=self._calendar_decision_summary(base_iso),
+            notes_summary=self._notes_decision_summary(),
+        )
+        if decision_result.decision:
+            return (
+                _decision_to_intent(decision_result.decision),
+                decision_result.decision,
+                decision_result.source,
+                decision_result.usage,
+                decision_result.error,
+            )
+
+        intent = resolve_command_intent(
+            payload.message,
+            detect_command_intent(payload.message),
+            has_current_draft=current_draft is not None,
+        )
+        return (
+            intent,
+            _fallback_decision(intent, payload.message),
+            "local_fallback",
+            decision_result.usage,
+            decision_result.error,
+        )
+
     def stream_chat(self, payload: CommandChatRequest) -> Iterator[str]:
         thread_id = ""
         intent = detect_command_intent(payload.message)
+        decision: CommandDecision | None = None
+        decision_source = ""
+        decision_error = ""
+        model_usage: ModelUsage | None = None
         try:
             thread_id = self.ensure_thread(payload.thread_id, title=payload.message)
-            intent = resolve_command_intent(
-                payload.message,
-                intent,
-                has_current_draft=self._get_current_draft(thread_id) is not None,
+            if payload.mode == "auto":
+                intent, decision, decision_source, model_usage, decision_error = self._resolve_auto_decision(thread_id, payload)
+            else:
+                intent = resolve_command_intent(
+                    payload.message,
+                    intent,
+                    has_current_draft=self._get_current_draft(thread_id) is not None,
+                )
+            yield from self._stream_chat_impl(
+                thread_id,
+                payload,
+                intent=intent,
+                decision=decision,
+                decision_source=decision_source,
+                decision_error=decision_error,
+                model_usage=model_usage,
             )
-            yield from self._stream_chat_impl(thread_id, payload, intent=intent)
         except AssertionError:
             raise
         except Exception as exc:
@@ -1095,19 +1314,58 @@ class CommandAgentService:
                 exc,
             )
 
-    def _stream_chat_impl(self, thread_id: str, payload: CommandChatRequest, *, intent: CommandIntent) -> Iterator[str]:
+    def _stream_chat_impl(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        *,
+        intent: CommandIntent,
+        decision: CommandDecision | None = None,
+        decision_source: str = "",
+        decision_error: str = "",
+        model_usage: ModelUsage | None = None,
+    ) -> Iterator[str]:
         user_message = self.add_message(thread_id, "user", payload.message)
         yield _ndjson({"type": "thread", "threadId": thread_id})
 
+        if payload.mode == "auto" and decision:
+            decision_card = _decision_payload(decision, decision_source or "local_fallback", decision_error)
+            self.add_message(
+                thread_id,
+                "card",
+                decision.decision_summary or decision.intent,
+                kind="command_decision",
+                payload=decision_card,
+            )
+            yield _ndjson({"type": "command_decision", **decision_card})
+            usage_event = _usage_payload(model_usage)
+            if usage_event:
+                self.add_message(thread_id, "card", "", kind="model_usage", payload={"usage": usage_event})
+                yield _ndjson({"type": "model_usage", "usage": usage_event})
+
         if payload.mode == "chat":
-            content = self._chat_locked_or_normal(thread_id, payload, intent, exclude_message_id=user_message.id)
+            content, usage = self._chat_locked_or_normal_with_usage(thread_id, payload, intent, exclude_message_id=user_message.id)
             self.add_message(thread_id, "assistant", content)
             yield _ndjson({"type": "assistant_delta", "text": content})
+            usage_event = _usage_payload(usage)
+            if usage_event:
+                self.add_message(thread_id, "card", "", kind="model_usage", payload={"usage": usage_event})
+                yield _ndjson({"type": "model_usage", "usage": usage_event})
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
         if payload.mode == "workbench":
             yield from self._stream_runtime_handoff(thread_id, payload, exclude_message_id=user_message.id, auto_detail=True)
+            yield _ndjson({"type": "done", "threadId": thread_id})
+            return
+
+        if payload.mode == "auto" and intent == "planning_request":
+            yield from self._stream_runtime_handoff(thread_id, payload, exclude_message_id=user_message.id, auto_detail=True)
+            yield _ndjson({"type": "done", "threadId": thread_id})
+            return
+
+        if payload.mode == "auto" and intent == "clarify":
+            yield from self._stream_clarify(thread_id, decision)
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
@@ -1136,17 +1394,32 @@ class CommandAgentService:
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
+        if payload.mode == "auto" and intent == "query_notes":
+            yield from self._stream_query_notes(thread_id, payload, decision=decision)
+            yield _ndjson({"type": "done", "threadId": thread_id})
+            return
+
         if payload.mode == "auto" and intent == "patch_calendar_plan":
-            yield from self._stream_patch_calendar_plan(thread_id, payload)
+            yield from self._stream_patch_calendar_plan(thread_id, payload, decision=decision)
+            yield _ndjson({"type": "done", "threadId": thread_id})
+            return
+
+        if payload.mode == "auto" and intent == "save_note":
+            yield from self._stream_save_note(thread_id, payload, decision=decision)
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
         if payload.mode == "auto" and intent not in {"normal_chat", "planning_request"}:
             content = _intent_reply(intent, payload.message)
         else:
-            content = self._llm_chat(payload, thread_id=thread_id, exclude_message_id=user_message.id)
+            content, usage = self._llm_chat_with_usage(payload, thread_id=thread_id, exclude_message_id=user_message.id)
         self.add_message(thread_id, "assistant", content)
         yield _ndjson({"type": "assistant_delta", "text": content})
+        if "usage" in locals():
+            usage_event = _usage_payload(usage)
+            if usage_event:
+                self.add_message(thread_id, "card", "", kind="model_usage", payload={"usage": usage_event})
+                yield _ndjson({"type": "model_usage", "usage": usage_event})
         yield _ndjson({"type": "done", "threadId": thread_id})
 
     def stream_approve(self, payload: CommandApproveRequest) -> Iterator[str]:
@@ -1181,6 +1454,18 @@ class CommandAgentService:
 
         if decision == "reject":
             self._update_action(payload.action_id, status="rejected", result={"decision": "reject"})
+            if action["target"] == "notes":
+                content = "已取消保存笔记。"
+                self.add_message(
+                    thread_id,
+                    "card",
+                    content,
+                    kind="execution_result",
+                    payload={"status": "rejected", "actionId": payload.action_id},
+                )
+                yield _ndjson({"type": "execution_result", "status": "rejected", "text": content, "actionId": payload.action_id})
+                yield _ndjson({"type": "done", "threadId": thread_id})
+                return
             content = "已取消操作，未修改日历。" if action["operation"] in {"update", "delete"} else "已取消写入日历。"
             self.add_message(
                 thread_id,
@@ -1190,6 +1475,15 @@ class CommandAgentService:
                 payload={"status": "rejected", "actionId": payload.action_id},
             )
             yield _ndjson({"type": "execution_result", "status": "rejected", "text": content, "actionId": payload.action_id})
+            yield _ndjson({"type": "done", "threadId": thread_id})
+            return
+
+        if action["target"] == "notes":
+            result = self._execute_note_action(payload.action_id, action)
+            text = _note_result_text(result)
+            self.add_message(thread_id, "card", text, kind="note_write_result", payload=result)
+            yield _ndjson({"type": "note_write_result", **result})
+            yield _ndjson({"type": "execution_result", "status": "success" if result.get("status") == "success" else "failed", "text": text})
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
@@ -1230,6 +1524,32 @@ class CommandAgentService:
             return locked
         return self._llm_chat(payload, thread_id=thread_id, exclude_message_id=exclude_message_id)
 
+    def _chat_locked_or_normal_with_usage(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        intent: CommandIntent,
+        *,
+        exclude_message_id: str = "",
+    ) -> tuple[str, ModelUsage | None]:
+        locked = _chat_lock_reply(intent, payload.message)
+        if locked:
+            return locked, None
+        return self._llm_chat_with_usage(payload, thread_id=thread_id, exclude_message_id=exclude_message_id)
+
+    def _stream_clarify(self, thread_id: str, decision: CommandDecision | None = None) -> Iterator[str]:
+        question = ""
+        if decision and decision.clarification_question:
+            question = decision.clarification_question
+        if not question:
+            question = "你想让我查计划、修改计划，还是做一个新规划？"
+        payload = {
+            "question": question,
+            "decision": decision.model_dump(by_alias=True, exclude_none=True) if decision else None,
+        }
+        self.add_message(thread_id, "card", question, kind="clarify_question", payload=payload)
+        yield _ndjson({"type": "clarify_question", **payload})
+
     def _stream_query_plan(self, thread_id: str, payload: CommandChatRequest) -> Iterator[str]:
         base_iso = _context_date(payload)
         calendar_plans, date_range = _search_calendar_plans(payload.message, base_iso)
@@ -1251,6 +1571,108 @@ class CommandAgentService:
         result["summary"] = _query_result_text(result)
         self.add_message(thread_id, "card", result["summary"], kind="plan_search_results", payload=result)
         yield _ndjson({"type": "plan_search_results", **result})
+
+    def _stream_query_notes(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        *,
+        decision: CommandDecision | None = None,
+    ) -> Iterator[str]:
+        params = decision.extracted_params if decision else None
+        query = (params.query if params and params.query else payload.message).strip()
+        materials = [source.model_dump(by_alias=True) for source in RagService().retrieve(query, limit=6)]
+        goal_history = _search_goal_history(query, limit=6)
+        month_notes = _search_month_notes(query, limit=8)
+        parts = []
+        if materials:
+            parts.append(f"资料 {len(materials)} 条")
+        if goal_history:
+            parts.append(f"历史规划 {len(goal_history)} 条")
+        if month_notes:
+            parts.append(f"月笔记 {len(month_notes)} 条")
+        summary = "找到" + "、".join(parts) + "。" if parts else "没有找到匹配的笔记或资料。"
+        result = {
+            "query": query,
+            "summary": summary,
+            "materials": materials,
+            "goalHistory": goal_history,
+            "monthNotes": month_notes,
+        }
+        self.add_message(thread_id, "card", summary, kind="note_search_results", payload=result)
+        yield _ndjson({"type": "note_search_results", **result})
+
+    def _stream_save_note(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        *,
+        decision: CommandDecision | None = None,
+    ) -> Iterator[str]:
+        params = decision.extracted_params if decision else None
+        note_text = ""
+        if params:
+            note_text = (params.note_text or params.query or params.title or "").strip()
+        note_text = note_text or _note_text_from_message(payload.message)
+        if not note_text:
+            question = "你想保存哪段内容到笔记？"
+            self.add_message(thread_id, "card", question, kind="clarify_question", payload={"question": question})
+            yield _ndjson({"type": "clarify_question", "question": question})
+            return
+
+        base_iso = _context_date(payload)
+        note_date = params.date if params and isinstance(params.date, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", params.date) else base_iso
+        target = _base_date(note_date)
+        current = get_month_note(target.year, target.month)
+        before = current.content or ""
+        entry = f"{note_date} {note_text.strip()}"
+        after = f"{before.rstrip()}\n{entry}".strip() if before.strip() else entry
+        operation = "update" if before.strip() else "create"
+        action_id = self._create_note_action(
+            thread_id,
+            operation,
+            target.year,
+            target.month,
+            note_date,
+            note_text,
+            before,
+            after,
+        )
+        preview = {
+            "actionId": action_id,
+            "operation": operation,
+            "risk": "write",
+            "year": target.year,
+            "month": target.month,
+            "date": note_date,
+            "noteText": note_text,
+            "before": before,
+            "after": after,
+        }
+        self.add_message(thread_id, "card", "准备保存笔记", kind="note_write_preview", payload=preview)
+        yield _ndjson({"type": "note_write_preview", **preview})
+
+        if command_action_requires_approval(payload.permission, "write"):
+            self._update_action(action_id, status="waiting_approval")
+            self._record_approval(thread_id, action_id, payload.permission, "pending")
+            summary = "准备保存到月笔记，需要确认。"
+            approval = {
+                "actionId": action_id,
+                "draftId": "",
+                "permission": payload.permission,
+                "risk": "write",
+                "target": "notes",
+                "operation": operation,
+                "summary": summary,
+            }
+            self.add_message(thread_id, "card", summary, kind="approval_request", payload=approval)
+            yield _ndjson({"type": "approval_required", **approval})
+            return
+
+        result = self._execute_note_action(action_id)
+        text = _note_result_text(result)
+        self.add_message(thread_id, "card", text, kind="note_write_result", payload=result)
+        yield _ndjson({"type": "note_write_result", **result})
 
     def _last_plan_search_results(self, thread_id: str) -> list[dict[str, Any]]:
         with get_conn() as conn:
@@ -1303,10 +1725,79 @@ class CommandAgentService:
             candidates = [plan for plan in candidates if _plan_matches_terms(plan, terms)]
         return candidates[:12]
 
-    def _stream_patch_calendar_plan(self, thread_id: str, payload: CommandChatRequest) -> Iterator[str]:
+    def _select_patch_candidates_from_decision(
+        self,
+        thread_id: str,
+        decision: CommandDecision,
+    ) -> list[dict[str, Any]]:
+        params = decision.extracted_params
+        if params.target_index:
+            last_results = self._last_plan_search_results(thread_id)
+            if 1 <= params.target_index <= len(last_results):
+                plan = self._load_plan_payload(str(last_results[params.target_index - 1].get("id") or ""))
+                return [plan] if plan else []
+
+        date_range = params.date_range
+        where = []
+        sql_params: list[Any] = []
+        if date_range and date_range.start and date_range.end:
+            where.append("date >= ? AND date <= ?")
+            sql_params.extend([date_range.start, date_range.end])
+        elif params.date:
+            where.append("date = ?")
+            sql_params.append(params.date)
+        else:
+            return []
+        sql = "SELECT * FROM plans"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY date ASC, time ASC, created_at ASC LIMIT 100"
+        with get_conn() as conn:
+            rows = conn.execute(sql, tuple(sql_params)).fetchall()
+        candidates = [_plan_card_from_row(row) for row in rows]
+        terms = _query_terms(params.query or params.title or "")
+        if terms:
+            candidates = [plan for plan in candidates if _plan_matches_terms(plan, terms)]
+        return candidates[:12]
+
+    def _patch_changes_from_decision(self, decision: CommandDecision | None) -> dict[str, Any]:
+        if not decision:
+            return {}
+        params = decision.extracted_params
+        patch = params.patch_fields
+        changes: dict[str, Any] = {}
+        if patch:
+            if patch.date:
+                changes["date"] = patch.date
+            if patch.time:
+                changes["time"] = patch.time
+            if patch.estimated_minutes:
+                changes["estimatedMinutes"] = patch.estimated_minutes
+            if patch.title:
+                changes["content"] = patch.title
+        if params.time and "time" not in changes:
+            changes["time"] = params.time
+        if params.estimated_minutes and "estimatedMinutes" not in changes:
+            changes["estimatedMinutes"] = params.estimated_minutes
+        return changes
+
+    def _stream_patch_calendar_plan(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        *,
+        decision: CommandDecision | None = None,
+    ) -> Iterator[str]:
         base_iso = _context_date(payload)
-        candidates = self._select_patch_candidates(thread_id, payload.message, base_iso)
+        candidates = self._select_patch_candidates_from_decision(thread_id, decision) if decision else []
         if not candidates:
+            candidates = self._select_patch_candidates(thread_id, payload.message, base_iso)
+        if not candidates:
+            if _looks_like_generic_calendar_patch(payload.message):
+                question = "你想修改哪一个计划？可以先说“查看今天计划”，再告诉我修改第几个。"
+                self.add_message(thread_id, "card", question, kind="clarify_question", payload={"question": question})
+                yield _ndjson({"type": "clarify_question", "question": question})
+                return
             content = "没有找到要修改的日历计划。你可以先问“今天有什么安排”，再说“把第一个改到后天”。"
             self.add_message(thread_id, "assistant", content)
             yield _ndjson({"type": "assistant_delta", "text": content})
@@ -1326,8 +1817,8 @@ class CommandAgentService:
             return
 
         before = candidates[0]
-        operation = "delete" if _is_delete_request(payload.message) else "update"
-        changes = {} if operation == "delete" else _patch_changes_from_message(payload.message, base_iso)
+        operation = "delete" if (decision and decision.action == "delete") or _is_delete_request(payload.message) else "update"
+        changes = {} if operation == "delete" else {**_patch_changes_from_message(payload.message, base_iso), **self._patch_changes_from_decision(decision)}
         if operation == "update" and not changes:
             content = "我找到了计划，但没有识别到要改的字段。第一版支持改标题、日期、时间和预计时长。"
             self.add_message(thread_id, "assistant", content)
@@ -1360,6 +1851,8 @@ class CommandAgentService:
                 "draftId": "",
                 "permission": payload.permission,
                 "risk": risk,
+                "target": "calendar",
+                "operation": operation,
                 "summary": summary,
             }
             self.add_message(thread_id, "card", summary, kind="approval_request", payload=approval)
@@ -1640,6 +2133,8 @@ class CommandAgentService:
                 "draftId": draft.id,
                 "permission": payload.permission,
                 "risk": "write",
+                "target": "calendar",
+                "operation": "create_or_update_plans",
                 "summary": f"准备写入 {len(items)} 个日历计划，需要确认。",
             }
             self.add_message(thread_id, "card", approval["summary"], kind="approval_request", payload=approval)
@@ -1783,6 +2278,10 @@ class CommandAgentService:
         yield _ndjson({"type": "summary", "text": summary, "draftId": draft.id})
         if auto_detail:
             yield from self._stream_plan_detail(thread_id)
+        model_usage = proposal_output.get("modelUsage") if isinstance(proposal_output.get("modelUsage"), dict) else None
+        if model_usage:
+            self.add_message(thread_id, "card", "", kind="model_usage", payload={"usage": model_usage})
+            yield _ndjson({"type": "model_usage", "usage": model_usage})
 
     def _create_calendar_draft(
         self,
@@ -1897,6 +2396,69 @@ class CommandAgentService:
                     thread_id,
                     draft.id,
                     f"Write {len(items)} draft tasks to Calendar",
+                    json.dumps(payload, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            conn.execute("UPDATE command_threads SET updated_at = ? WHERE id = ?", (now, thread_id))
+        return action_id
+
+    def _create_note_action(
+        self,
+        thread_id: str,
+        operation: str,
+        year: int,
+        month: int,
+        note_date: str,
+        note_text: str,
+        before: str,
+        after: str,
+    ) -> str:
+        action_id = str(uuid4())
+        anchor_draft_id = str(uuid4())
+        now = _now()
+        payload = {
+            "year": year,
+            "month": month,
+            "date": note_date,
+            "noteText": note_text,
+            "before": before,
+            "after": after,
+        }
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO command_drafts(
+                  id, thread_id, kind, version, status, title, summary,
+                  payload_json, source_run_id, created_at, updated_at
+                )
+                VALUES (?, ?, 'calendar_plan', 0, 'dismissed', ?, ?, ?, '', ?, ?)
+                """,
+                (
+                    anchor_draft_id,
+                    thread_id,
+                    "Note write action",
+                    f"save note to {year}-{month:02d}",
+                    json.dumps({"kind": "note_write_anchor", "year": year, "month": month}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO command_actions(
+                  id, thread_id, draft_id, target, operation, risk, status, reason,
+                  payload_json, result_json, error_message, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 'notes', ?, 'write', 'proposed', ?, ?, '{}', '', ?, ?)
+                """,
+                (
+                    action_id,
+                    thread_id,
+                    anchor_draft_id,
+                    operation,
+                    f"Save note to {year}-{month:02d}",
                     json.dumps(payload, ensure_ascii=False),
                     now,
                     now,
@@ -2070,6 +2632,45 @@ class CommandAgentService:
             self._update_action(action_id, status="failed", result=result, error=str(exc))
             return result
 
+    def _execute_note_action(self, action_id: str, action=None) -> dict[str, Any]:
+        action = action or self._load_action(action_id)
+        if not action:
+            return {"actionId": action_id, "status": "failed", "error": "action not found"}
+        self._update_action(action_id, status="running")
+        payload = _json_object(action["payload_json"])
+        try:
+            year = int(payload.get("year"))
+            month = int(payload.get("month"))
+            after = str(payload.get("after") or "")
+            saved = upsert_month_note(MonthNotePut(year=year, month=month, content=after))
+            result = {
+                "actionId": action_id,
+                "operation": action["operation"],
+                "status": "success",
+                "year": saved.year,
+                "month": saved.month,
+                "date": payload.get("date"),
+                "noteText": payload.get("noteText"),
+                "before": payload.get("before") or "",
+                "after": saved.content,
+                "updatedAt": saved.updated_at,
+            }
+            self._update_action(action_id, status="success", result=result)
+            return result
+        except Exception as exc:
+            result = {
+                "actionId": action_id,
+                "operation": action["operation"] if action else "update",
+                "status": "failed",
+                "year": payload.get("year"),
+                "month": payload.get("month"),
+                "before": payload.get("before") or "",
+                "after": payload.get("after") or "",
+                "error": str(exc),
+            }
+            self._update_action(action_id, status="failed", result=result, error=str(exc))
+            return result
+
     def _execute_calendar_action(self, action_id: str) -> dict[str, Any]:
         action = self._load_action(action_id)
         if not action:
@@ -2181,6 +2782,16 @@ class CommandAgentService:
         return "created", plan
 
     def _llm_chat(self, payload: CommandChatRequest, *, thread_id: str = "", exclude_message_id: str = "") -> str:
+        content, _usage = self._llm_chat_with_usage(payload, thread_id=thread_id, exclude_message_id=exclude_message_id)
+        return content
+
+    def _llm_chat_with_usage(
+        self,
+        payload: CommandChatRequest,
+        *,
+        thread_id: str = "",
+        exclude_message_id: str = "",
+    ) -> tuple[str, ModelUsage | None]:
         thread_context = self._thread_context_summary(thread_id, exclude_message_id=exclude_message_id) if thread_id else ""
         system = (
             "You are Planix P Mode in Phase 4.4. Reply in the user's language. "
@@ -2194,14 +2805,18 @@ class CommandAgentService:
             f"{payload.message}\n\n"
             "Answer conversationally and concisely. If the user asks for unsupported execution, explain the current P Mode boundary."
         )
-        result, _error = LlmClient().complete(
+        client = LlmClient()
+        result, error = client.complete(
             "command_chat",
             system,
             user,
             max_tokens=700,
             temperature=0.3,
             timeout_seconds=30,
+            task_type="chat",
         )
         if result and result.content.strip():
-            return result.content.strip()
-        return _fallback_reply(payload.message)
+            return result.content.strip(), usage_from_llm_result(result, "chat")
+        if error and error.local_fallback_allowed is False:
+            return "模型调用失败且本地兜底已关闭，请检查模型路由或开启本地兜底。", local_fallback_usage(client, "chat", error)
+        return _fallback_reply(payload.message), local_fallback_usage(client, "chat", error)

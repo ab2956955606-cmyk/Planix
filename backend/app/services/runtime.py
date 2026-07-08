@@ -13,6 +13,7 @@ from ..schemas import AgentRunRequest, GoalPlanRequest, StructuredGoalPlan
 from .model_knowledge import enrich_with_model_knowledge
 from .plans import list_plans
 from .planning import PlanningService
+from .planning_quality import with_demo_quality_metrics
 from .rag import RagService
 from .structured_goal_plan import build_local_structured_plan, derive_planner_tasks, render_goal_plan_markdown
 
@@ -411,6 +412,17 @@ class RuntimeToolExecutor:
             ]
             source_type = _runtime_plan_source_type(plan.mode, plan.source_type, context)
             local_relevance = _runtime_local_relevance(plan.local_relevance, context)
+            quality_report = plan.quality_report
+            if quality_report and plan.plan_horizon:
+                quality_report = with_demo_quality_metrics(
+                    quality_report,
+                    horizon=plan.plan_horizon,
+                    quality_status=plan.quality_status,
+                    source_type=source_type,
+                    local_relevance=local_relevance,
+                    repair_attempted=plan.quality_status == "repaired",
+                    fallback_used=plan.quality_status == "local_fallback" or plan.mode != "llm",
+                )
             tool_call["input"] = {
                 "goal": context.goal,
                 "date": context.date,
@@ -428,10 +440,11 @@ class RuntimeToolExecutor:
                 "errorType": plan.error_type,
                 "baseUrlHost": plan.base_url_host,
                 "planHorizon": plan.plan_horizon.model_dump(by_alias=True) if plan.plan_horizon else None,
-                "qualityReport": plan.quality_report.model_dump(by_alias=True) if plan.quality_report else None,
+                "qualityReport": quality_report.model_dump(by_alias=True) if quality_report else None,
                 "qualityStatus": plan.quality_status,
                 "sourceType": source_type,
                 "localRelevance": local_relevance,
+                "modelUsage": plan.model_usage.model_dump(by_alias=True) if plan.model_usage else None,
             }
         return {"error": f"Tool {name} is not available."}
 

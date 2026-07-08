@@ -1,4 +1,5 @@
 from app.db import get_conn, load_memory, save_memory
+from app.services import ai_settings as ai_settings_module
 
 
 def _seed_ai_memory_cache() -> None:
@@ -49,9 +50,10 @@ def test_ai_memory_cache_stats_counts_only_history_summaries(client):
     assert stats["plans"] == 1
 
 
-def test_delete_preference_memory_preserves_ai_settings_and_plans(client):
+def test_delete_preference_memory_preserves_ai_settings_and_plans(client, monkeypatch):
+    monkeypatch.setattr(ai_settings_module, "_validate_provider_config", lambda *args, **kwargs: None)
     _seed_ai_memory_cache()
-    client.put(
+    saved = client.put(
         "/api/ai/settings",
         json={
             "provider": "deepseek",
@@ -62,6 +64,7 @@ def test_delete_preference_memory_preserves_ai_settings_and_plans(client):
             "timeoutSeconds": 40,
         },
     )
+    assert saved.status_code == 200
 
     response = client.delete("/api/settings/memory/preferences")
 

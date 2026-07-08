@@ -198,16 +198,23 @@ NDJSON Stream → Agent Flow Trace UI
 
 ### P Mode / Command Agent
 
-P Mode 默认停留在对话式 `auto` 状态。用户直接说“帮我做规划”时，Planix 会按普通聊天回复，不会自动运行 Runtime，也不会创建隐藏 `calendar_plan` 草稿；只有用户手动开启工作台模式后，规划请求才会进入 Runtime 并生成结构化计划草稿。
+P Mode 默认停留在 `auto` 状态，并在 Phase 4.8 采用 LLM-first conversational router：用户输入会先被解析为结构化 `CommandDecision`，再映射到做规划、写日历、查计划、修计划、查/存笔记、细化或普通聊天。`auto + create_plan` 会运行 Runtime 并创建隐藏 `calendar_plan` 草稿；强制 `chat` 模式保持纯聊天，不执行命令；手动 `workbench` 仍保留为强制做规划入口。
 
-Phase 4.7 adds a closed plan query and patch loop inside the existing `#/command` surface. Users can ask for today's plans, search by keyword, or look up study/job-search materials; the backend answers through `/api/command/chat` with `plan_search_results` cards that read Calendar plans, local RAG materials, `planning_goals` history, and `month_notes` without running Runtime or creating a new draft.
+Phase 4.8 keeps the existing `#/command` surface and streams `command_decision`, `model_usage`, `plan_search_results`, `note_search_results`, `note_write_preview`, `note_write_result`, `plan_patch_preview`, and `plan_patch_result` cards through `/api/command/chat` and `/api/command/approve`. Users can ask for today's plans, search by keyword, look up study/job-search materials, or query month notes without creating a new draft.
 
-Calendar changes also stay in P Mode. Requests such as moving a task to another day, changing the time or duration, renaming a plan, or deleting a plan create `command_actions` with `target="calendar"` and emit `plan_patch_preview`; PermissionGate decides whether the action runs immediately or waits for approval, and the final state is echoed through `plan_patch_result`. Updates only touch title/date/time/estimated duration and preserve completion, done state, source, and sourceKey.
+Calendar and note writes stay permission-gated. Calendar requests such as moving a task, changing time or duration, renaming a plan, or deleting a plan create `command_actions` with `target="calendar"` and emit `plan_patch_preview`; note-save requests append to `month_notes` through `command_actions` with `target="notes"` and emit `note_write_preview`. PermissionGate decides whether the action runs immediately or waits for approval, and result cards echo the final state. Calendar updates only touch title/date/time/estimated duration and preserve completion, done state, source, and sourceKey.
+
+Phase 4.8.1 polishes the P Mode conversation UX. The empty state now shows concrete things users can say, QuickActionBar uses fixed natural-language shortcuts, `CommandDecision` cards explain intent in user-facing wording, plan/note result cards expose row actions that send ordinary chat commands back through `/api/command/chat`, note recording previews show the target month clearly, and model usage appears as lightweight footer text.
+
+Phase 4.9A adds the internal Planix AI SDK / ModelProvider layer. Backend model calls now flow through `ModelRouter` and provider adapters for `mock`, `deepseek`, `kimi`, `zhipu_glm`, `openai`, and `custom`, while `LlmClient` remains the compatibility facade for existing planning, Runtime, RAG, P Mode, and Settings code. This phase standardizes provider/model identity, usage parsing, latency, error types, URL normalization, JSON response-format handling, token caps, and local fallback semantics without adding public REST routes or task-level multi-model routing.
+
+Phase 4.9A.1 lets Settings store API Keys per provider. The active provider remains singular, but DeepSeek, Kimi, Zhipu GLM, OpenAI, and Custom can each keep their own saved key and model/base URL config. Settings shows the current active provider plus saved-key chips, and deleting a chip clears only that provider key.
 
 - 提供命令式 AI 对话入口。
 - 支持 Auto Agent Mode、强制 Chat 模式、强制 Workbench 模式。
 - 支持计划草稿生成、展开、修改、细化和上下文追问。
 - 支持通过权限机制确认后写入 Calendar。
+- 支持通过 QuickActionBar 发送自然语言快捷指令，不绕过 LLM decision。
 - 执行链以内联卡片展示，避免把页面变成复杂工作台。
 
 ### Calendar 执行闭环
@@ -234,7 +241,7 @@ Calendar changes also stay in P Mode. Requests such as moving a task to another 
 - **Storage**：SQLite, local files
 - **Retrieval**：SQLite FTS5 / BM25-style search
 - **Runtime**：NDJSON streaming, Agent Flow Trace
-- **AI Provider**：DeepSeek-compatible OpenAI-style API
+- **AI Provider**：Planix internal ModelProvider layer for mock, DeepSeek, Kimi, Zhipu GLM, OpenAI, and custom OpenAI-compatible APIs
 - **Packaging**：PyInstaller sidecar, Tauri Windows installer
 
 ## 本地运行
@@ -301,7 +308,10 @@ Demo readiness check:
 - Agent Runtime + NDJSON streaming。
 - Agent Flow Trace 可观测执行轨迹。
 - P Mode / Command Agent 命令式规划工作流。
-- Phase 4.7 P Mode plan query and Calendar patch preview/result cards.
+- Phase 4.8 P Mode LLM-first command decision router, plan/note query, Calendar patch, note-save preview/result cards, and model usage events.
+- Phase 4.8.1 P Mode conversation UX polish: clearer empty state, fixed quick actions, user-facing decision cards, row action buttons, note record preview, and compact model usage.
+- Phase 4.9A Planix AI SDK / ModelProvider layer with standardized provider, usage, latency, error type, URL normalization, and local fallback semantics.
+- Phase 4.9A.1 Settings multi-provider API Key persistence and visible provider-key deletion.
 - Calendar-ready proposal 预览与确认写入。
 - Tauri 桌面端原型。
 - FastAPI sidecar 打包链路。
@@ -313,6 +323,7 @@ Demo readiness check:
 - README 作品集化与真实截图补充。
 - 更清晰的动作审批 UX。
 - P Mode 细化任务体验优化。
+- Phase 4.9B task-level Multi-Model Router / fallback chain.
 
 ### 下一步
 
