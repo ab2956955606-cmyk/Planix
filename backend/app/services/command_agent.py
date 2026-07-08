@@ -19,6 +19,7 @@ from ..schemas import (
     CommandMessageOut,
     CommandPermission,
     CommandThreadSummaryOut,
+    MemoryCreate,
     ModelUsage,
     MonthNotePut,
     PlanCreate,
@@ -29,6 +30,8 @@ from ..schemas import (
 )
 from .command_decision import CommandDecisionResult, CommandDecisionService, local_fallback_usage, usage_from_llm_result
 from .llm import LlmClient
+from .memory_agent import MemoryAgentService, detect_query_kinds
+from .memory_store import MemoryService
 from .month_notes import get_month_note, upsert_month_note
 from .permission_gate import command_action_requires_approval
 from .plans import create_plan, delete_plan, save_plan_refined_task, update_plan
@@ -45,8 +48,10 @@ CommandIntent = Literal[
     "sync_to_calendar",
     "refine_current_plan",
     "query_plan",
+    "query_memory",
     "query_notes",
     "patch_calendar_plan",
+    "save_memory",
     "save_note",
     "clarify",
     "navigate_ui",
@@ -128,6 +133,10 @@ def detect_command_intent(message: str) -> CommandIntent:
     text = message.strip().lower()
     if not text:
         return "normal_chat"
+    if re.search(r"(记住|偏好|适合|不喜欢|只能|希望以后|记一下|记录一下|保存一下|保存成笔记|保存为笔记|记录一条记忆|记录记忆|save memory|remember)", text):
+        return "save_memory"
+    if re.search(r"(查一下|查询|搜索|找|看看).{0,16}(记忆|个人记录|笔记|资料|材料|文档|历史规划|规划档案|偏好|复盘|memory|note|material|document)", text):
+        return "query_memory"
     if re.search(r"(保存|存下|记下|save).{0,12}(笔记|note)", text) or re.search(r"(笔记|note).{0,12}(保存|存下|save)", text):
         return "save_note"
 
@@ -282,7 +291,7 @@ def _stream_failure_message(payload: CommandChatRequest, intent: CommandIntent |
 def _approval_failure_message(action: Any | None) -> str:
     if action and action["target"] == "calendar":
         return CALENDAR_WRITE_ERROR_MESSAGE
-    if action and action["target"] == "notes":
+    if action and action["target"] in {"notes", "memory"}:
         return "保存笔记失败，请检查后端服务或月笔记数据。"
     return COMMAND_STREAM_ERROR_MESSAGE
 
@@ -313,11 +322,13 @@ def _decision_to_intent(decision: CommandDecision) -> CommandIntent:
         "create_plan": "planning_request",
         "save_plan_to_calendar": "sync_to_calendar",
         "query_plan": "query_plan",
-        "query_notes": "query_notes",
+        "query_memory": "query_memory",
+        "query_notes": "query_memory",
         "patch_calendar_plan": "patch_calendar_plan",
         "refine_plan": "refine_current_plan",
         "refine_task": "refine_current_plan",
-        "save_note": "save_note",
+        "save_memory": "save_memory",
+        "save_note": "save_memory",
         "modify_current_draft": "modify_current_draft",
         "chat": "normal_chat",
         "clarify": "clarify",
@@ -331,24 +342,28 @@ def _fallback_decision(intent: CommandIntent, message: str) -> CommandDecision:
         "planning_request": "create_plan",
         "sync_to_calendar": "save_plan_to_calendar",
         "query_plan": "query_plan",
-        "query_notes": "query_notes",
+        "query_memory": "query_memory",
+        "query_notes": "query_memory",
         "patch_calendar_plan": "patch_calendar_plan",
         "refine_current_plan": "refine_task",
         "regenerate_draft": "modify_current_draft",
         "modify_current_draft": "modify_current_draft",
         "show_current_plan": "chat",
-        "save_note": "save_note",
+        "save_memory": "save_memory",
+        "save_note": "save_memory",
         "clarify": "clarify",
     }
     action_map: dict[CommandIntent, str] = {
         "planning_request": "create",
         "sync_to_calendar": "save",
         "query_plan": "query",
+        "query_memory": "query",
         "query_notes": "query",
         "patch_calendar_plan": "update",
         "refine_current_plan": "refine",
         "regenerate_draft": "update",
         "modify_current_draft": "update",
+        "save_memory": "save",
         "save_note": "save",
         "clarify": "answer",
     }
@@ -357,7 +372,7 @@ def _fallback_decision(intent: CommandIntent, message: str) -> CommandDecision:
         confidence=0.55 if intent != "normal_chat" else 0.5,
         targetType="unknown",
         action=action_map.get(intent, "answer"),
-        needsConfirmation=intent in {"sync_to_calendar", "patch_calendar_plan", "save_note"},
+        needsConfirmation=intent in {"sync_to_calendar", "patch_calendar_plan", "save_note", "save_memory"},
         needsClarification=intent == "clarify",
         clarificationQuestion="你想让我查计划、修改计划，还是做一个新规划？" if intent == "clarify" else None,
         decisionSummary=summary,
@@ -907,6 +922,12 @@ def _note_result_text(result: dict[str, Any]) -> str:
     return "已保存到月笔记。"
 
 
+def _memory_result_text(result: dict[str, Any]) -> str:
+    if result.get("status") == "failed":
+        return str(result.get("error") or "记录记忆失败。")
+    return "已记录到记忆库。"
+
+
 def _extract_ordinal(message: str) -> int | None:
     lowered = message.lower()
     number_match = re.search(r"(?:第\s*)?(\d+)(?:\s*(?:个|项|条|号|task))", lowered)
@@ -1394,8 +1415,8 @@ class CommandAgentService:
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
-        if payload.mode == "auto" and intent == "query_notes":
-            yield from self._stream_query_notes(thread_id, payload, decision=decision)
+        if payload.mode == "auto" and intent in {"query_memory", "query_notes"}:
+            yield from self._stream_query_memory(thread_id, payload, decision=decision)
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
@@ -1404,8 +1425,8 @@ class CommandAgentService:
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
-        if payload.mode == "auto" and intent == "save_note":
-            yield from self._stream_save_note(thread_id, payload, decision=decision)
+        if payload.mode == "auto" and intent in {"save_memory", "save_note"}:
+            yield from self._stream_save_memory(thread_id, payload, decision=decision)
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
@@ -1454,7 +1475,7 @@ class CommandAgentService:
 
         if decision == "reject":
             self._update_action(payload.action_id, status="rejected", result={"decision": "reject"})
-            if action["target"] == "notes":
+            if action["target"] in {"notes", "memory"}:
                 content = "已取消保存笔记。"
                 self.add_message(
                     thread_id,
@@ -1478,11 +1499,12 @@ class CommandAgentService:
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
-        if action["target"] == "notes":
-            result = self._execute_note_action(payload.action_id, action)
-            text = _note_result_text(result)
-            self.add_message(thread_id, "card", text, kind="note_write_result", payload=result)
-            yield _ndjson({"type": "note_write_result", **result})
+        if action["target"] in {"notes", "memory"}:
+            result = self._execute_memory_action(payload.action_id, action)
+            text = _memory_result_text(result)
+            event_type = "note_write_result" if action["target"] == "notes" else "memory_write_result"
+            self.add_message(thread_id, "card", text, kind=event_type, payload=result)
+            yield _ndjson({"type": event_type, **result})
             yield _ndjson({"type": "execution_result", "status": "success" if result.get("status") == "success" else "failed", "text": text})
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
@@ -1553,13 +1575,25 @@ class CommandAgentService:
     def _stream_query_plan(self, thread_id: str, payload: CommandChatRequest) -> Iterator[str]:
         base_iso = _context_date(payload)
         calendar_plans, date_range = _search_calendar_plans(payload.message, base_iso)
-        terms = _query_terms(payload.message)
+        result = {
+            "query": payload.message,
+            "dateRange": date_range,
+            "calendarPlans": calendar_plans,
+            "materials": [],
+            "goalHistory": [],
+            "monthNotes": [],
+        }
+        result["summary"] = _query_result_text(result)
+        self.add_message(thread_id, "card", result["summary"], kind="plan_search_results", payload=result)
+        yield _ndjson({"type": "plan_search_results", **result})
+        return
+        terms = []
         material_query = " ".join(terms) or payload.message
         materials = []
         if terms or _contains_any(payload.message, ("资料", "材料", "文档", "笔记", "material", "note", "doc")):
             materials = [source.model_dump(by_alias=True) for source in RagService().retrieve(material_query, limit=4)]
-        goal_history = _search_goal_history(payload.message)
-        month_notes = _search_month_notes(payload.message)
+        goal_history = []
+        month_notes = []
         result = {
             "query": payload.message,
             "dateRange": date_range,
@@ -1571,6 +1605,25 @@ class CommandAgentService:
         result["summary"] = _query_result_text(result)
         self.add_message(thread_id, "card", result["summary"], kind="plan_search_results", payload=result)
         yield _ndjson({"type": "plan_search_results", **result})
+
+    def _stream_query_memory(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        *,
+        decision: CommandDecision | None = None,
+    ) -> Iterator[str]:
+        params = decision.extracted_params if decision else None
+        query = (params.query if params and params.query else "").strip()
+        kinds = ["note"] if decision and decision.intent == "query_notes" else detect_query_kinds(payload.message)
+        result_model = MemoryAgentService().search(
+            payload.message,
+            query=query or None,
+            kinds=kinds,
+        )
+        result = result_model.model_dump(by_alias=True)
+        self.add_message(thread_id, "card", result["summary"], kind="memory_search_results", payload=result)
+        yield _ndjson({"type": "memory_search_results", **result})
 
     def _stream_query_notes(
         self,
@@ -1601,6 +1654,66 @@ class CommandAgentService:
         }
         self.add_message(thread_id, "card", summary, kind="note_search_results", payload=result)
         yield _ndjson({"type": "note_search_results", **result})
+
+    def _stream_save_memory(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        *,
+        decision: CommandDecision | None = None,
+    ) -> Iterator[str]:
+        params = decision.extracted_params if decision else None
+        note_text = ""
+        title = ""
+        explicit_kind = None
+        if params:
+            note_text = (params.note_text or params.query or "").strip()
+            title = (params.title or "").strip()
+        if decision and decision.intent == "save_note":
+            explicit_kind = "note"
+        memory_payload = MemoryAgentService().preview_create(
+            payload.message,
+            content=note_text or None,
+            title=title or None,
+            kind=explicit_kind,
+        )
+        if not memory_payload.content.strip() or memory_payload.content.strip() == payload.message.strip() and re.search(r"^(记录一条记忆|记录一条笔记|记录记忆|记录笔记)$", payload.message.strip()):
+            question = "你想让 Planix 记住什么内容？可以直接说“记一下：……”"
+            self.add_message(thread_id, "card", question, kind="clarify_question", payload={"question": question})
+            yield _ndjson({"type": "clarify_question", "question": question})
+            return
+
+        action_id = self._create_memory_action(thread_id, memory_payload)
+        preview = {
+            "actionId": action_id,
+            "operation": "create",
+            "risk": "write",
+            **memory_payload.model_dump(by_alias=True),
+        }
+        self.add_message(thread_id, "card", "准备记录到记忆库", kind="memory_write_preview", payload=preview)
+        yield _ndjson({"type": "memory_write_preview", **preview})
+
+        if command_action_requires_approval(payload.permission, "write"):
+            self._update_action(action_id, status="waiting_approval")
+            self._record_approval(thread_id, action_id, payload.permission, "pending")
+            summary = "准备记录到记忆库，需要确认。"
+            approval = {
+                "actionId": action_id,
+                "draftId": "",
+                "permission": payload.permission,
+                "risk": "write",
+                "target": "memory",
+                "operation": "create",
+                "summary": summary,
+            }
+            self.add_message(thread_id, "card", summary, kind="approval_request", payload=approval)
+            yield _ndjson({"type": "approval_required", **approval})
+            return
+
+        result = self._execute_memory_action(action_id)
+        text = _memory_result_text(result)
+        self.add_message(thread_id, "card", text, kind="memory_write_result", payload=result)
+        yield _ndjson({"type": "memory_write_result", **result})
 
     def _stream_save_note(
         self,
@@ -2273,6 +2386,25 @@ class CommandAgentService:
                 "summary": summary,
             },
         )
+        MemoryService().create_memory(
+            MemoryCreate(
+                kind="planning_history",
+                title=title,
+                content=json.dumps(structured_plan, ensure_ascii=False, indent=2),
+                summary=summary,
+                source="ai",
+                sourceId=draft.id,
+                sourceKey=f"command-draft:{draft.id}",
+                metadata={
+                    "structuredPlan": structured_plan,
+                    "mode": proposal_output.get("mode") or "local_fallback",
+                    "fallbackReason": proposal_output.get("fallbackReason"),
+                    "errorType": proposal_output.get("errorType"),
+                    "source": "p_mode",
+                    "runtimeRunId": source_run_id,
+                },
+            )
+        )
         self.add_message(thread_id, "card", summary, kind="summary", payload={"draftId": draft.id, "text": summary})
         yield _ndjson({"type": "draft_created", "draftId": draft.id, "kind": draft.kind, "version": draft.version})
         yield _ndjson({"type": "summary", "text": summary, "draftId": draft.id})
@@ -2467,6 +2599,51 @@ class CommandAgentService:
             conn.execute("UPDATE command_threads SET updated_at = ? WHERE id = ?", (now, thread_id))
         return action_id
 
+    def _create_memory_action(self, thread_id: str, memory: MemoryCreate) -> str:
+        action_id = str(uuid4())
+        anchor_draft_id = str(uuid4())
+        now = _now()
+        payload = memory.model_dump(by_alias=True)
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO command_drafts(
+                  id, thread_id, kind, version, status, title, summary,
+                  payload_json, source_run_id, created_at, updated_at
+                )
+                VALUES (?, ?, 'calendar_plan', 0, 'dismissed', ?, ?, ?, '', ?, ?)
+                """,
+                (
+                    anchor_draft_id,
+                    thread_id,
+                    "Memory write action",
+                    f"save {memory.kind} memory",
+                    json.dumps({"kind": "memory_write_anchor", "memoryKind": memory.kind}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO command_actions(
+                  id, thread_id, draft_id, target, operation, risk, status, reason,
+                  payload_json, result_json, error_message, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 'memory', 'create', 'write', 'proposed', ?, ?, '{}', '', ?, ?)
+                """,
+                (
+                    action_id,
+                    thread_id,
+                    anchor_draft_id,
+                    f"Save {memory.kind} memory",
+                    json.dumps(payload, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            conn.execute("UPDATE command_threads SET updated_at = ? WHERE id = ?", (now, thread_id))
+        return action_id
+
     def _create_calendar_patch_action(
         self,
         thread_id: str,
@@ -2627,6 +2804,62 @@ class CommandAgentService:
                 "before": before,
                 "after": after,
                 "changes": changes,
+                "error": str(exc),
+            }
+            self._update_action(action_id, status="failed", result=result, error=str(exc))
+            return result
+
+    def _execute_memory_action(self, action_id: str, action=None) -> dict[str, Any]:
+        action = action or self._load_action(action_id)
+        if not action:
+            return {"actionId": action_id, "status": "failed", "error": "action not found"}
+        self._update_action(action_id, status="running")
+        payload = _json_object(action["payload_json"])
+        try:
+            if payload.get("kind"):
+                memory_payload = MemoryCreate.model_validate(payload)
+            else:
+                note_text = str(payload.get("noteText") or payload.get("after") or "").strip()
+                memory_payload = MemoryCreate(
+                    kind="note",
+                    title=note_text[:60] or "个人记录",
+                    content=note_text,
+                    summary=note_text[:220],
+                    source="user",
+                    metadata={
+                        "compat": "notes",
+                        "year": payload.get("year"),
+                        "month": payload.get("month"),
+                        "date": payload.get("date"),
+                    },
+                )
+            saved = MemoryService().create_memory(memory_payload)
+            result = {
+                "actionId": action_id,
+                "operation": action["operation"],
+                "status": "success",
+                "memory": saved.model_dump(by_alias=True),
+                "kind": saved.kind,
+                "title": saved.title,
+                "content": saved.content,
+                "summary": saved.summary,
+                "tags": saved.tags,
+                "noteText": saved.content,
+                "year": payload.get("year"),
+                "month": payload.get("month"),
+                "date": payload.get("date"),
+                "updatedAt": saved.updated_at,
+            }
+            self._update_action(action_id, status="success", result=result)
+            return result
+        except Exception as exc:
+            result = {
+                "actionId": action_id,
+                "operation": action["operation"] if action else "create",
+                "status": "failed",
+                "kind": payload.get("kind") or "note",
+                "title": payload.get("title") or "",
+                "content": payload.get("content") or payload.get("noteText") or "",
                 "error": str(exc),
             }
             self._update_action(action_id, status="failed", result=result, error=str(exc))

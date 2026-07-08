@@ -88,10 +88,11 @@ class CommandDecisionService:
             "Never write to the database and never claim that data was written. "
             "If the user's request is unclear, return intent=\"clarify\" with clarificationQuestion. "
             "Use Simplified Chinese for decisionSummary and clarificationQuestion when the user writes Chinese. "
-            "Allowed intents: create_plan, save_plan_to_calendar, query_plan, patch_calendar_plan, "
-            "refine_plan, refine_task, query_notes, save_note, modify_current_draft, chat, clarify. "
+            "Allowed intents: create_plan, save_plan_to_calendar, query_plan, query_memory, patch_calendar_plan, "
+            "refine_plan, refine_task, query_notes, save_memory, save_note, modify_current_draft, chat, clarify. "
             "Writes must set needsConfirmation=true. Read-only queries can set needsConfirmation=false. "
-            "For saving notes, put the exact note content in extractedParams.noteText when available. "
+            "Use query_plan only for Calendar plans. Use query_memory for notes, materials, preferences, reviews, and planning history. "
+            "Use save_memory for remembered notes, materials, preferences, and reviews. For saving notes or memories, put the exact content in extractedParams.noteText when available. "
             "For calendar patches, use extractedParams.targetIndex for references like first/second, and patchFields "
             "only for title, date, time, estimatedMinutes. Do not include done, result, completion, source, sourceKey, "
             "refinedTask, createdAt, or updatedAt."
@@ -106,7 +107,7 @@ class CommandDecisionService:
                 "calendarSummary": calendar_summary or [],
                 "notesSummary": notes_summary or [],
                 "requiredShape": {
-                    "intent": "create_plan|save_plan_to_calendar|query_plan|patch_calendar_plan|refine_plan|refine_task|query_notes|save_note|modify_current_draft|chat|clarify",
+                    "intent": "create_plan|save_plan_to_calendar|query_plan|query_memory|patch_calendar_plan|refine_plan|refine_task|query_notes|save_memory|save_note|modify_current_draft|chat|clarify",
                     "confidence": 0.0,
                     "targetType": "current_draft|calendar_plan|calendar_date|note|material|unknown",
                     "action": "create|save|query|update|delete|refine|reschedule|summarize|answer",

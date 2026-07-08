@@ -16,6 +16,7 @@ from ..schemas import (
     GoalPlanOut,
     GoalPlanRequest,
     LearningResource,
+    MemoryCreate,
     ModelUsage,
     PhaseItem,
     PlanFitCheck,
@@ -34,6 +35,7 @@ from ..schemas import (
     TimeBlock,
 )
 from .llm import LlmClient
+from .memory_store import MemoryService
 from .planner import _json_object
 from .plans import create_plan, list_plans
 from .planning_quality import (
@@ -49,6 +51,7 @@ from .structured_goal_plan import (
     derive_phase_items,
     derive_planner_tasks,
     normalize_structured_plan,
+    render_goal_plan_markdown,
 )
 
 
@@ -81,6 +84,13 @@ YOGA_CONFLICT_TERMS = (
     "asana",
     "yoga",
 )
+
+
+def _load_preference_memory() -> str:
+    item = MemoryService().get_by_source_key("preference", "preferences:local-user")
+    if item and item.content.strip():
+        return item.content
+    return load_memory()
 
 
 def _parse_date(value: str) -> date_type:
@@ -1047,7 +1057,7 @@ class PlanningService:
 
     def create_goal_plan(self, payload: GoalPlanRequest) -> GoalPlanOut:
         _parse_date(payload.date)
-        preferences = payload.preferences or load_memory()
+        preferences = payload.preferences or _load_preference_memory()
         sources = self.rag.retrieve(" ".join([payload.goal, payload.materials]), limit=4)
         retrieved_sources = [source.model_dump(by_alias=True) for source in sources]
         source_grounding = assess_local_source_grounding(payload.goal, retrieved_sources)
@@ -1216,6 +1226,25 @@ class PlanningService:
                 ),
             )
 
+        MemoryService().create_memory(
+            MemoryCreate(
+                kind="planning_history",
+                title=structured_plan.goal_title,
+                content=render_goal_plan_markdown(structured_plan),
+                summary=summary or structured_plan.goal_description,
+                source="ai",
+                sourceId=plan_id,
+                sourceKey=f"planning_goal:{plan_id}",
+                metadata={
+                    "structuredPlan": structured_plan.model_dump(by_alias=True),
+                    "mode": mode,
+                    "fallbackReason": fallback_reason,
+                    "errorType": error_type,
+                    "source": "goals",
+                },
+            )
+        )
+
         return GoalPlanOut(
             id=plan_id,
             mode=mode,
@@ -1355,7 +1384,7 @@ class PlanningService:
                     "doneCount": done_count,
                     "totalCount": total_count,
                     "unfinished": unfinished,
-                    "preferences": payload.preferences or load_memory(),
+                    "preferences": payload.preferences or _load_preference_memory(),
                 }
             ),
             max_tokens=1800,

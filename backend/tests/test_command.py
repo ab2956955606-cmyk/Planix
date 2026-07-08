@@ -3,8 +3,9 @@ import sqlite3
 from types import SimpleNamespace
 
 from app.db import get_conn, init_db
-from app.schemas import CommandDecision, ModelUsage, RefinedTask
+from app.schemas import CommandDecision, MemoryCreate, ModelUsage, RefinedTask
 from app.services.command_agent import CommandAgentService, detect_command_intent, resolve_command_intent
+from app.services.memory_store import MemoryService
 
 
 def _events(response):
@@ -540,8 +541,8 @@ def test_intent_router_rules():
     assert detect_command_intent("确认写入") == "sync_to_calendar"
     assert detect_command_intent("保存到日程") == "sync_to_calendar"
     assert detect_command_intent("把这个计划写进日历") == "sync_to_calendar"
-    assert detect_command_intent("查一下 Python 笔记") == "query_notes"
-    assert detect_command_intent("把这段保存成笔记") == "save_note"
+    assert detect_command_intent("查一下 Python 笔记") == "query_memory"
+    assert detect_command_intent("把这段保存成笔记") == "save_memory"
     assert resolve_command_intent(
         "保存",
         detect_command_intent("保存"),
@@ -613,38 +614,28 @@ def test_llm_decision_routes_query_plan_without_runtime(client, monkeypatch):
     assert result["calendarPlans"][0]["title"] == PY_STUDY
 
 
-def test_query_plan_searches_materials_history_and_month_notes(client, monkeypatch):
+def test_query_memory_searches_materials_history_and_notes(client, monkeypatch):
     _patch_decision(
         monkeypatch,
         CommandDecision(
-            intent="query_plan",
+            intent="query_memory",
             confidence=0.9,
-            targetType="material",
+            targetType="memory",
             action="query",
             extractedParams={"query": "Python AI 实习"},
-            decisionSummary="我理解你想查计划和资料。",
+            decisionSummary="我理解你想查记忆。",
         ),
     )
     client.post(
         "/api/rag/documents",
         json={"title": "Python 面试资料", "content": "Python portfolio and AI internship notes.", "sourceType": "paste"},
     )
-    with get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO planning_goals(
-              id, goal, summary, structured_plan_json, phases_json, tasks_json, sources_json
-            )
-            VALUES (
-              'goal_python', 'Python AI internship plan', 'History summary',
-              '{"goalTitle":"Python AI internship plan","goalDescription":"History"}',
-              '[]', '[]', '[]'
-            )
-            """
-        )
-        conn.execute(
-            "INSERT INTO month_notes(year, month, content) VALUES (2026, 7, 'Python 月度复盘和 AI 实习材料')"
-        )
+    MemoryService().create_memory(
+        MemoryCreate(kind="planning_history", title="Python AI internship plan", content="History summary")
+    )
+    MemoryService().create_memory(
+        MemoryCreate(kind="note", title="Python month note", content="Python 月度复盘和 AI 实习材料")
+    )
 
     response = client.post(
         "/api/command/chat",
@@ -652,10 +643,11 @@ def test_query_plan_searches_materials_history_and_month_notes(client, monkeypat
     )
 
     assert response.status_code == 200
-    result = next(event for event in _events(response) if event["type"] == "plan_search_results")
-    assert result["materials"]
-    assert result["goalHistory"][0]["title"] == "Python AI internship plan"
-    assert result["monthNotes"][0]["month"] == 7
+    result = next(event for event in _events(response) if event["type"] == "memory_search_results")
+    groups = {group["kind"]: group["items"] for group in result["groups"]}
+    assert groups["material"]
+    assert groups["planning_history"][0]["title"] == "Python AI internship plan"
+    assert groups["note"][0]["title"] == "Python month note"
 
 
 def test_llm_decision_query_notes_returns_note_results(client, monkeypatch):
@@ -670,22 +662,22 @@ def test_llm_decision_query_notes_returns_note_results(client, monkeypatch):
             decisionSummary="我理解你想查找 Python AI 资料。",
         ),
     )
-    client.post(
-        "/api/rag/documents",
-        json={"title": "Python AI notes", "content": "Python AI internship portfolio material.", "sourceType": "paste"},
+    MemoryService().create_memory(
+        MemoryCreate(kind="note", title="Python AI note", content="Python AI 月笔记")
     )
-    with get_conn() as conn:
-        conn.execute("INSERT INTO month_notes(year, month, content) VALUES (2026, 7, 'Python AI 月笔记')")
+    MemoryService().create_memory(
+        MemoryCreate(kind="planning_history", title="Python AI history", content="Python AI planning history")
+    )
 
     response = client.post("/api/command/chat", json={"mode": "auto", "message": "找资料", "context": {"date": "2026-07-05"}})
 
     assert response.status_code == 200
-    result = next(event for event in _events(response) if event["type"] == "note_search_results")
-    assert result["materials"]
-    assert result["monthNotes"]
+    result = next(event for event in _events(response) if event["type"] == "memory_search_results")
+    assert [group["kind"] for group in result["groups"]] == ["note"]
+    assert result["groups"][0]["items"][0]["title"] == "Python AI note"
 
 
-def test_save_note_preview_reject_and_approve_writes_month_note(client, monkeypatch):
+def test_save_note_preview_reject_and_approve_writes_note_memory(client, monkeypatch):
     _patch_decision(
         monkeypatch,
         CommandDecision(
@@ -704,16 +696,14 @@ def test_save_note_preview_reject_and_approve_writes_month_note(client, monkeypa
     )
     assert preview.status_code == 200
     preview_events = _events(preview)
-    note_preview = next(event for event in preview_events if event["type"] == "note_write_preview")
+    note_preview = next(event for event in preview_events if event["type"] == "memory_write_preview")
     approval = next(event for event in preview_events if event["type"] == "approval_required")
-    assert note_preview["year"] == 2026
-    assert note_preview["month"] == 7
+    assert note_preview["kind"] == "note"
+    assert "Python" in note_preview["content"]
 
     rejected = client.post("/api/command/approve", json={"actionId": approval["actionId"], "decision": "reject", "permission": "low"})
     assert rejected.status_code == 200
-    with get_conn() as conn:
-        row = conn.execute("SELECT content FROM month_notes WHERE year = 2026 AND month = 7").fetchone()
-        assert row is None
+    assert MemoryService().search_memories("Python", kinds=["note"]) == []
 
     preview = client.post(
         "/api/command/chat",
@@ -723,10 +713,9 @@ def test_save_note_preview_reject_and_approve_writes_month_note(client, monkeypa
     approved = client.post("/api/command/approve", json={"actionId": action_id, "decision": "approve", "permission": "low"})
 
     assert approved.status_code == 200
-    assert any(event["type"] == "note_write_result" and event["status"] == "success" for event in _events(approved))
-    with get_conn() as conn:
-        row = conn.execute("SELECT content FROM month_notes WHERE year = 2026 AND month = 7").fetchone()
-        assert "Python 面试重点是项目复盘" in row["content"]
+    assert any(event["type"] == "memory_write_result" and event["status"] == "success" for event in _events(approved))
+    memories = MemoryService().search_memories("Python", kinds=["note"])
+    assert memories and "Python" in memories[0].content
 
 
 def test_patch_calendar_plan_low_permission_previews_and_requires_approval(client):

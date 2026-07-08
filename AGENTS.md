@@ -10,7 +10,7 @@ Portfolio-facing documentation version: `v3.0.0`. This is a presentation label f
 
 ## Current Phase
 
-Phase 4 has started with **Command Agent / P Mode**. The current implementation includes Phase 4.8.1 P Mode Conversation UX Polish, Phase 4.9A Planix AI SDK / ModelProvider Layer, and Phase 4.9A.1 multi-provider API Key persistence. Default `auto` mode asks an LLM-backed `CommandDecisionService` for a structured decision before mapping the request to existing P Mode capabilities. `auto + create_plan` may run the backend Runtime and save a hidden `calendar_plan` draft; forced `chat` mode stays text-only; manual `workbench` mode remains a forced planning entry. Users can expand, regenerate/modify, refine tasks, query existing plans/materials/history/notes, save notes into `month_notes`, or preview and patch Calendar plans through P Mode permission handling. P Mode also has a hidden right-side conversation drawer for new chat, history, and thread deletion. Backend model calls now go through the internal `ModelRouter` / `ModelProvider` layer while `LlmClient` remains the compatibility facade.
+Phase 4 has started with **Command Agent / P Mode**. The current implementation includes Phase 4.8.1 P Mode Conversation UX Polish, Phase 4.8.2 Unified Memory Store + Memory Agent, Phase 4.9A Planix AI SDK / ModelProvider Layer, and Phase 4.9A.1 multi-provider API Key persistence. Default `auto` mode asks an LLM-backed `CommandDecisionService` for a structured decision before mapping the request to existing P Mode capabilities. `auto + create_plan` may run the backend Runtime and save a hidden `calendar_plan` draft; forced `chat` mode stays text-only; manual `workbench` mode remains a forced planning entry. Users can expand, regenerate/modify, refine tasks, query Calendar plans, search/write memories, or preview and patch Calendar plans through P Mode permission handling. P Mode also has a hidden right-side conversation drawer for new chat, history, and thread deletion. Backend model calls now go through the internal `ModelRouter` / `ModelProvider` layer while `LlmClient` remains the compatibility facade.
 
 Allowed in this phase:
 
@@ -26,10 +26,12 @@ Allowed in this phase:
 - Keep P Mode context thread-local: recent user/assistant text from the current thread may inform chat and planning, but new chats must not inherit prior thread context.
 - Let P Mode write Calendar plans only from the current hidden `calendar_plan` draft through `command_actions`, `command_approvals`, and PermissionGate.
 - Let P Mode refine tasks in the current hidden `calendar_plan` draft through the existing planning refinement service. Refinement results stay in the command draft until the user writes the plan to Calendar.
-- Let P Mode query Calendar plans, local RAG materials, `planning_goals` history, and `month_notes` through inline `plan_search_results` cards without running Runtime or creating a draft.
+- Let P Mode query Calendar plans only through inline `plan_search_results` cards without running Runtime or creating a draft.
+- Let P Mode query and write long-term context through Memory Agent, `memory_search_results`, `memory_write_preview`, `memory_write_result`, and `command_actions(target="memory")`.
 - Let P Mode preview Calendar plan updates/deletes through `command_actions` before execution. Patch actions may update title/date/time/estimated duration only; they must not overwrite `done`, `result/completion`, `source`, or `sourceKey`.
-- Let P Mode query notes/materials through `note_search_results` and save notes by appending to existing `month_notes` via `note_write_preview`, `command_actions(target="notes")`, PermissionGate, and `note_write_result`.
+- Keep legacy `note_search_results`, `note_write_preview`, `note_write_result`, and `command_actions(target="notes")` replay-compatible by mapping them to `kind="note"` memories.
 - Let Phase 4.8.1 polish P Mode copy and cards: fixed QuickActionBar messages, direct empty-state examples, user-facing decision summaries, plan/note row action buttons that send natural-language messages back through `/api/command/chat`, scenario-specific approval labels, and compact model-usage display.
+- Let Phase 4.8.2 store long-term context in `memories` with kinds `note`, `material`, `planning_history`, `preference`, and `review`; Calendar plans remain separate formal action data.
 - Let Phase 4.9A standardize model calls through `backend/app/services/model_provider.py`, supporting `mock`, `deepseek`, `kimi`, `zhipu_glm`, `openai`, and `custom` providers behind `ModelRouter` while preserving the public `LlmClient` facade.
 - Let Phase 4.9A.1 persist provider API Keys independently in `ai_provider_configs`; Settings may show saved-key chips and delete one provider key at a time.
 - Phase 3.10 may refine tasks with compact plan context, short time blocks, official/authoritative learning resources, budget explanation, and plan-fit checks.
@@ -38,13 +40,13 @@ Allowed in this phase:
 Forbidden in this phase:
 
 - Auto-writing generated tasks to Calendar from Runtime without an explicit P command.
-- Writing Goals, Materials, Settings, or arbitrary non-Calendar data from P Mode. Phase 4.8 allows note-save actions only by appending to `month_notes` through the preview/action/approval path.
+- Writing Goals, Settings, or arbitrary non-Calendar data from P Mode. Phase 4.8.2 allows memory-save actions only through the preview/action/approval path into `memories`.
 - Letting P Mode bypass `command_actions`, `command_approvals`, or PermissionGate for Calendar writes.
 - Letting P Mode patch or delete Calendar rows without an inline preview, approval path when required, and replayable result card.
 - Turning P Workspace into a foreground layout panel or persistent Calendar/Goals/Materials/Notes draft area.
 - Changing `/api/runtime/run` event protocol.
 - Changing Tauri Windows installer sidecar mechanics.
-- Implementing task-level Multi-Model Router selection, backup cloud fallback chains, WriteIntent/Undo, or direct note-to-plan writes in Phase 4.9A.
+- Implementing task-level Multi-Model Router selection, backup cloud fallback chains, WriteIntent/Undo, or direct memory-to-plan writes in Phase 4.9A.
 
 ## Architecture
 
@@ -142,11 +144,11 @@ There is no compatibility fallback for old names or old environment variables.
 - Command permission state is `low | medium | high`; low asks before writes/deletes, medium auto-runs ordinary writes but asks before deletes, high auto-runs ordinary writes/deletes while dangerous actions still require confirmation.
 - P Mode Calendar writes must come from the current hidden `calendar_plan` draft, use `command-draft:` source keys, never overwrite manual plans, and never overwrite `completion/result/done`.
 - P Mode `query_plan` and `patch_calendar_plan` are handled through `/api/command/chat`; do not add public query/patch REST routes or a fixed P Workspace panel.
-- P Mode `query_notes` and `save_note` are also handled through `/api/command/chat`; do not add a separate Notes write REST route for the command surface.
+- P Mode `query_memory` and `save_memory` are handled through `/api/command/chat`; `query_notes` maps to note-only memory search and `save_note` maps to note memory creation for compatibility.
 - P Mode date words for plan query/patch use `context.date` first, then backend local date. Supported ranges include today, tomorrow, the day after tomorrow, this week, next week, this month, and explicit `YYYY-MM-DD`.
 - P Mode patch commands may target the most recent `plan_search_results` card by ordinal phrases such as "first" or "第一个"; ambiguous multi-candidate matches should return a selection/search card rather than creating an action.
 - P Mode patch actions use `command_actions.target = "calendar"`, `operation = "update" | "delete"`, and `risk = "write" | "delete"` with payload `before`, `after`, and `changes`.
-- P Mode note-save actions use `command_actions.target = "notes"`, `operation = "create" | "update"`, and `risk = "write"` with payload `year`, `month`, `before`, `after`, and `noteText`; execution appends to `month_notes` and must not overwrite existing note content.
+- P Mode memory-save actions use `command_actions.target = "memory"`, `operation = "create" | "update" | "delete"`, and `risk = "write" | "delete"` with payload `kind`, `title`, `content`, `summary`, `tags`, `source`, and `metadata`. Legacy `target="notes"` actions are mapped to `kind="note"` memories.
 - In a thread with a current `calendar_plan` draft, P Mode phrases such as `写入计划`, `保存计划`, `保存`, and `确认写入` mean writing the current draft to Calendar through PermissionGate; they must not start a new Runtime planning run.
 - P Mode Calendar writes may carry `refinedTask` values from `command_drafts.payload_json.refinements` into `plans.refined_task_json`; this must never be mixed into `completion/result/done`.
 - P Mode Calendar write failures, including approval execution failures, must show the Calendar-specific write error and must not fall back to draft-save failure wording.
@@ -204,7 +206,7 @@ There is no compatibility fallback for old names or old environment variables.
 - Rust/Tauri streaming bridge must stay a thin pass-through; do not put Runtime state or business logic in Rust.
 - Settings maintenance endpoints under `/api/settings/*` may clear AI memory/cache only. They must not delete formal `plans`, Calendar data, Notes/materials, documents, or AI settings.
 - Phase 4.8 command endpoints expose `POST /api/command/chat`, `POST /api/command/approve`, `GET /api/command/threads`, `GET /api/command/thread/{thread_id}`, and `DELETE /api/command/thread/{thread_id}`. They store `command_threads`, `command_messages`, hidden `command_drafts`, Calendar and Notes write/patch `command_actions`, and `command_approvals`.
-- Phase 4.8 command streams and replay messages may include `command_decision`, `model_usage`, `clarify_question`, `note_search_results`, `note_write_preview`, and `note_write_result` in addition to the existing Runtime, draft, Calendar write, plan search, and Calendar patch cards.
+- Phase 4.8 command streams and replay messages may include `command_decision`, `model_usage`, `clarify_question`, `memory_search_results`, `memory_write_preview`, and `memory_write_result` in addition to the existing Runtime, draft, Calendar write, plan search, and Calendar patch cards. Legacy `note_*` cards remain replay-compatible.
 - Phase 4.8.1 row action buttons are UI affordances only: they must send fixed natural-language messages such as `修改第 1 个计划` back through `/api/command/chat` and must not directly call Calendar or Notes APIs.
 - `refine_current_plan` is a command intent handled through `/api/command/chat`. It updates the current `command_drafts.payload_json.refinements`, emits inline refinement result cards, and does not write Calendar unless the user separately commands a Calendar write.
 - `query_plan` and `patch_calendar_plan` are command intents handled through `/api/command/chat`. They emit `plan_search_results`, `plan_patch_preview`, and `plan_patch_result` cards, and replay history must tolerate those card kinds.

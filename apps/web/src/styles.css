@@ -2966,11 +2966,13 @@ select:focus {
 }
 
 .command-inline-card.note-search-results,
+.command-inline-card.memory-search-results,
 .command-inline-card.command-decision {
   border-color: rgba(45, 212, 191, 0.3);
 }
 
-.command-inline-card.note-write-preview {
+.command-inline-card.note-write-preview,
+.command-inline-card.memory-write-preview {
   border-color: rgba(251, 191, 36, 0.34);
 }
 
@@ -3061,6 +3063,22 @@ select:focus {
 .command-row-actions button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.memory-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.memory-tags span {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 8px;
 }
 
 .note-write-target {

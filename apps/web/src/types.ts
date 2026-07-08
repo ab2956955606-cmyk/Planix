@@ -322,6 +322,49 @@ export interface RagDocumentInput {
   sourceType?: string;
 }
 
+export type MemoryKind = 'note' | 'material' | 'planning_history' | 'preference' | 'review';
+export type MemorySource = 'user' | 'ai' | 'system';
+
+export interface MemoryItem {
+  id: string;
+  kind: MemoryKind;
+  title: string;
+  content: string;
+  summary: string;
+  tags: string[];
+  source: MemorySource;
+  sourceId?: string;
+  sourceKey?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryInput {
+  kind: MemoryKind;
+  title?: string;
+  content: string;
+  summary?: string;
+  tags?: string[];
+  source?: MemorySource;
+  sourceId?: string;
+  sourceKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MemorySearchGroup {
+  kind: MemoryKind;
+  title: string;
+  items: MemoryItem[];
+}
+
+export interface MemorySearchResult {
+  query: string;
+  summary: string;
+  groups: MemorySearchGroup[];
+  results: MemoryItem[];
+}
+
 export interface AiMaterialDraftRequest {
   query: string;
   outputLanguage?: 'zh' | 'en';

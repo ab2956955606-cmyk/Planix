@@ -1,14 +1,12 @@
 import json
-import sqlite3
 from collections import Counter
 from hashlib import sha256
 from re import findall
-from uuid import uuid4
 
-from ..db import get_conn
 from ..errors import bad_request
-from ..schemas import AiPayload, RagDocumentCreate, RagDocumentOut, RagIngestPayload, RagQueryOut, RagSource
+from ..schemas import AiPayload, MemoryCreate, MemoryItemOut, RagDocumentCreate, RagDocumentOut, RagIngestPayload, RagQueryOut, RagSource
 from .llm import LlmClient
+from .memory_store import MemoryService
 from .planner import _json_object
 
 
@@ -62,6 +60,9 @@ def _keywords(text: str, limit: int = 6) -> list[str]:
 
 
 class RagService:
+    def __init__(self):
+        self.memories = MemoryService()
+
     def create_document(self, payload: RagDocumentCreate) -> RagDocumentOut:
         title = payload.title.strip() or "Untitled material"
         content = payload.content.strip()
@@ -72,64 +73,32 @@ class RagService:
         if not chunks:
             raise bad_request("content cannot be empty")
 
-        document_id = str(uuid4())
         summary = content[:220]
         content_hash = sha256(content.encode("utf-8")).hexdigest()
-
-        with get_conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO documents(id, title, source, source_type, summary, content_hash)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (document_id, title, payload.source_type, payload.source_type, summary, content_hash),
+        memory = self.memories.create_memory(
+            MemoryCreate(
+                kind="material",
+                title=title,
+                content=content,
+                summary=summary,
+                source="user",
+                sourceId=payload.source_type,
+                sourceKey="",
+                metadata={
+                    "compat": "rag/documents",
+                    "sourceType": payload.source_type,
+                    "contentHash": content_hash,
+                    "chunks": len(chunks),
+                },
             )
-            for index, chunk in enumerate(chunks):
-                chunk_id = str(uuid4())
-                conn.execute(
-                    """
-                    INSERT INTO document_chunks(id, document_id, chunk_index, content, token_count)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (chunk_id, document_id, index, chunk, len(tokenize(chunk))),
-                )
-                conn.execute(
-                    """
-                    INSERT INTO document_chunks_fts(chunk_id, document_id, title, content)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (chunk_id, document_id, title, chunk),
-                )
-            row = conn.execute(
-                """
-                SELECT d.id, d.title, d.source_type, d.summary, d.created_at, COUNT(c.id) AS chunks
-                FROM documents d
-                LEFT JOIN document_chunks c ON c.document_id = d.id
-                WHERE d.id = ?
-                GROUP BY d.id
-                """,
-                (document_id,),
-            ).fetchone()
-
-        return self._document_out(row)
+        )
+        return self._document_out(memory)
 
     def list_documents(self) -> list[RagDocumentOut]:
-        with get_conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT d.id, d.title, d.source_type, d.summary, d.created_at, COUNT(c.id) AS chunks
-                FROM documents d
-                LEFT JOIN document_chunks c ON c.document_id = d.id
-                GROUP BY d.id
-                ORDER BY d.created_at DESC
-                """
-            ).fetchall()
-        return [self._document_out(row) for row in rows]
+        return [self._document_out(item) for item in self.memories.list_memories(kinds=["material"], limit=200)]
 
     def delete_document(self, document_id: str) -> None:
-        with get_conn() as conn:
-            conn.execute("DELETE FROM document_chunks_fts WHERE document_id = ?", (document_id,))
-            conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+        self.memories.delete_memory(document_id)
 
     def ingest(self, payload: RagIngestPayload) -> dict[str, int | str]:
         document = self.create_document(
@@ -183,44 +152,10 @@ class RagService:
         )
 
     def retrieve(self, query_text: str, limit: int = 4) -> list[RagSource]:
-        query = _fts_query(query_text)
-        if not query:
+        if not _fts_query(query_text):
             return []
-
-        try:
-            with get_conn() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT
-                      document_chunks_fts.document_id,
-                      document_chunks_fts.title,
-                      document_chunks_fts.content AS chunk,
-                      document_chunks.chunk_index,
-                      bm25(document_chunks_fts) AS rank
-                    FROM document_chunks_fts
-                    JOIN document_chunks ON document_chunks.id = document_chunks_fts.chunk_id
-                    WHERE document_chunks_fts MATCH ?
-                    ORDER BY rank
-                    LIMIT ?
-                    """,
-                    (query, limit),
-                ).fetchall()
-        except sqlite3.OperationalError:
-            return self._fallback_retrieve(query_text, limit)
-
-        sources = []
-        for row in rows:
-            rank = float(row["rank"])
-            score = -rank if rank <= 0 else 1 / (1 + rank)
-            sources.append(
-                RagSource(
-                    documentId=row["document_id"],
-                    title=row["title"],
-                    chunk=row["chunk"],
-                    score=round(score, 6),
-                    chunkIndex=row["chunk_index"],
-                )
-            )
+        items = self.memories.search_memories(query_text, kinds=["material"], limit=max(limit * 3, limit))
+        sources = self._sources_from_memories(items, query_text, limit)
         if not sources:
             return self._fallback_retrieve(query_text, limit)
         return sources
@@ -230,45 +165,60 @@ class RagService:
         if not query_terms:
             return []
 
-        with get_conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT d.id AS document_id, d.title, c.content AS chunk, c.chunk_index
-                FROM document_chunks c
-                JOIN documents d ON d.id = c.document_id
-                ORDER BY c.created_at DESC
-                LIMIT 200
-                """
-            ).fetchall()
-
         scored = []
-        for row in rows:
-            terms = set(tokenize(row["chunk"]))
-            score = len(query_terms & terms)
-            if score:
-                scored.append((score, row))
+        for item in self.memories.list_memories(kinds=["material"], limit=200):
+            chunks = chunk_text(item.content)
+            for index, chunk in enumerate(chunks):
+                terms = set(tokenize(chunk))
+                score = len(query_terms & terms)
+                if score:
+                    scored.append((score, item, index, chunk))
 
         sources = []
-        for score, row in sorted(scored, key=lambda item: item[0], reverse=True)[:limit]:
+        for score, item, index, chunk in sorted(scored, key=lambda value: value[0], reverse=True)[:limit]:
             sources.append(
                 RagSource(
-                    documentId=row["document_id"],
-                    title=row["title"],
-                    chunk=row["chunk"],
+                    documentId=item.id,
+                    title=item.title,
+                    chunk=chunk,
                     score=float(score),
-                    chunkIndex=row["chunk_index"],
+                    chunkIndex=index,
                 )
             )
         return sources
 
-    def _document_out(self, row) -> RagDocumentOut:
+    def _sources_from_memories(self, items: list[MemoryItemOut], query_text: str, limit: int) -> list[RagSource]:
+        query_terms = set(tokenize(query_text))
+        sources = []
+        for item in items:
+            chunks = chunk_text(item.content) or [item.content]
+            scored = []
+            for index, chunk in enumerate(chunks):
+                terms = set(tokenize(chunk))
+                score = len(query_terms & terms)
+                scored.append((score, index, chunk))
+            score, index, chunk = max(scored, key=lambda value: value[0]) if scored else (0, 0, item.summary or item.content)
+            sources.append(
+                RagSource(
+                    documentId=item.id,
+                    title=item.title,
+                    chunk=chunk,
+                    score=float(score or 1),
+                    chunkIndex=index,
+                )
+            )
+        return sources[:limit]
+
+    def _document_out(self, item: MemoryItemOut) -> RagDocumentOut:
+        source_type = str(item.metadata.get("sourceType") or item.source_id or "paste")
+        chunks = int(item.metadata.get("chunks") or len(chunk_text(item.content)) or 1)
         return RagDocumentOut(
-            id=row["id"],
-            title=row["title"],
-            sourceType=row["source_type"],
-            summary=row["summary"],
-            chunks=row["chunks"],
-            createdAt=row["created_at"],
+            id=item.id,
+            title=item.title,
+            sourceType=source_type,
+            summary=item.summary,
+            chunks=chunks,
+            createdAt=item.created_at,
         )
 
     def _mock_answer(self, sources: list[RagSource]) -> str:

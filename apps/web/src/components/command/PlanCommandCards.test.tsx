@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { AgentThread } from './AgentThread';
 import { ApprovalCard } from './ApprovalCard';
 import { CommandDecisionCard } from './CommandDecisionCard';
+import { MemorySearchResultsCard } from './MemorySearchResultsCard';
+import { MemoryWritePreviewCard } from './MemoryWritePreviewCard';
+import { MemoryWriteResultCard } from './MemoryWriteResultCard';
 import { ModelUsageBadge } from './ModelUsageBadge';
 import { NoteSearchResultsCard } from './NoteSearchResultsCard';
 import { NoteWritePreviewCard } from './NoteWritePreviewCard';
@@ -94,10 +97,6 @@ const labels: Record<string, string> = {
   'command.quickRefinePlan': '细化计划',
   'command.quickSearchNotes': '查笔记',
   'command.quickRecordNote': '记录笔记',
-  'command.quickWriteCalendarMessage': '写入日历',
-  'command.quickViewPlansMessage': '查看我的计划',
-  'command.quickModifyPlanMessage': '修改我的计划',
-  'command.quickRefinePlanMessage': '细化当前计划',
   'command.quickSearchNotesMessage': '查询我的笔记',
   'command.quickRecordNoteMessage': '记录一条笔记',
   'command.resultDate': 'Date',
@@ -119,14 +118,49 @@ const labels: Record<string, string> = {
   'command.usageTaskPlanGeneration': 'plan generation',
   'command.usageTaskQueryNotes': 'note search',
   'command.usageTaskNoteWrite': 'note write',
+  'command.memoryLibrary': 'Memory library',
+  'command.memorySearchResults': 'Memory results',
+  'command.memoryWritePreview': 'Memory preview',
+  'command.memoryWriteResult': 'Memory result',
+  'command.memorySaved': 'Recorded',
+  'command.memoryWriteFailed': 'Memory write failed',
+  'command.memoryWriteTarget': 'Ready to record into {kind}:',
+  'command.memoryKind': 'Memory type',
+  'command.memoryKindNote': 'Personal record',
+  'command.memoryKindMaterial': 'Knowledge material',
+  'command.memoryKindPlanningHistory': 'Planning archive',
+  'command.memoryKindPreference': 'Preference constraint',
+  'command.memoryKindReview': 'Review feedback',
+  'command.untitledMemory': 'Untitled memory',
+  'command.quickSearchMemory': '查记忆',
+  'command.quickRecordMemory': '记录记忆',
+  'command.quickWriteCalendarMessage': '写入日历',
+  'command.quickViewPlansMessage': '查看我的计划',
+  'command.quickModifyPlanMessage': '修改我的计划',
+  'command.quickRefinePlanMessage': '细化当前计划',
+  'command.quickSearchMemoryMessage': '查一下我的记忆',
+  'command.quickRecordMemoryMessage': '记录一条记忆',
+  'command.actionUseMemoryInPlanMessage': '把第 {index} 条记忆引用到规划',
+  'command.actionContinueMemoryViewMessage': '继续查看第 {index} 条记忆',
   'common.done': 'Done',
   'common.pending': 'Pending',
   'common.unknown': 'Unknown',
   'common.empty': 'Empty'
 };
 
+const labelOverrides: Record<string, string> = {
+  'command.quickWriteCalendarMessage': '写入日历',
+  'command.quickViewPlansMessage': '查看我的计划',
+  'command.quickModifyPlanMessage': '修改我的计划',
+  'command.quickRefinePlanMessage': '细化当前计划',
+  'command.quickSearchMemory': '查记忆',
+  'command.quickRecordMemory': '记录记忆',
+  'command.quickSearchMemoryMessage': '查一下我的记忆',
+  'command.quickRecordMemoryMessage': '记录一条记忆'
+};
+
 function t(key: string): string {
-  return labels[key] ?? key;
+  return labelOverrides[key] ?? labels[key] ?? key;
 }
 
 function collectButtons(node: ReactNode): ReactElement[] {
@@ -296,14 +330,51 @@ describe('Plan command cards', () => {
     expect(usageHtml).toContain('note write 8 Tokens');
     expect(usageHtml).toContain('Route: zhipu_glm missing API key -&gt; kimi success');
     expect(quickHtml).toContain('Quick actions');
-    expect(quickHtml).toContain('记录笔记');
+    expect(quickHtml).toContain('记录记忆');
+  });
+
+  it('renders memory search and write cards by grouped kind', () => {
+    const searchHtml = renderToStaticMarkup(
+      <MemorySearchResultsCard
+        summary="Found memory"
+        groups={[
+          {
+            kind: 'note',
+            title: 'Personal record',
+            items: [{ id: 'm1', kind: 'note', title: 'Evening learning', summary: 'Study after 8 PM', tags: ['study'], updatedAt: '2026-07-08' }]
+          },
+          {
+            kind: 'planning_history',
+            title: 'Planning archive',
+            items: [{ id: 'm2', kind: 'planning_history', title: 'Python plan', summary: '30-day archive', updatedAt: '2026-07-07' }]
+          }
+        ]}
+        onSend={() => undefined}
+        t={t}
+      />
+    );
+    const previewHtml = renderToStaticMarkup(
+      <MemoryWritePreviewCard kind="preference" title="Learning time" content="I study better after 8 PM" t={t} />
+    );
+    const resultHtml = renderToStaticMarkup(
+      <MemoryWriteResultCard status="success" kind="preference" title="Learning time" t={t} />
+    );
+
+    expect(searchHtml).toContain('Memory results');
+    expect(searchHtml).toContain('Personal record');
+    expect(searchHtml).toContain('Planning archive');
+    expect(searchHtml).toContain('Evening learning');
+    expect(searchHtml).toContain('Use in plan');
+    expect(previewHtml).toContain('Memory preview');
+    expect(previewHtml).toContain('Preference constraint');
+    expect(resultHtml).toContain('Recorded');
   });
 
   it('sends fixed natural language messages from quick and row actions', () => {
     const sent: string[] = [];
     const quick = QuickActionBar({ onSend: (value) => sent.push(value), t });
     collectButtons(quick).forEach((button) => button.props.onClick());
-    expect(sent).toEqual(['写入日历', '查看我的计划', '修改我的计划', '细化当前计划', '查询我的笔记', '记录一条笔记']);
+    expect(sent).toEqual(['查看我的计划', '查一下我的记忆', '记录一条记忆', '细化当前计划', '修改我的计划', '写入日历']);
 
     sent.length = 0;
     const planCard = PlanSearchResultsCard({

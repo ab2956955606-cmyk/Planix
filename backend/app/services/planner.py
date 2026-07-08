@@ -4,6 +4,7 @@ from typing import Any
 from ..db import load_memory, save_event
 from ..schemas import AiPayload
 from .llm import LlmClient
+from .memory_store import MemoryService
 from .tools import list_tools
 
 
@@ -42,9 +43,16 @@ def _normalize_tasks(data: dict[str, Any]) -> list[dict[str, str]]:
     return normalized
 
 
+def _load_preference_memory() -> str:
+    item = MemoryService().get_by_source_key("preference", "preferences:local-user")
+    if item and item.content.strip():
+        return item.content
+    return load_memory()
+
+
 class PlannerAgent:
     def plan(self, payload: AiPayload) -> dict[str, object]:
-        preferences = payload.preferences or load_memory()
+        preferences = payload.preferences or _load_preference_memory()
         save_event("plan_request", payload.model_dump_json(by_alias=True))
         llm_result, _ = LlmClient().complete(
             "planner_plan",
@@ -98,7 +106,7 @@ class PlannerAgent:
                     "plans": plans,
                     "doneCount": done,
                     "totalCount": len(plans),
-                    "preferences": payload.preferences or load_memory(),
+                    "preferences": payload.preferences or _load_preference_memory(),
                 },
                 ensure_ascii=False,
             ),

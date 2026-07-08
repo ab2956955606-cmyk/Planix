@@ -112,6 +112,30 @@ def init_db(conn: sqlite3.Connection) -> None:
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS memories (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          source TEXT NOT NULL DEFAULT 'user',
+          source_id TEXT NOT NULL DEFAULT '',
+          source_key TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memories_kind
+          ON memories(kind);
+
+        CREATE INDEX IF NOT EXISTS idx_memories_source_key
+          ON memories(source_key);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
+          USING fts5(memory_id, kind, title, content, summary, tags);
+
         CREATE TABLE IF NOT EXISTS documents (
           id TEXT PRIMARY KEY,
           title TEXT NOT NULL,

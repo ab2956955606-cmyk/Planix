@@ -7,12 +7,12 @@ interface QuickActionBarProps {
 }
 
 const actions = [
-  { key: 'writeCalendar', textKey: 'command.quickWriteCalendar', messageKey: 'command.quickWriteCalendarMessage', icon: CalendarPlus },
   { key: 'viewPlans', textKey: 'command.quickViewPlans', messageKey: 'command.quickViewPlansMessage', icon: ListChecks },
-  { key: 'modifyPlan', textKey: 'command.quickModifyPlan', messageKey: 'command.quickModifyPlanMessage', icon: PencilLine },
+  { key: 'searchMemory', textKey: 'command.quickSearchMemory', messageKey: 'command.quickSearchMemoryMessage', icon: FileSearch },
+  { key: 'recordMemory', textKey: 'command.quickRecordMemory', messageKey: 'command.quickRecordMemoryMessage', icon: NotebookPen },
   { key: 'refinePlan', textKey: 'command.quickRefinePlan', messageKey: 'command.quickRefinePlanMessage', icon: Wand2 },
-  { key: 'searchNotes', textKey: 'command.quickSearchNotes', messageKey: 'command.quickSearchNotesMessage', icon: FileSearch },
-  { key: 'recordNote', textKey: 'command.quickRecordNote', messageKey: 'command.quickRecordNoteMessage', icon: NotebookPen }
+  { key: 'modifyPlan', textKey: 'command.quickModifyPlan', messageKey: 'command.quickModifyPlanMessage', icon: PencilLine },
+  { key: 'writeCalendar', textKey: 'command.quickWriteCalendar', messageKey: 'command.quickWriteCalendarMessage', icon: CalendarPlus }
 ];
 
 export function QuickActionBar({ disabled, onSend, t }: QuickActionBarProps) {

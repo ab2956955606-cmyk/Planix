@@ -10,7 +10,7 @@ interface ApprovalCardProps {
 }
 
 function approveLabel(target: string | undefined, operation: string | undefined, risk: string | undefined, t: (key: string) => string): string {
-  if (target === 'notes') return t('command.confirmRecord');
+  if (target === 'notes' || target === 'memory') return t('command.confirmRecord');
   if (target === 'calendar' && operation === 'update') return t('command.confirmModify');
   if (target === 'calendar' && (operation === 'delete' || risk === 'delete')) return t('command.confirmDelete');
   if (target === 'calendar' && operation === 'create_or_update_plans') return t('command.confirmWrite');
@@ -22,7 +22,7 @@ export function ApprovalCard({ summary, actionId, risk, target, operation, sendi
     <div className="command-inline-card approval">
       <div className="command-card-heading">
         <strong>{t('command.approvalRequired')}</strong>
-        <span>{target === 'notes' ? t('command.recordOperation') : risk === 'delete' ? t('command.deleteOperation') : t('command.writeRisk')}</span>
+        <span>{target === 'notes' || target === 'memory' ? t('command.recordOperation') : risk === 'delete' ? t('command.deleteOperation') : t('command.writeRisk')}</span>
       </div>
       <p>{summary}</p>
       <div className="command-card-actions">

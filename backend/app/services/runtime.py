@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from ..db import get_conn, load_memory
 from ..schemas import AgentRunRequest, GoalPlanRequest, StructuredGoalPlan
+from .memory_store import MemoryService
 from .model_knowledge import enrich_with_model_knowledge
 from .plans import list_plans
 from .planning import PlanningService
@@ -53,6 +54,13 @@ GENERIC_WEAK_KEYWORDS = {
     "basic",
     "beginner",
 }
+
+
+def _load_preference_memory() -> str:
+    item = MemoryService().get_by_source_key("preference", "preferences:local-user")
+    if item and item.content.strip():
+        return item.content
+    return load_memory()
 
 
 @dataclass(frozen=True)
@@ -244,7 +252,7 @@ class MemorySystem:
         self.repository = repository
 
     def get_context(self, payload: AgentRunRequest) -> RuntimeContextPack:
-        saved_preferences = load_memory()
+        saved_preferences = _load_preference_memory()
         payload_preferences = _preference_text(payload.preferences)
         preference_memory = _merge_preference_memory(payload_preferences, saved_preferences)
         output_language = str(preference_memory.output_language or "zh")

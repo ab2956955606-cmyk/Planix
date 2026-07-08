@@ -18,7 +18,10 @@ import type {
   Language,
   LocalRelevance,
   MemoryCacheStats,
+  MemoryInput,
+  MemoryItem,
   MemoryResetResult,
+  MemorySearchResult,
   PlanHorizon,
   PlanQualityReport,
   PlanQualityStatus,
@@ -101,9 +104,12 @@ export type CommandChatEvent =
   | { type: 'calendar_write_result'; actionId?: string; created: number; updated: number; failed: number; affectedDates?: string[]; errors?: string[]; plans?: unknown[] }
   | { type: 'command_decision'; intent: string; confidence: number; targetType?: string; action?: string; decisionSummary?: string; source?: string; error?: string; extractedParams?: unknown; needsConfirmation?: boolean; needsClarification?: boolean; clarificationQuestion?: string }
   | { type: 'plan_search_results'; query: string; summary: string; dateRange?: unknown; calendarPlans?: unknown[]; materials?: unknown[]; goalHistory?: unknown[]; monthNotes?: unknown[] }
+  | { type: 'memory_search_results'; query: string; summary: string; groups?: unknown[]; results?: unknown[] }
   | { type: 'note_search_results'; query: string; summary: string; materials?: unknown[]; goalHistory?: unknown[]; monthNotes?: unknown[] }
   | { type: 'plan_patch_preview'; actionId: string; operation: 'update' | 'delete'; risk: 'write' | 'delete'; before: unknown; after?: unknown; changes?: Record<string, unknown> }
   | { type: 'plan_patch_result'; actionId?: string; operation: 'update' | 'delete'; status: 'success' | 'failed'; before?: unknown; after?: unknown; changes?: Record<string, unknown>; error?: string }
+  | { type: 'memory_write_preview'; actionId: string; operation: 'create' | 'update' | 'delete'; risk: 'write' | 'delete'; kind: string; title?: string; content: string; summary?: string; tags?: unknown[] }
+  | { type: 'memory_write_result'; actionId?: string; operation?: 'create' | 'update' | 'delete'; status: 'success' | 'failed'; kind?: string; title?: string; content?: string; summary?: string; tags?: unknown[]; memory?: unknown; updatedAt?: string; error?: string }
   | { type: 'note_write_preview'; actionId: string; operation: 'create' | 'update'; risk: 'write'; year: number; month: number; date: string; noteText: string; before?: string; after?: string }
   | { type: 'note_write_result'; actionId?: string; operation?: 'create' | 'update'; status: 'success' | 'failed'; year?: number; month?: number; date?: string; noteText?: string; before?: string; after?: string; updatedAt?: string; error?: string }
   | { type: 'model_usage'; usage: unknown }
@@ -658,6 +664,31 @@ export async function uploadRagDocument(file: File, title?: string): Promise<Rag
 
 export async function deleteRagDocument(id: string): Promise<void> {
   await callApi<void>('DELETE', `/api/rag/documents/${id}`, undefined, 45000);
+}
+
+export async function fetchMemories(kind?: string): Promise<MemoryItem[]> {
+  const query = kind ? `?kind=${encodeURIComponent(kind)}` : '';
+  return callApi<MemoryItem[]>('GET', `/api/memory${query}`, undefined, 45000);
+}
+
+export async function createMemory(payload: MemoryInput): Promise<MemoryItem> {
+  return callApi<MemoryItem>('POST', '/api/memory', payload, 45000);
+}
+
+export async function searchMemories(query: string, kind?: string): Promise<MemorySearchResult> {
+  const params = new URLSearchParams();
+  if (query) params.set('q', query);
+  if (kind) params.append('kind', kind);
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return callApi<MemorySearchResult>('GET', `/api/memory/search${suffix}`, undefined, 45000);
+}
+
+export async function updateMemory(id: string, payload: Partial<MemoryInput>): Promise<MemoryItem> {
+  return callApi<MemoryItem>('PATCH', `/api/memory/${encodeURIComponent(id)}`, payload, 45000);
+}
+
+export async function deleteMemory(id: string): Promise<void> {
+  await callApi<void>('DELETE', `/api/memory/${encodeURIComponent(id)}`, undefined, 45000);
 }
 
 // ═══ AI Planning & Review ═══

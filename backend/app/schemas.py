@@ -8,6 +8,8 @@ from .api_key import INVALID_API_KEY_MESSAGE, validate_api_key_format
 PlanPriority = Literal["low", "medium", "high"]
 PlanSource = Literal["manual", "ai"]
 AiProvider = Literal["mock", "deepseek", "kimi", "zhipu_glm", "openai", "custom"]
+MemoryKind = Literal["note", "material", "planning_history", "preference", "review"]
+MemorySource = Literal["user", "ai", "system"]
 
 
 ModelUsageMode = Literal["llm", "local_fallback"]
@@ -93,6 +95,90 @@ class AgentRunRequest(BaseModel):
 class MemoryPayload(BaseModel):
     user_id: str = Field(default="local-user", alias="userId")
     preferences: str = ""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MemoryCreate(BaseModel):
+    kind: MemoryKind = "note"
+    title: str = Field(default="", max_length=240)
+    content: str = Field(min_length=1)
+    summary: str = ""
+    tags: list[str] = Field(default_factory=list)
+    source: MemorySource = "user"
+    source_id: str = Field(default="", alias="sourceId")
+    source_key: str = Field(default="", alias="sourceKey")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("title", "content", "summary", "source_id", "source_key")
+    @classmethod
+    def _strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("tags")
+    @classmethod
+    def _clean_tags(cls, value: list[str]) -> list[str]:
+        result = []
+        seen = set()
+        for tag in value:
+            cleaned = str(tag).strip()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                result.append(cleaned[:48])
+        return result[:12]
+
+
+class MemoryUpdate(BaseModel):
+    kind: MemoryKind | None = None
+    title: str | None = Field(default=None, max_length=240)
+    content: str | None = None
+    summary: str | None = None
+    tags: list[str] | None = None
+    source: MemorySource | None = None
+    source_id: str | None = Field(default=None, alias="sourceId")
+    source_key: str | None = Field(default=None, alias="sourceKey")
+    metadata: dict[str, Any] | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("title", "content", "summary", "source_id", "source_key")
+    @classmethod
+    def _strip_optional_text(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value
+
+
+class MemoryItemOut(BaseModel):
+    id: str
+    kind: MemoryKind
+    title: str
+    content: str
+    summary: str
+    tags: list[str]
+    source: MemorySource
+    source_id: str = Field(default="", alias="sourceId")
+    source_key: str = Field(default="", alias="sourceKey")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MemoryResultGroup(BaseModel):
+    kind: MemoryKind
+    title: str
+    items: list[MemoryItemOut]
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MemorySearchResult(BaseModel):
+    query: str
+    summary: str
+    groups: list[MemoryResultGroup]
+    results: list[MemoryItemOut]
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -656,7 +742,7 @@ CommandPermission = Literal["low", "medium", "high"]
 CommandMode = Literal["auto", "chat", "workbench"]
 CommandDraftKind = Literal["calendar_plan"]
 CommandDraftStatus = Literal["current", "superseded", "written", "dismissed"]
-CommandActionTarget = Literal["calendar", "notes", "materials", "goals", "settings", "dashboard", "ui"]
+CommandActionTarget = Literal["calendar", "memory", "notes", "materials", "goals", "settings", "dashboard", "ui"]
 CommandActionOperation = Literal["read", "create", "update", "delete", "navigate", "run", "create_or_update_plans"]
 CommandActionRisk = Literal["read", "write", "delete", "dangerous"]
 CommandActionStatus = Literal["proposed", "waiting_approval", "running", "success", "failed", "rejected"]
@@ -664,10 +750,12 @@ CommandDecisionIntent = Literal[
     "create_plan",
     "save_plan_to_calendar",
     "query_plan",
+    "query_memory",
     "patch_calendar_plan",
     "refine_plan",
     "refine_task",
     "query_notes",
+    "save_memory",
     "save_note",
     "modify_current_draft",
     "chat",
@@ -677,8 +765,11 @@ CommandDecisionTargetType = Literal[
     "current_draft",
     "calendar_plan",
     "calendar_date",
+    "memory",
     "note",
     "material",
+    "preference",
+    "review",
     "unknown",
 ]
 CommandDecisionAction = Literal[
@@ -702,9 +793,12 @@ CommandOutputKind = Literal[
     "calendar_write_result",
     "command_decision",
     "plan_search_results",
+    "memory_search_results",
     "note_search_results",
     "plan_patch_preview",
     "plan_patch_result",
+    "memory_write_preview",
+    "memory_write_result",
     "note_write_preview",
     "note_write_result",
     "model_usage",
@@ -846,7 +940,7 @@ class CommandOutputEnvelope(BaseModel):
     title: str = ""
     summary: str = ""
     payload: dict[str, Any]
-    source: Literal["command_agent", "dashboard_runtime", "calendar", "goals", "materials", "notes", "settings"] = "command_agent"
+    source: Literal["command_agent", "dashboard_runtime", "calendar", "goals", "materials", "notes", "memory", "settings"] = "command_agent"
     related_action_id: str = Field(default="", alias="relatedActionId")
     related_run_id: str = Field(default="", alias="relatedRunId")
     created_at: str = Field(alias="createdAt")

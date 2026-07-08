@@ -18,7 +18,7 @@ export interface CommandThreadMessage {
   role: 'user' | 'assistant' | 'card';
   content: string;
   createdAt: number;
-  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'command_decision' | 'plan_search_results' | 'note_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'note_write_preview' | 'note_write_result' | 'model_usage' | 'clarify_question' | 'execution_result';
+  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'command_decision' | 'plan_search_results' | 'memory_search_results' | 'note_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'memory_write_preview' | 'memory_write_result' | 'note_write_preview' | 'note_write_result' | 'model_usage' | 'clarify_question' | 'execution_result';
   status?: 'running' | 'success' | 'error';
   title?: string;
   draftId?: string;
@@ -113,9 +113,12 @@ const CARD_KINDS = new Set([
   'calendar_write_result',
   'command_decision',
   'plan_search_results',
+  'memory_search_results',
   'note_search_results',
   'plan_patch_preview',
   'plan_patch_result',
+  'memory_write_preview',
+  'memory_write_result',
   'note_write_preview',
   'note_write_result',
   'model_usage',
@@ -369,6 +372,16 @@ function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
       payload: { ...event }
     });
   }
+  if (event.type === 'memory_search_results') {
+    addMessage({
+      role: 'card',
+      kind: 'memory_search_results',
+      status: 'success',
+      title: t('command.memorySearchResults'),
+      content: event.summary,
+      payload: { ...event }
+    });
+  }
   if (event.type === 'note_search_results') {
     addMessage({
       role: 'card',
@@ -397,6 +410,28 @@ function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
       status: event.status === 'success' ? 'success' : 'error',
       title: t('command.planPatchResult'),
       content: event.error || event.status,
+      actionId: event.actionId,
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'memory_write_preview') {
+    addMessage({
+      role: 'card',
+      kind: 'memory_write_preview',
+      status: 'running',
+      title: t('command.memoryWritePreview'),
+      content: event.content,
+      actionId: event.actionId,
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'memory_write_result') {
+    addMessage({
+      role: 'card',
+      kind: 'memory_write_result',
+      status: event.status === 'success' ? 'success' : 'error',
+      title: t('command.memoryWriteResult'),
+      content: event.error || event.content || event.status,
       actionId: event.actionId,
       payload: { ...event }
     });
@@ -501,9 +536,12 @@ function createStreamHandler(t: (key: string) => string) {
         event.type === 'calendar_write_result' ||
         event.type === 'command_decision' ||
         event.type === 'plan_search_results' ||
+        event.type === 'memory_search_results' ||
         event.type === 'note_search_results' ||
         event.type === 'plan_patch_preview' ||
         event.type === 'plan_patch_result' ||
+        event.type === 'memory_write_preview' ||
+        event.type === 'memory_write_result' ||
         event.type === 'note_write_preview' ||
         event.type === 'note_write_result' ||
         event.type === 'model_usage' ||

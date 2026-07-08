@@ -200,9 +200,9 @@ NDJSON Stream → Agent Flow Trace UI
 
 P Mode 默认停留在 `auto` 状态，并在 Phase 4.8 采用 LLM-first conversational router：用户输入会先被解析为结构化 `CommandDecision`，再映射到做规划、写日历、查计划、修计划、查/存笔记、细化或普通聊天。`auto + create_plan` 会运行 Runtime 并创建隐藏 `calendar_plan` 草稿；强制 `chat` 模式保持纯聊天，不执行命令；手动 `workbench` 仍保留为强制做规划入口。
 
-Phase 4.8 keeps the existing `#/command` surface and streams `command_decision`, `model_usage`, `plan_search_results`, `note_search_results`, `note_write_preview`, `note_write_result`, `plan_patch_preview`, and `plan_patch_result` cards through `/api/command/chat` and `/api/command/approve`. Users can ask for today's plans, search by keyword, look up study/job-search materials, or query month notes without creating a new draft.
+Phase 4.8 keeps the existing `#/command` surface and streams command cards through `/api/command/chat` and `/api/command/approve`. Phase 4.8.2 adds a unified Memory Store and Memory Agent: Calendar plans represent formal executable plans, while memories represent long-term context that Planix can reference. P Mode now separates `query_plan` from `query_memory`; viewing plans searches Calendar only, while memory search reads the `memories` table and groups personal records, knowledge materials, planning archives, preference constraints, and review feedback.
 
-Calendar and note writes stay permission-gated. Calendar requests such as moving a task, changing time or duration, renaming a plan, or deleting a plan create `command_actions` with `target="calendar"` and emit `plan_patch_preview`; note-save requests append to `month_notes` through `command_actions` with `target="notes"` and emit `note_write_preview`. PermissionGate decides whether the action runs immediately or waits for approval, and result cards echo the final state. Calendar updates only touch title/date/time/estimated duration and preserve completion, done state, source, and sourceKey.
+Calendar and memory writes stay permission-gated. Calendar requests such as moving a task, changing time or duration, renaming a plan, or deleting a plan create `command_actions` with `target="calendar"` and emit `plan_patch_preview`; memory-save requests create `command_actions` with `target="memory"` and emit `memory_write_preview` before writing to `memories` after approval. Legacy `note_*` events and `target="notes"` actions remain replay-compatible and are internally treated as note memories. Calendar updates only touch title/date/time/estimated duration and preserve completion, done state, source, and sourceKey.
 
 Phase 4.8.1 polishes the P Mode conversation UX. The empty state now shows concrete things users can say, QuickActionBar uses fixed natural-language shortcuts, `CommandDecision` cards explain intent in user-facing wording, plan/note result cards expose row actions that send ordinary chat commands back through `/api/command/chat`, note recording previews show the target month clearly, and model usage appears as lightweight footer text.
 
@@ -308,8 +308,9 @@ Demo readiness check:
 - Agent Runtime + NDJSON streaming。
 - Agent Flow Trace 可观测执行轨迹。
 - P Mode / Command Agent 命令式规划工作流。
-- Phase 4.8 P Mode LLM-first command decision router, plan/note query, Calendar patch, note-save preview/result cards, and model usage events.
+- Phase 4.8 P Mode LLM-first command decision router, Calendar plan query, memory query/write cards, Calendar patch, and model usage events.
 - Phase 4.8.1 P Mode conversation UX polish: clearer empty state, fixed quick actions, user-facing decision cards, row action buttons, note record preview, and compact model usage.
+- Phase 4.8.2 Unified Memory Store and Memory Agent: `memories` with FTS, grouped memory search, memory write previews, and planning-history archives.
 - Phase 4.9A Planix AI SDK / ModelProvider layer with standardized provider, usage, latency, error type, URL normalization, and local fallback semantics.
 - Phase 4.9A.1 Settings multi-provider API Key persistence and visible provider-key deletion.
 - Calendar-ready proposal 预览与确认写入。

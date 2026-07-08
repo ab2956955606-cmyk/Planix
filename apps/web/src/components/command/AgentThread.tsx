@@ -9,6 +9,9 @@ import { CommandDecisionCard } from './CommandDecisionCard';
 import { ExecutionMiniCard } from './ExecutionMiniCard';
 import { InlinePlanDetailCard } from './InlinePlanDetailCard';
 import { InlinePlanSummaryCard } from './InlinePlanSummaryCard';
+import { MemorySearchResultsCard } from './MemorySearchResultsCard';
+import { MemoryWritePreviewCard } from './MemoryWritePreviewCard';
+import { MemoryWriteResultCard } from './MemoryWriteResultCard';
 import { ModelUsageBadge } from './ModelUsageBadge';
 import { NoteSearchResultsCard } from './NoteSearchResultsCard';
 import { NoteWritePreviewCard } from './NoteWritePreviewCard';
@@ -292,6 +295,16 @@ export function AgentThread({ messages, sending, onApprove, onSend, t }: AgentTh
             />
           )}
 
+          {message.role === 'card' && message.kind === 'memory_search_results' && (
+            <MemorySearchResultsCard
+              summary={String(payloadOf(message).summary || message.content || '')}
+              groups={payloadOf(message).groups}
+              results={payloadOf(message).results}
+              onSend={onSend}
+              t={t}
+            />
+          )}
+
           {message.role === 'card' && message.kind === 'plan_patch_preview' && (
             <PlanPatchPreviewCard
               operation={String(payloadOf(message).operation || '')}
@@ -324,12 +337,33 @@ export function AgentThread({ messages, sending, onApprove, onSend, t }: AgentTh
             />
           )}
 
+          {message.role === 'card' && message.kind === 'memory_write_preview' && (
+            <MemoryWritePreviewCard
+              kind={payloadOf(message).kind}
+              title={payloadOf(message).title}
+              content={payloadOf(message).content}
+              summary={payloadOf(message).summary}
+              t={t}
+            />
+          )}
+
           {message.role === 'card' && message.kind === 'note_write_result' && (
             <NoteWriteResultCard
               status={String(payloadOf(message).status || '')}
               year={payloadOf(message).year}
               month={payloadOf(message).month}
               noteText={payloadOf(message).noteText}
+              error={typeof payloadOf(message).error === 'string' ? payloadOf(message).error as string : undefined}
+              t={t}
+            />
+          )}
+
+          {message.role === 'card' && message.kind === 'memory_write_result' && (
+            <MemoryWriteResultCard
+              status={String(payloadOf(message).status || '')}
+              kind={payloadOf(message).kind}
+              title={payloadOf(message).title}
+              content={payloadOf(message).content}
               error={typeof payloadOf(message).error === 'string' ? payloadOf(message).error as string : undefined}
               t={t}
             />
