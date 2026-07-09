@@ -892,6 +892,7 @@ class PlanningLearningSlots(BaseModel):
     current_level: str = Field(default="", alias="currentLevel")
     target_level: str = Field(default="", alias="targetLevel")
     daily_time: str = Field(default="", alias="dailyTime")
+    available_time_scope: str = Field(default="", alias="availableTimeScope")
     duration: str = ""
     purpose: str = ""
 

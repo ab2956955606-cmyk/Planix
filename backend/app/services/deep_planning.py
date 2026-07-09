@@ -307,6 +307,16 @@ def _title_from_goal(text: str) -> str:
     return cleaned[:80] or "新的深度规划"
 
 
+def _resource_topic_from_goal(goal: str) -> str:
+    cleaned = re.sub(r"补充信息[:：].*$", "", goal, flags=re.S).strip()
+    first_line = next((line.strip() for line in cleaned.splitlines() if line.strip()), "")
+    topic = _title_from_goal(first_line or cleaned)
+    topic = re.sub(r"\s+", " ", topic).strip(" ，,。.：:")
+    if len(topic) > 24:
+        topic = topic[:24].rstrip()
+    return topic or "当前主题"
+
+
 def _duration_days(text: str) -> int:
     match = re.search(r"(\d{1,3})\s*(天|日|day|days|d)\b?", text, flags=re.I)
     if match:
@@ -419,15 +429,27 @@ def _duration_days(text: str) -> int:
 
 
 def _available_time(text: str) -> str | None:
+    value, _scope = _available_time_with_scope(text)
+    return value
+
+
+def _available_time_with_scope(text: str) -> tuple[str | None, str | None]:
     pattern = (
-        "(?:\\u6bcf\\u5929|\\u6bcf\\u65e5|\\u6bcf\\u665a|daily|per day|each day)"
-        ".{0,10}?(\\d+(?:\\.\\d+)?)\\s*"
-        "(\\u5c0f\\u65f6|h|hour|hours|\\u5206\\u949f|minute|minutes|min)"
+        r"(?:(每天|每日|每晚|daily|per day|each day|每周|每星期|一周|weekly|per week|each week).{0,12}?)?"
+        r"(\d+(?:\.\d+)?)\s*(小时|h|hour|hours|分钟|minute|minutes|min)"
     )
     match = re.search(pattern, text, flags=re.I)
     if not match:
-        return None
-    return f"daily {match.group(1)} {match.group(2)}"
+        return None, None
+    frequency = (match.group(1) or "").lower()
+    amount = match.group(2)
+    raw_unit = match.group(3).lower()
+    unit = "分钟" if raw_unit in {"分钟", "minute", "minutes", "min"} else "小时"
+    if frequency in {"每天", "每日", "每晚", "daily", "per day", "each day"}:
+        return f"每天{amount}{unit}", "daily"
+    if frequency in {"每周", "每星期", "一周", "weekly", "per week", "each week"}:
+        return f"每周{amount}{unit}", "weekly"
+    return f"{amount}{unit}", "unknown"
 
 
 def _has_horizon(text: str) -> bool:
@@ -555,22 +577,26 @@ def _extract_learning_subject(text: str, current: str = "") -> str:
 
 
 def _extract_learning_purpose(text: str, current: str = "") -> str:
-    if _contains(text, "实习", "求职", "找工作", "面试", "internship", "job", "interview"):
+    if _contains(text, "实习", "求职", "找工作", "就业", "面试", "internship", "job", "interview"):
         return "找实习/求职"
     if _contains(text, "项目", "作品集", "实战", "project", "portfolio"):
         return "做项目/作品集"
     if _contains(text, "考试", "考证", "exam"):
         return "考试/考证"
-    if _contains(text, "工作", "后端", "云原生", "提升", "work", "backend"):
+    if _contains(text, "工作", "后端", "云原生", "提升能力", "提升", "work", "backend"):
         return "提升工作能力"
+    if _contains(text, "兴趣", "爱好", "好玩", "hobby"):
+        return "兴趣学习"
     return current
 
 
 def _extract_learning_level(text: str, current_level: str = "", target_level: str = "") -> tuple[str, str]:
-    if _contains(text, "零基础", "没学过", "beginner"):
+    if _contains(text, "零基础", "小白", "没学过", "完全不会", "刚开始", "beginner"):
         current_level = "零基础"
-    elif _contains(text, "学过一点", "有基础", "基础", "入门"):
+    elif _contains(text, "学过一点", "有点基础", "入门"):
         current_level = "有基础/入门"
+    elif _contains(text, "有基础", "能做小项目", "有项目经验"):
+        current_level = "已有基础/能做小项目"
     elif _contains(text, "进阶", "熟练", "高级"):
         current_level = current_level or "已有基础"
         target_level = target_level or "进阶/熟练"
@@ -763,7 +789,10 @@ def _slot_state_from_text(text: str, previous: PlanningSlotState | None = None) 
         learning = slot.learning or PlanningLearningSlots()
         learning.subject = _extract_learning_subject(text, learning.subject)
         learning.current_level, learning.target_level = _extract_learning_level(text, learning.current_level, learning.target_level)
-        learning.daily_time = _available_time(text) or learning.daily_time
+        available_time, available_time_scope = _available_time_with_scope(text)
+        if available_time:
+            learning.daily_time = available_time
+            learning.available_time_scope = available_time_scope or learning.available_time_scope
         learning.duration = _extract_duration_text(text, learning.duration)
         learning.purpose = _extract_learning_purpose(text, learning.purpose)
         if (
@@ -779,8 +808,8 @@ def _slot_state_from_text(text: str, previous: PlanningSlotState | None = None) 
 
     if _contains(text, "项目驱动", "不要纯理论", "不想太累", "轻松"):
         slot.preferences = _unique_strings([*slot.preferences, text[:120]])
-    if time := _available_time(text):
-        slot.constraints = _unique_strings([*slot.constraints, time])
+    if slot.domain == "learning" and slot.learning.daily_time:
+        slot.constraints = _unique_strings([*slot.constraints, slot.learning.daily_time])
     filled, missing = _filled_and_missing_slots(slot)
     slot.filled_slots = filled
     slot.missing_slots = missing
@@ -1046,8 +1075,8 @@ class DeepPlanningService:
             return self.get_session(session_id)
 
         updated_slot = _slot_state_from_text(payload.text, previous_slot)
-        contract = _slot_contract(f"{session.user_input}\n补充信息：{payload.text}".strip(), updated_slot)
-        combined = contract.raw_user_input
+        combined = "\n".join(part.strip() for part in (session.user_input, payload.text) if part and part.strip())
+        contract = _slot_contract(session.user_input, updated_slot)
         with get_conn() as conn:
             conn.execute(
                 "UPDATE planning_sessions SET user_input = ?, updated_at = ? WHERE id = ?",
@@ -1664,15 +1693,16 @@ class DeepPlanningService:
         )
 
     def _ai_generated_candidate(self, goal: str, index: int) -> ResourceCandidate:
+        topic = _resource_topic_from_goal(goal)
         return self._candidate(
             f"ai-micro:{index}",
-            f"{goal[:30] or '当前主题'} AI micro material",
+            f"{topic} 入门微练习",
             "ai_generated",
-            goal[:30] or "general",
-            [goal[:30] or "general"],
+            topic,
+            [topic],
             "使用 AI 生成的最小解释和示例，先完成一个可检查动作。",
             "一段笔记和一个最小练习结果",
-            search=f"{goal} 入门 练习",
+            search=f"{topic} 入门 练习",
         )
 
     def _resource_for_task(self, candidate: ResourceCandidate, *, use_step: str) -> TaskLearningResource:
@@ -2125,15 +2155,16 @@ class DeepPlanningService:
         )
 
     def _ai_generated_candidate(self, goal: str, index: int) -> ResourceCandidate:
+        topic = _resource_topic_from_goal(goal)
         return self._candidate(
             f"ai-micro:{index}",
-            f"{goal[:30] or '当前主题'} AI micro material",
+            f"{topic} 入门微练习",
             "ai_generated",
-            goal[:30] or "general",
-            [goal[:30] or "general"],
+            topic,
+            [topic],
             "使用 AI 生成的最小解释和示例，先完成一个可检查动作。",
             "一段笔记和一个最小练习结果。",
-            search=f"{goal} 入门 练习",
+            search=f"{topic} 入门 练习",
         )
 
     def _resource_for_task(self, candidate: ResourceCandidate, *, use_step: str) -> TaskLearningResource:

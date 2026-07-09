@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { CommandThreadMessage } from '../../stores/commandAgentStore';
 import type { PlanHorizon, PlanQualityReport, PlanQualityStatus, PlanSourceType } from '../../types';
@@ -44,15 +44,30 @@ function payloadOf(message: CommandThreadMessage): Record<string, unknown> {
   return message.payload ?? {};
 }
 
+const planningCardKinds = new Set<CommandThreadMessage['kind']>([
+  'planning_session_started',
+  'user_need_contract',
+  'memory_insight_brief',
+  'resource_brief',
+  'plan_design_proposal',
+  'execution_plan_draft',
+  'learning_update',
+  'agent_decision',
+  'agent_message',
+  'planning_session_status'
+]);
+
 type RenderItem =
   | { type: 'message'; message: CommandThreadMessage }
   | { type: 'execution_group'; id: string; messages: CommandThreadMessage[] }
-  | { type: 'usage_group'; id: string; messages: CommandThreadMessage[] };
+  | { type: 'usage_group'; id: string; messages: CommandThreadMessage[] }
+  | { type: 'planning_group'; id: string; messages: CommandThreadMessage[] };
 
 function groupMessages(messages: CommandThreadMessage[]): RenderItem[] {
   const items: RenderItem[] = [];
   let executionGroup: CommandThreadMessage[] = [];
   let usageGroup: CommandThreadMessage[] = [];
+  let planningGroup: CommandThreadMessage[] = [];
 
   const flushExecutionGroup = () => {
     if (!executionGroup.length) return;
@@ -72,23 +87,40 @@ function groupMessages(messages: CommandThreadMessage[]): RenderItem[] {
     });
     usageGroup = [];
   };
+  const flushPlanningGroup = () => {
+    if (!planningGroup.length) return;
+    items.push({
+      type: 'planning_group',
+      id: planningGroup[0].id,
+      messages: planningGroup
+    });
+    planningGroup = [];
+  };
 
   for (const message of messages) {
     if (message.role === 'card' && message.kind === 'runtime') {
       flushUsageGroup();
+      flushPlanningGroup();
       executionGroup.push(message);
       continue;
     }
     flushExecutionGroup();
     if (message.role === 'card' && message.kind === 'model_usage') {
+      flushPlanningGroup();
       usageGroup.push(message);
       continue;
     }
     flushUsageGroup();
+    if (message.role === 'card' && planningCardKinds.has(message.kind)) {
+      planningGroup.push(message);
+      continue;
+    }
+    flushPlanningGroup();
     items.push({ type: 'message', message });
   }
   flushExecutionGroup();
   flushUsageGroup();
+  flushPlanningGroup();
   return items;
 }
 
@@ -148,6 +180,212 @@ function ExecutionGroupCard({ messages, t }: { messages: CommandThreadMessage[];
   );
 }
 
+function recordOf(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function planningKindLabel(kind: CommandThreadMessage['kind'], t: (key: string) => string): string {
+  if (kind === 'user_need_contract') return t('command.userNeedContract');
+  if (kind === 'memory_insight_brief') return t('command.memoryInsightAgent');
+  if (kind === 'resource_brief') return t('command.resourceIntelligenceAgent');
+  if (kind === 'plan_design_proposal') return t('command.planDesignProposal');
+  if (kind === 'execution_plan_draft') return t('command.executionPlanDraft');
+  if (kind === 'learning_update') return t('command.learningUpdate');
+  if (kind === 'agent_decision') return t('command.agentDecision');
+  if (kind === 'agent_message') return t('command.agentMessage');
+  return t('command.planningSessionStatus');
+}
+
+function planningCardSummary(message: CommandThreadMessage, t: (key: string) => string): string {
+  const payload = payloadOf(message);
+  const data = recordOf(payload.data);
+  if (message.kind === 'user_need_contract') {
+    return String(data.interpretedGoal || message.content || '');
+  }
+  if (message.kind === 'memory_insight_brief') {
+    const hits = recordOf(data.memoryHits);
+    const total = ['preferences', 'reviews', 'planningHistory', 'materials', 'notes']
+      .reduce((sum, key) => sum + (Array.isArray(hits[key]) ? (hits[key] as unknown[]).length : 0), 0);
+    return `${t('command.planningCardMemorySummary')} ${total}`;
+  }
+  if (message.kind === 'resource_brief') {
+    const coverage = recordOf(data.coverage);
+    const candidates = Array.isArray(data.resourceCandidates) ? data.resourceCandidates.length : 0;
+    return `${String(coverage.status || 'partial')} · ${candidates} ${t('command.resources')}`;
+  }
+  if (message.kind === 'plan_design_proposal') {
+    return String(data.strategyName || data.status || message.content || '');
+  }
+  if (message.kind === 'execution_plan_draft') {
+    const tasks = Array.isArray(data.tasks) ? data.tasks.length : 0;
+    return `${tasks} ${t('command.tasks')} · ${String(data.status || '')}`;
+  }
+  if (message.kind === 'learning_update') {
+    return String(data.insight || data.feedbackType || message.content || '');
+  }
+  if (message.kind === 'agent_decision') {
+    return `${String(data.agent || t('command.agentDecision'))} · ${String(data.decision || '')}`;
+  }
+  if (message.kind === 'agent_message') {
+    return `${String(data.fromAgent || '')} → ${String(data.toAgent || '')}`;
+  }
+  return String(payload.status || message.content || '');
+}
+
+function latestPlanningStatus(messages: CommandThreadMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const payload = payloadOf(message);
+    const data = recordOf(payload.data);
+    if (message.kind === 'planning_session_status' || message.kind === 'planning_session_started') {
+      return String(payload.status || message.content || '');
+    }
+    if (message.kind === 'execution_plan_draft') {
+      const status = String(data.status || '');
+      if (status === 'approved') return 'ready_to_write_calendar';
+      if (status) return 'waiting_execution_approval';
+    }
+    if (message.kind === 'plan_design_proposal') {
+      return 'waiting_design_approval';
+    }
+  }
+  return '';
+}
+
+function shouldExpandPlanningCard(message: CommandThreadMessage, groupMessages: CommandThreadMessage[], isLatestGroup: boolean): boolean {
+  if (!isLatestGroup) return false;
+  const status = latestPlanningStatus(groupMessages);
+  if (status === 'needs_goal_clarification') return message.kind === 'user_need_contract';
+  if (status === 'waiting_design_approval' || status === 'design_revision') return message.kind === 'plan_design_proposal';
+  if (status === 'waiting_execution_approval' || status === 'execution_revision' || status === 'learning_from_feedback') {
+    return message.kind === 'execution_plan_draft' || message.kind === 'learning_update';
+  }
+  if (status === 'ready_to_write_calendar' || status === 'written_to_calendar') {
+    return message.kind === 'execution_plan_draft' || message.kind === 'planning_session_status';
+  }
+  return message.kind === 'plan_design_proposal' || message.kind === 'execution_plan_draft' || message.kind === 'user_need_contract';
+}
+
+function CollapsiblePanel({
+  title,
+  summary,
+  defaultExpanded,
+  children,
+  t,
+  className = ''
+}: {
+  title: string;
+  summary?: string;
+  defaultExpanded: boolean;
+  children: ReactNode;
+  t: (key: string) => string;
+  className?: string;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [touched, setTouched] = useState(false);
+
+  useEffect(() => {
+    if (!touched) {
+      setExpanded(defaultExpanded);
+    }
+  }, [defaultExpanded, touched]);
+
+  return (
+    <div className={`command-collapsible ${expanded ? 'expanded' : 'collapsed'} ${className}`}>
+      <button
+        type="button"
+        className="command-collapsible-toggle"
+        aria-expanded={expanded}
+        onClick={() => {
+          setTouched(true);
+          setExpanded((value) => !value);
+        }}
+      >
+        <span>
+          <strong>{title}</strong>
+          {summary ? <small>{summary}</small> : null}
+        </span>
+        <em>{expanded ? t('command.collapse') : t('command.expand')}</em>
+      </button>
+      {expanded ? <div className="command-collapsible-body">{children}</div> : null}
+    </div>
+  );
+}
+
+function PlanningCardContent({ message, onSend, t }: { message: CommandThreadMessage; onSend: (value: string) => void; t: (key: string) => string }) {
+  const payload = payloadOf(message);
+  if (message.kind === 'planning_session_started' || message.kind === 'planning_session_status') {
+    return <PlanningSessionStatusCard status={String(payload.status || message.content || '')} t={t} />;
+  }
+  if (message.kind === 'user_need_contract') {
+    return <UserNeedContractCard data={payload.data} t={t} />;
+  }
+  if (message.kind === 'memory_insight_brief') {
+    return <MemoryInsightCard data={payload.data} t={t} />;
+  }
+  if (message.kind === 'resource_brief') {
+    return <ResourceBriefCard data={payload.data} t={t} />;
+  }
+  if (message.kind === 'plan_design_proposal') {
+    return <PlanDesignProposalCard data={payload.data} onSend={onSend} t={t} />;
+  }
+  if (message.kind === 'execution_plan_draft') {
+    return <ExecutionPlanDraftCard data={payload.data} onSend={onSend} t={t} />;
+  }
+  if (message.kind === 'learning_update') {
+    return <LearningUpdateBadge data={payload.data} t={t} />;
+  }
+  if (message.kind === 'agent_decision') {
+    return <AgentDecisionCard data={payload.data} t={t} />;
+  }
+  if (message.kind === 'agent_message') {
+    return <AgentMessageCard data={payload.data} t={t} />;
+  }
+  return null;
+}
+
+function DeepPlanningCardGroup({
+  messages,
+  isLatest,
+  onSend,
+  t
+}: {
+  messages: CommandThreadMessage[];
+  isLatest: boolean;
+  onSend: (value: string) => void;
+  t: (key: string) => string;
+}) {
+  const labels = Array.from(new Set(messages.map((message) => planningKindLabel(message.kind, t)))).slice(0, 5);
+  const status = latestPlanningStatus(messages);
+  const title = isLatest ? t('command.latestPlanningStep') : t('command.planningProcessCollapsed');
+  const summary = [status, labels.join(' / ')].filter(Boolean).join(' · ');
+
+  return (
+    <CollapsiblePanel
+      title={title}
+      summary={summary}
+      defaultExpanded={isLatest}
+      t={t}
+      className={`deep-planning-group ${isLatest ? 'latest' : 'historical'}`}
+    >
+      <div className="deep-planning-card-list">
+        {messages.map((message) => (
+          <CollapsiblePanel
+            key={message.id}
+            title={planningKindLabel(message.kind, t)}
+            summary={planningCardSummary(message, t)}
+            defaultExpanded={shouldExpandPlanningCard(message, messages, isLatest)}
+            t={t}
+            className={`deep-planning-card-item ${message.kind || ''}`}
+          >
+            <PlanningCardContent message={message} onSend={onSend} t={t} />
+          </CollapsiblePanel>
+        ))}
+      </div>
+    </CollapsiblePanel>
+  );
+}
+
 export function AgentThread({ messages, sending, onApprove, onSend, t }: AgentThreadProps) {
   if (!messages.length) {
     const examples = [
@@ -172,9 +410,12 @@ export function AgentThread({ messages, sending, onApprove, onSend, t }: AgentTh
     );
   }
 
+  const renderItems = groupMessages(messages);
+  const latestPlanningGroupId = [...renderItems].reverse().find((item) => item.type === 'planning_group')?.id;
+
   return (
     <div className="agent-thread">
-      {groupMessages(messages).map((item) => {
+      {renderItems.map((item) => {
         if (item.type === 'execution_group') {
           return (
             <article className="command-message card" key={`execution-${item.id}`}>
@@ -186,6 +427,18 @@ export function AgentThread({ messages, sending, onApprove, onSend, t }: AgentTh
           return (
             <article className="command-message card" key={`usage-${item.id}`}>
               <ModelUsageBadge usage={item.messages.map((message) => payloadOf(message).usage)} t={t} />
+            </article>
+          );
+        }
+        if (item.type === 'planning_group') {
+          return (
+            <article className="command-message card" key={`planning-${item.id}`}>
+              <DeepPlanningCardGroup
+                messages={item.messages}
+                isLatest={item.id === latestPlanningGroupId}
+                onSend={onSend}
+                t={t}
+              />
             </article>
           );
         }
@@ -215,16 +468,24 @@ export function AgentThread({ messages, sending, onApprove, onSend, t }: AgentTh
           )}
 
           {message.role === 'card' && message.kind === 'plan_detail' && (
-            <InlinePlanDetailCard
-              title={String(payloadOf(message).title || message.title || '')}
-              version={typeof payloadOf(message).version === 'number' ? payloadOf(message).version as number : undefined}
-              structuredPlan={payloadOf(message).structuredPlan}
-              planHorizon={payloadOf(message).planHorizon as PlanHorizon | null | undefined}
-              qualityReport={payloadOf(message).qualityReport as PlanQualityReport | null | undefined}
-              qualityStatus={payloadOf(message).qualityStatus as PlanQualityStatus | null | undefined}
-              sourceType={payloadOf(message).sourceType as PlanSourceType | null | undefined}
+            <CollapsiblePanel
+              title={t('command.hiddenDraftCollapsed')}
+              summary={String(payloadOf(message).title || message.title || '')}
+              defaultExpanded={false}
               t={t}
-            />
+              className="legacy-plan-detail"
+            >
+              <InlinePlanDetailCard
+                title={String(payloadOf(message).title || message.title || '')}
+                version={typeof payloadOf(message).version === 'number' ? payloadOf(message).version as number : undefined}
+                structuredPlan={payloadOf(message).structuredPlan}
+                planHorizon={payloadOf(message).planHorizon as PlanHorizon | null | undefined}
+                qualityReport={payloadOf(message).qualityReport as PlanQualityReport | null | undefined}
+                qualityStatus={payloadOf(message).qualityStatus as PlanQualityStatus | null | undefined}
+                sourceType={payloadOf(message).sourceType as PlanSourceType | null | undefined}
+                t={t}
+              />
+            </CollapsiblePanel>
           )}
 
           {message.role === 'card' && message.kind === 'refined_tasks_result' && (

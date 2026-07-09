@@ -1,3 +1,5 @@
+import type { MouseEvent } from 'react';
+
 type Translator = (key: string) => string;
 
 interface CardProps {
@@ -234,6 +236,13 @@ export function PlanDesignProposalCard({ data, onSend, t }: CardProps) {
 export function ExecutionPlanDraftCard({ data, onSend, t }: CardProps) {
   const raw = record(data);
   const tasks = list(raw.tasks);
+  const toggleAllTasks = (event: MouseEvent<HTMLButtonElement> | undefined, open: boolean) => {
+    if (!event?.currentTarget) return;
+    const root = event.currentTarget.closest('.execution-plan-draft');
+    root?.querySelectorAll<HTMLDetailsElement>('.execution-task-detail').forEach((detail) => {
+      detail.open = open;
+    });
+  };
   return (
     <div className="command-inline-card wide execution-plan-draft">
       <div className="command-card-heading">
@@ -243,7 +252,13 @@ export function ExecutionPlanDraftCard({ data, onSend, t }: CardProps) {
       <p>{text(raw.scheduleSummary)}</p>
       <p>{text(raw.resourceCoverageSummary)}</p>
       {!tasks.length ? <p>{t('command.noExecutionTasks')}</p> : null}
-      <ul className="command-compact-list">
+      {tasks.length > 1 ? (
+        <div className="command-row-actions compact">
+          <button type="button" onClick={(event) => toggleAllTasks(event, true)}>{t('command.expandAll')}</button>
+          <button type="button" onClick={(event) => toggleAllTasks(event, false)}>{t('command.collapseAll')}</button>
+        </div>
+      ) : null}
+      <div className="execution-task-list">
         {tasks.map((task, index) => {
           const item = record(task);
           const bundle = record(item.resourceBundle);
@@ -251,28 +266,38 @@ export function ExecutionPlanDraftCard({ data, onSend, t }: CardProps) {
           const criteria = lines(item.acceptanceCriteria);
           const knowledge = lines(item.knowledgePoints);
           return (
-            <li key={`${text(item.title)}-${index}`}>
-              <strong>{index + 1}. {text(item.title)}</strong>
-              <small>{text(item.dueDate, t('command.noDate'))} · {String(item.estimatedMinutes || 0)} {t('command.minutes')} · {text(item.priority)}</small>
-              <p>{text(item.whyThisTaskMatters)}</p>
-              <dl className="command-result-meta">
-                <div><dt>{t('command.deliverable')}</dt><dd>{text(item.deliverable)}</dd></div>
-                <div><dt>{t('command.acceptanceCriteria')}</dt><dd>{criteria.length ? criteria.join(' / ') : t('command.noAcceptanceCriteria')}</dd></div>
-                <div><dt>{t('command.fallbackAdjustment')}</dt><dd>{text(item.fallbackAdjustment)}</dd></div>
-                <div><dt>{t('command.resourceCoverage')}</dt><dd>{text(coverage.status)} {text(coverage.explanation)}</dd></div>
-              </dl>
-              {knowledge.length ? <small>{t('command.knowledgePoints')}: {knowledge.join(' / ')}</small> : null}
-              <strong>{t('command.whereToLearn')}</strong>
-              <ul className="command-compact-list">
-                <ResourceLine value={bundle.primary} t={t} />
-                <ResourceLine value={bundle.support} t={t} />
-                <ResourceLine value={bundle.practice} t={t} />
-                <ResourceLine value={bundle.fallback} t={t} />
-              </ul>
-            </li>
+            <details className="execution-task-detail" key={`${text(item.title)}-${index}`} open={index === 0}>
+              <summary>
+                <span>
+                  <strong>{index + 1}. {text(item.title)}</strong>
+                  <small>{text(item.dueDate, t('command.noDate'))} · {String(item.estimatedMinutes || 0)} {t('command.minutes')} · {text(item.priority)}</small>
+                </span>
+                <span className="execution-task-compact-meta">
+                  <em>{text(coverage.status, 'partial')}</em>
+                  {text(item.deliverable) ? <small>{text(item.deliverable)}</small> : null}
+                </span>
+              </summary>
+              <div className="execution-task-body">
+                <p>{text(item.whyThisTaskMatters)}</p>
+                <dl className="command-result-meta">
+                  <div><dt>{t('command.deliverable')}</dt><dd>{text(item.deliverable)}</dd></div>
+                  <div><dt>{t('command.acceptanceCriteria')}</dt><dd>{criteria.length ? criteria.join(' / ') : t('command.noAcceptanceCriteria')}</dd></div>
+                  <div><dt>{t('command.fallbackAdjustment')}</dt><dd>{text(item.fallbackAdjustment)}</dd></div>
+                  <div><dt>{t('command.resourceCoverage')}</dt><dd>{text(coverage.status)} {text(coverage.explanation)}</dd></div>
+                </dl>
+                {knowledge.length ? <small>{t('command.knowledgePoints')}: {knowledge.join(' / ')}</small> : null}
+                <strong>{t('command.whereToLearn')}</strong>
+                <ul className="command-compact-list">
+                  <ResourceLine value={bundle.primary} t={t} />
+                  <ResourceLine value={bundle.support} t={t} />
+                  <ResourceLine value={bundle.practice} t={t} />
+                  <ResourceLine value={bundle.fallback} t={t} />
+                </ul>
+              </div>
+            </details>
           );
         })}
-      </ul>
+      </div>
       <div className="command-row-actions">
         <button type="button" disabled={!onSend} onClick={() => onSend?.(t('command.confirmExecutionMessage'))}>{t('command.confirmExecution')}</button>
         <button type="button" disabled={!onSend} onClick={() => onSend?.(t('command.feedbackTooHeavyMessage'))}>{t('command.feedbackTooHeavy')}</button>

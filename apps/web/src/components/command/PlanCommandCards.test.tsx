@@ -160,6 +160,12 @@ const labels: Record<string, string> = {
   'command.actionContinueMemoryViewMessage': '继续查看第 {index} 条记忆',
   'command.planningSessionStarted': 'Deep planning session',
   'command.planningSessionStatus': 'Planning status',
+  'command.latestPlanningStep': 'Latest planning step',
+  'command.planningProcessCollapsed': 'Planning process · collapsed',
+  'command.hiddenDraftCollapsed': 'Hidden draft · collapsed',
+  'command.planningCardMemorySummary': 'Memory hits',
+  'command.resources': 'resources',
+  'command.tasks': 'tasks',
   'command.userNeedContract': 'Goal understanding',
   'command.memoryInsightAgent': 'Memory Insight Agent',
   'command.resourceIntelligenceAgent': 'Resource Intelligence Agent',
@@ -223,6 +229,10 @@ const labels: Record<string, string> = {
   'command.noMemoryHits': 'No related memory',
   'command.noResourceCandidates': 'No usable resources',
   'command.noExecutionTasks': 'No execution tasks',
+  'command.expand': 'Expand',
+  'command.collapse': 'Collapse',
+  'command.expandAll': 'Expand all',
+  'command.collapseAll': 'Collapse all',
   'command.acceptanceCriteria': 'Completion standard',
   'command.noAcceptanceCriteria': 'No completion standard',
   'command.resourceCoverage': 'Resource coverage',
@@ -509,6 +519,7 @@ describe('Plan command cards', () => {
     expect(deriveDeepPlanningStatus(messages)).toBe('ready_to_write_calendar');
     const html = renderToStaticMarkup(<DeepPlanningActionBar messages={messages} onSend={() => undefined} t={t} />);
     expect(html).toContain('写入日历');
+    expect(html).not.toContain('Confirm execution plan');
 
     const withExplicitStatus = [
       ...messages,
@@ -522,6 +533,71 @@ describe('Plan command cards', () => {
       }
     ];
     expect(deriveDeepPlanningStatus(withExplicitStatus)).toBe('waiting_execution_approval');
+
+    const readyStatusOnly = [{
+      id: 'm-ready',
+      role: 'card' as const,
+      kind: 'planning_session_status' as const,
+      content: 'ready_to_write_calendar',
+      createdAt: 4,
+      payload: { sessionId: 'session-1', status: 'ready_to_write_calendar' }
+    }];
+    const readyHtml = renderToStaticMarkup(<DeepPlanningActionBar messages={readyStatusOnly} onSend={() => undefined} t={t} />);
+    expect(deriveDeepPlanningStatus(readyStatusOnly)).toBe('ready_to_write_calendar');
+    expect(readyHtml).toContain('写入日历');
+    expect(readyHtml).not.toContain('Confirm execution plan');
+  });
+
+  it('auto-collapses historical deep planning groups and keeps the latest group expanded', () => {
+    const messages = [
+      {
+        id: 'old-contract',
+        role: 'card' as const,
+        kind: 'user_need_contract' as const,
+        content: '',
+        createdAt: 1,
+        payload: { sessionId: 's-old', data: { interpretedGoal: 'Old Go plan', canMoveToDesign: true } }
+      },
+      {
+        id: 'old-design',
+        role: 'card' as const,
+        kind: 'plan_design_proposal' as const,
+        content: '',
+        createdAt: 2,
+        payload: { sessionId: 's-old', data: { strategyName: 'Old strategy', status: 'waiting_user_approval', phases: [] } }
+      },
+      {
+        id: 'user-gap',
+        role: 'user' as const,
+        content: '确认方向',
+        createdAt: 3
+      },
+      {
+        id: 'new-contract',
+        role: 'card' as const,
+        kind: 'user_need_contract' as const,
+        content: '',
+        createdAt: 4,
+        payload: { sessionId: 's-new', data: { interpretedGoal: 'New Python plan', canMoveToDesign: true } }
+      },
+      {
+        id: 'new-design',
+        role: 'card' as const,
+        kind: 'plan_design_proposal' as const,
+        content: '',
+        createdAt: 5,
+        payload: { sessionId: 's-new', data: { strategyName: 'New strategy', status: 'waiting_user_approval', phases: [] } }
+      }
+    ];
+
+    const html = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
+    );
+
+    expect(html).toContain('Planning process · collapsed');
+    expect(html).toContain('Latest planning step');
+    expect(html).toContain('New strategy');
+    expect(html).not.toContain('Old strategy');
   });
 
   it('sends fixed natural language messages from deep planning, more, and row actions', () => {
@@ -732,6 +808,48 @@ describe('Plan command cards', () => {
       'The tasks are too heavy',
       'The resource is too hard'
     ]);
+  });
+
+  it('renders execution task details collapsed except the first task by default', () => {
+    const html = renderToStaticMarkup(
+      <ExecutionPlanDraftCard
+        t={t}
+        onSend={() => undefined}
+        data={{
+          scheduleSummary: 'Two tasks.',
+          resourceCoverageSummary: 'Resources available.',
+          tasks: [
+            {
+              title: 'First task',
+              dueDate: '2026-07-10',
+              estimatedMinutes: 30,
+              priority: 'high',
+              whyThisTaskMatters: 'First detail',
+              deliverable: 'first.py',
+              fallbackAdjustment: 'Do less.',
+              resourceCoverage: { status: 'partial', explanation: 'Enough.' },
+              resourceBundle: { primary: { title: 'Python docs', sourceType: 'official_doc', useStep: 'Read one example.' } }
+            },
+            {
+              title: 'Second task',
+              dueDate: '2026-07-11',
+              estimatedMinutes: 45,
+              priority: 'medium',
+              whyThisTaskMatters: 'Second detail',
+              deliverable: 'second.py',
+              fallbackAdjustment: 'Do less.',
+              resourceCoverage: { status: 'partial', explanation: 'Enough.' },
+              resourceBundle: { primary: { title: 'Practice bank', sourceType: 'practice_bank', useStep: 'Do one exercise.' } }
+            }
+          ]
+        }}
+      />
+    );
+
+    expect(html).toContain('Expand all');
+    expect(html).toContain('Collapse all');
+    expect((html.match(/<details class="execution-task-detail" open=""/g) || []).length).toBe(1);
+    expect(html).toContain('Second task');
   });
 
   it('renders approval labels by action target and operation', () => {

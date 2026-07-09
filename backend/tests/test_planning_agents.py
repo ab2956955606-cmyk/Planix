@@ -3,6 +3,7 @@ import pytest
 from app.db import get_conn
 from app.schemas import CreatePlanningSessionRequest, PlanningSessionTextRequest
 from app.services.deep_planning import DeepPlanningService
+from app.services.langgraph_planning.runtime import LangGraphPlanningRuntime, get_deep_planning_orchestrator
 
 
 def test_user_advocate_artifact_blocks_unclear_goal(client):
@@ -80,3 +81,63 @@ def test_feedback_agent_requests_resource_revision(client):
         for item in updated.messages
     )
     assert any(item.agent == "Execution Planner Agent" and item.decision == "revise_artifact" for item in updated.decisions)
+
+
+def test_langgraph_planning_flag_selects_runtime_facade(client, monkeypatch):
+    assert isinstance(get_deep_planning_orchestrator(), DeepPlanningService)
+
+    monkeypatch.setenv("PLANIX_USE_LANGGRAPH_PLANNING", "1")
+
+    assert isinstance(get_deep_planning_orchestrator(), LangGraphPlanningRuntime)
+
+
+def test_langgraph_runtime_invokes_compiled_graph_when_available(client, monkeypatch):
+    calls = {"count": 0}
+    runtime = LangGraphPlanningRuntime(service=DeepPlanningService())
+
+    class FakeGraph:
+        def invoke(self, state):
+            calls["count"] += 1
+            response = runtime.service.create_session(
+                CreatePlanningSessionRequest(
+                    entryPoint="p_mode",
+                    threadId=state["thread_id"],
+                    userInput=state["user_input"],
+                    context=state["context"],
+                )
+            )
+            return {"response": response}
+
+    monkeypatch.setattr("app.services.langgraph_planning.runtime.build_graph", lambda service: FakeGraph())
+
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="thread-graph",
+            userInput="Plan 30 days to learn Python for an AI internship, daily 30 minutes, project driven",
+        )
+    )
+
+    assert calls["count"] == 1
+    assert session.thread_id == "thread-graph"
+    assert session.status == "waiting_design_approval"
+
+
+def test_langgraph_runtime_falls_back_safely_when_graph_fails(client, monkeypatch):
+    runtime = LangGraphPlanningRuntime(service=DeepPlanningService())
+    monkeypatch.setattr(
+        "app.services.langgraph_planning.runtime.build_graph",
+        lambda service: (_ for _ in ()).throw(RuntimeError("boom with internal stack")),
+    )
+
+    session = runtime.create_session(CreatePlanningSessionRequest(entryPoint="p_mode", userInput="我要学 Go"))
+
+    assert session.status == "needs_goal_clarification"
+    assert session.user_need_contract is not None
+    assert session.user_need_contract.clarification_questions
+    assert any(
+        item.message_type == "context_request"
+        and "legacy planning service fallback" in item.reason
+        and "boom" not in item.reason
+        for item in session.messages
+    )

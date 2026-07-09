@@ -457,6 +457,139 @@ def test_deep_planning_clarification_followup_skips_command_decision(client, mon
         assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 1
 
 
+def test_deep_planning_clarification_answer_preempts_query_plan_fallback(client, monkeypatch):
+    class AuthErrorDecisionService:
+        def decide(self, *args, **kwargs):
+            raise AssertionError("auth_error should not be consulted during active planning continuation")
+
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post("/api/command/chat", json={"mode": "auto", "message": "我要学go"})
+    start_events = _events(start)
+    thread_id = start_events[-1]["threadId"]
+    start_session_id = next(event["sessionId"] for event in start_events if event["type"] == "planning_session_started")
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "needs_goal_clarification"
+        for event in start_events
+    )
+
+    monkeypatch.setattr("app.services.command_agent.CommandDecisionService", lambda: AuthErrorDecisionService())
+    response = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "零基础，每天3小时，找实习"},
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert not any(event["type"] == "command_decision" for event in events)
+    assert not any(event["type"] == "plan_search_results" for event in events)
+    assert not any(event["type"] == "runtime_started" for event in events)
+    assert not any(event["type"] == "draft_created" for event in events)
+    assert "查询结果 0" not in response.text
+    assert "query_plan" not in response.text
+    assert any(event["type"] == "memory_insight_brief" for event in events)
+    assert any(event["type"] == "resource_brief" for event in events)
+    assert any(event["type"] == "plan_design_proposal" for event in events)
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "waiting_design_approval"
+        for event in events
+    )
+    contract = next(event for event in events if event["type"] == "user_need_contract")
+    assert contract["sessionId"] == start_session_id
+    learning = contract["data"]["slotState"]["learning"]
+    assert "零基础" in learning["currentLevel"]
+    assert "3" in learning["dailyTime"]
+    assert "实习" in learning["purpose"]
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 1
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_actions").fetchone()["count"] == 0
+
+
+def test_deep_planning_learning_short_clarification_normalizes_slots_without_goal_pollution(client, monkeypatch):
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post("/api/command/chat", json={"mode": "auto", "message": "我要学python"})
+    start_events = _events(start)
+    thread_id = start_events[-1]["threadId"]
+    session_id = next(event["sessionId"] for event in start_events if event["type"] == "planning_session_started")
+
+    response = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "零基础 4小时 提升能力"},
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert not any(event["type"] == "command_decision" for event in events)
+    assert not any(event["type"] == "plan_search_results" for event in events)
+    assert "query_plan" not in response.text
+    assert any(event["type"] == "memory_insight_brief" for event in events)
+    assert any(event["type"] == "resource_brief" for event in events)
+    assert any(event["type"] == "plan_design_proposal" for event in events)
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "waiting_design_approval"
+        for event in events
+    )
+    contract = next(event for event in events if event["type"] == "user_need_contract")
+    assert contract["sessionId"] == session_id
+    assert "补充信息" not in contract["data"]["interpretedGoal"]
+    learning = contract["data"]["slotState"]["learning"]
+    assert learning["currentLevel"] == "零基础"
+    assert learning["dailyTime"] == "4小时"
+    assert learning["availableTimeScope"] == "unknown"
+    assert "提升" in learning["purpose"]
+    resource_brief = next(event for event in events if event["type"] == "resource_brief")
+    candidate_titles = [item["title"] for item in resource_brief["data"]["resourceCandidates"]]
+    assert all("补充信息" not in title for title in candidate_titles)
+
+
+def test_deep_planning_weekly_time_clarification_stays_in_active_session(client, monkeypatch):
+    class ExplodingDecisionService:
+        def decide(self, *args, **kwargs):
+            raise AssertionError("active planning continuation must preempt command decision")
+
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post("/api/command/chat", json={"mode": "auto", "message": "我要学python"})
+    start_events = _events(start)
+    thread_id = start_events[-1]["threadId"]
+    session_id = next(event["sessionId"] for event in start_events if event["type"] == "planning_session_started")
+    monkeypatch.setattr("app.services.command_agent.CommandDecisionService", lambda: ExplodingDecisionService())
+
+    level = client.post("/api/command/chat", json={"mode": "auto", "threadId": thread_id, "message": "零基础"})
+    weekly = client.post("/api/command/chat", json={"mode": "auto", "threadId": thread_id, "message": "每周4小时"})
+    purpose = client.post("/api/command/chat", json={"mode": "auto", "threadId": thread_id, "message": "找实习"})
+
+    for response in (level, weekly, purpose):
+        assert response.status_code == 200
+        events = _events(response)
+        assert not any(event["type"] == "command_decision" for event in events)
+        assert not any(event["type"] == "plan_search_results" for event in events)
+        assert "query_plan" not in response.text
+        assert "modify_plan" not in response.text
+    weekly_contract = next(event for event in _events(weekly) if event["type"] == "user_need_contract")
+    assert weekly_contract["sessionId"] == session_id
+    learning = weekly_contract["data"]["slotState"]["learning"]
+    assert learning["dailyTime"] == "每周4小时"
+    assert learning["availableTimeScope"] == "weekly"
+    final_events = _events(purpose)
+    assert any(event["type"] == "plan_design_proposal" for event in final_events)
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "waiting_design_approval"
+        for event in final_events
+    )
+
+
 def test_deep_planning_travel_slot_state_accumulates_until_design(client, monkeypatch):
     class ExplodingDecisionService:
         def decide(self, *args, **kwargs):
@@ -523,6 +656,61 @@ def test_deep_planning_chinese_confirmation_approves_current_stage(client, monke
     events = _events(response)
     assert not any(event["type"] == "command_decision" for event in events)
     assert any(event["type"] == "execution_plan_draft" for event in events)
+
+
+def test_deep_planning_execution_confirmation_gate_and_ready_noop(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "message": "Plan 30 days to learn Python for an AI internship, daily 30 minutes, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+    thread_id = _events(start)[-1]["threadId"]
+    client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "确认方向", "context": {"date": "2026-07-05"}},
+    )
+
+    approve_execution = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "确认执行计划", "context": {"date": "2026-07-05"}},
+    )
+
+    events = _events(approve_execution)
+    assert not any(event["type"] == "command_decision" for event in events)
+    assert not any(event["type"] == "learning_update" for event in events)
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "ready_to_write_calendar"
+        for event in events
+    )
+    draft = next(event for event in events if event["type"] == "execution_plan_draft")
+    assert draft["data"]["status"] == "approved"
+
+    repeat = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "确认执行计划", "context": {"date": "2026-07-05"}},
+    )
+    repeat_events = _events(repeat)
+    assert not any(event["type"] == "command_decision" for event in repeat_events)
+    assert not any(event["type"] == "learning_update" for event in repeat_events)
+    assert not any(event["type"] == "planning_session_started" for event in repeat_events)
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "ready_to_write_calendar"
+        for event in repeat_events
+    )
+
+    positive_feedback = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "这个计划很适合", "context": {"date": "2026-07-05"}},
+    )
+    feedback_events = _events(positive_feedback)
+    assert any(event["type"] == "learning_update" for event in feedback_events)
 
 
 def test_deep_planning_topic_switch_requires_restart_confirmation(client, monkeypatch):
