@@ -1620,7 +1620,7 @@ class CommandAgentService:
         )
         if decision_result.decision:
             resolved_intent = _decision_to_intent(decision_result.decision)
-            if pre_intent == "planning_request" and resolved_intent == "clarify":
+            if pre_intent == "planning_request" and resolved_intent != "planning_request":
                 return (
                     "planning_request",
                     _fallback_decision("planning_request", payload.message),

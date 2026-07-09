@@ -457,6 +457,29 @@ def test_deep_planning_clarification_followup_skips_command_decision(client, mon
         assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 1
 
 
+def test_deep_planning_learning_goal_guardrail_overrides_chat_decision(client, monkeypatch):
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="chat", confidence=0.5, targetType="unknown", action="answer"),
+        error="API key is invalid or expired.",
+    )
+
+    response = client.post("/api/command/chat", json={"mode": "auto", "message": "我要学python"})
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert any(event["type"] == "planning_session_started" for event in events)
+    assert any(event["type"] == "user_need_contract" for event in events)
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "needs_goal_clarification"
+        for event in events
+    )
+    assert not any(event["type"] == "plan_search_results" for event in events)
+    assert not any(event["type"] == "runtime_started" for event in events)
+    assert not any(event["type"] == "draft_created" for event in events)
+
+
 def test_deep_planning_clarification_answer_preempts_query_plan_fallback(client, monkeypatch):
     class AuthErrorDecisionService:
         def decide(self, *args, **kwargs):
