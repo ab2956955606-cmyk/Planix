@@ -32,6 +32,7 @@ export function CommandPage({ t }: CommandPageProps) {
       />
       <CommandComposer
         sending={command.sending}
+        messages={command.messages}
         mode={command.mode}
         permission={command.permission}
         onSend={(value) => commandAgentActions.sendCommand(value, t)}

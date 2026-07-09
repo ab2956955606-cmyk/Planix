@@ -30,7 +30,11 @@ def test_ai_settings_endpoint_returns_json(client):
     assert {"memory_query", "memory_write"} <= {rule["taskType"] for rule in body["routingRules"]}
     assert "note_query" not in {rule["taskType"] for rule in body["routingRules"]}
     assert "note_write" not in {rule["taskType"] for rule in body["routingRules"]}
-    assert all(rule["primaryProvider"] == "deepseek" for rule in body["routingRules"])
+    assert all(rule["primaryProvider"] == "auto" for rule in body["routingRules"])
+    assert all(rule["fallbackProviders"] == ["deepseek"] for rule in body["routingRules"])
+    assert body["autoModelPolicy"]["autoProviderOrder"][:3] == ["zhipu_glm", "deepseek", "kimi"]
+    assert body["autoModelPolicy"]["taskStrategy"]["command_decision"] == "fast_low_cost"
+    assert body["autoModelPolicy"]["taskStrategy"]["plan_generation"] == "structured_stable"
 
 
 def test_ai_settings_are_saved_without_exposing_key(client):
@@ -169,6 +173,55 @@ def test_model_routing_legacy_note_rules_are_normalized_to_memory_tasks(client):
     saved_rules = {rule["taskType"]: rule for rule in saved.json()["routingRules"]}
     assert "note_query" not in saved_rules
     assert saved_rules["memory_query"]["primaryProvider"] == "openai"
+
+
+def test_model_routing_accepts_auto_primary_provider(client):
+    loaded = client.get("/api/ai/settings").json()
+    rule = next(rule for rule in loaded["routingRules"] if rule["taskType"] == "plan_generation")
+
+    saved = client.put(
+        "/api/ai/settings/routing",
+        json={
+            "routingRules": [
+                {
+                    **rule,
+                    "primaryProvider": "auto",
+                    "fallbackProviders": ["deepseek"],
+                    "localFallbackEnabled": True,
+                }
+            ]
+        },
+    )
+
+    assert saved.status_code == 200
+    saved_rules = {rule["taskType"]: rule for rule in saved.json()["routingRules"]}
+    assert saved_rules["plan_generation"]["primaryProvider"] == "auto"
+    assert saved_rules["plan_generation"]["fallbackProviders"] == ["deepseek"]
+
+
+def test_model_routing_saves_auto_model_policy(client):
+    loaded = client.get("/api/ai/settings").json()
+
+    saved = client.put(
+        "/api/ai/settings/routing",
+        json={
+            "routingRules": loaded["routingRules"],
+            "autoModelPolicy": {
+                "autoProviderOrder": ["kimi", "deepseek", "zhipu_glm", "mock", "kimi"],
+                "taskStrategy": {
+                    "chat": "balanced",
+                    "plan_generation": "structured_stable",
+                },
+            },
+        },
+    )
+
+    assert saved.status_code == 200
+    policy = saved.json()["autoModelPolicy"]
+    assert policy["autoProviderOrder"][:3] == ["kimi", "deepseek", "zhipu_glm"]
+    assert "mock" not in policy["autoProviderOrder"]
+    assert policy["taskStrategy"]["chat"] == "balanced"
+    assert policy["taskStrategy"]["command_decision"] == "fast_low_cost"
 
 
 def test_model_routing_rejects_mock_and_too_many_fallbacks(client):

@@ -268,6 +268,8 @@ export interface GoalPlanTask {
   estimatedMinutes: number;
   dueDate: string | null;
   priority: GoalPriority;
+  learningResources?: TaskLearningResource[];
+  resourceBundle?: TaskResourceBundle | null;
 }
 
 export interface GoalMilestone {
@@ -443,6 +445,40 @@ export interface LearningResource {
   reason?: string | null;
 }
 
+export type PlanningResourceSourceType =
+  | 'user_material'
+  | 'memory_note'
+  | 'official_doc'
+  | 'built_in_catalog'
+  | 'project_template'
+  | 'practice_bank'
+  | 'web_search'
+  | 'github'
+  | 'video'
+  | 'book'
+  | 'ai_generated'
+  | 'search_keyword';
+
+export interface TaskLearningResource {
+  title: string;
+  sourceType: PlanningResourceSourceType;
+  url?: string | null;
+  section?: string | null;
+  searchKeyword?: string | null;
+  useStep: string;
+  estimatedMinutes: number;
+  whyThisResource: string;
+  expectedOutput: string;
+  fallbackIfTooHard: string;
+}
+
+export interface TaskResourceBundle {
+  primary?: TaskLearningResource | null;
+  support?: TaskLearningResource | null;
+  practice?: TaskLearningResource | null;
+  fallback?: TaskLearningResource | null;
+}
+
 export interface PlanFitCheck {
   fitsCurrentMilestone: boolean;
   advancesOverallGoal: boolean;
@@ -505,6 +541,15 @@ export interface PlannerResponse {
 }
 
 export type AiProvider = 'mock' | 'deepseek' | 'kimi' | 'zhipu_glm' | 'openai' | 'custom';
+export type RoutingPrimaryProvider = 'auto' | Exclude<AiProvider, 'mock'>;
+export type AutoModelStrategy =
+  | 'fast_low_cost'
+  | 'structured_stable'
+  | 'strict_json'
+  | 'context_summary'
+  | 'classification'
+  | 'knowledge_reasoning'
+  | 'balanced';
 export type ModelRoutingTaskType =
   | 'command_decision'
   | 'plan_generation'
@@ -527,10 +572,15 @@ export interface ModelRouteAttempt {
 
 export interface AiModelRoutingRule {
   taskType: ModelRoutingTaskType;
-  primaryProvider: AiProvider;
+  primaryProvider: RoutingPrimaryProvider;
   fallbackProviders: AiProvider[];
   localFallbackEnabled: boolean;
   updatedAt?: string;
+}
+
+export interface AiAutoModelPolicy {
+  autoProviderOrder: Exclude<AiProvider, 'mock'>[];
+  taskStrategy: Partial<Record<ModelRoutingTaskType, AutoModelStrategy>>;
 }
 
 export interface AiSavedProvider {
@@ -551,6 +601,7 @@ export interface AiSettings {
   updatedAt: string;
   savedProviders: AiSavedProvider[];
   routingRules?: AiModelRoutingRule[];
+  autoModelPolicy?: AiAutoModelPolicy;
 }
 
 export interface AiSettingsInput {
@@ -564,6 +615,7 @@ export interface AiSettingsInput {
 
 export interface AiModelRoutingInput {
   routingRules: AiModelRoutingRule[];
+  autoModelPolicy?: AiAutoModelPolicy;
 }
 
 export interface AiSettingsTestResult {

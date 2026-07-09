@@ -8,8 +8,45 @@ from .api_key import INVALID_API_KEY_MESSAGE, validate_api_key_format
 PlanPriority = Literal["low", "medium", "high"]
 PlanSource = Literal["manual", "ai"]
 AiProvider = Literal["mock", "deepseek", "kimi", "zhipu_glm", "openai", "custom"]
+RoutingPrimaryProvider = Literal["auto", "deepseek", "kimi", "zhipu_glm", "openai", "custom"]
+AutoModelStrategy = Literal[
+    "fast_low_cost",
+    "structured_stable",
+    "strict_json",
+    "context_summary",
+    "classification",
+    "knowledge_reasoning",
+    "balanced",
+]
 MemoryKind = Literal["note", "material", "planning_history", "preference", "review"]
 MemorySource = Literal["user", "ai", "system"]
+PlanningAgentName = Literal[
+    "User Advocate Agent",
+    "Memory Insight Agent",
+    "Resource Intelligence Agent",
+    "Plan Co-Designer Agent",
+    "Execution Planner Agent",
+    "Feedback Evolution Agent",
+]
+PlanningArtifactType = Literal[
+    "user_need_contract",
+    "memory_insight_brief",
+    "resource_brief",
+    "plan_design_proposal",
+    "execution_plan_draft",
+    "learning_patch",
+]
+PlanningArtifactStatus = Literal["draft", "approved", "blocked", "needs_revision"]
+PlanningAgentDecisionType = Literal[
+    "approve",
+    "block",
+    "request_user_input",
+    "request_agent_revision",
+    "produce_artifact",
+    "revise_artifact",
+    "handoff",
+]
+PlanningAgentMessageType = Literal["handoff", "revision_request", "block", "approval", "context_request"]
 
 
 ModelUsageMode = Literal["llm", "local_fallback"]
@@ -262,6 +299,31 @@ class ToolSpec(BaseModel):
 
 
 LearningResourceType = Literal["official_doc", "library_doc", "search_keyword", "local_source"]
+PlanningResourceSourceType = Literal[
+    "user_material",
+    "memory_note",
+    "official_doc",
+    "built_in_catalog",
+    "project_template",
+    "practice_bank",
+    "web_search",
+    "github",
+    "video",
+    "book",
+    "ai_generated",
+    "search_keyword",
+]
+PlanningSessionStatus = Literal[
+    "needs_goal_clarification",
+    "waiting_design_approval",
+    "design_revision",
+    "waiting_execution_approval",
+    "execution_revision",
+    "ready_to_write_calendar",
+    "waiting_calendar_write_approval",
+    "written_to_calendar",
+    "learning_from_feedback",
+]
 
 
 class TimeBlock(BaseModel):
@@ -279,6 +341,30 @@ class LearningResource(BaseModel):
     url: str | None = None
     search_keyword: str | None = Field(default=None, alias="searchKeyword")
     reason: str | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TaskLearningResource(BaseModel):
+    title: str
+    source_type: PlanningResourceSourceType = Field(alias="sourceType")
+    url: str | None = None
+    section: str | None = None
+    search_keyword: str | None = Field(default=None, alias="searchKeyword")
+    use_step: str = Field(default="", alias="useStep")
+    estimated_minutes: int = Field(default=15, alias="estimatedMinutes", ge=1, le=240)
+    why_this_resource: str = Field(default="", alias="whyThisResource")
+    expected_output: str = Field(default="", alias="expectedOutput")
+    fallback_if_too_hard: str = Field(default="", alias="fallbackIfTooHard")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TaskResourceBundle(BaseModel):
+    primary: TaskLearningResource | None = None
+    support: TaskLearningResource | None = None
+    practice: TaskLearningResource | None = None
+    fallback: TaskLearningResource | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -457,7 +543,7 @@ class AiSavedProvider(BaseModel):
 
 class AiModelRoutingRule(BaseModel):
     task_type: ModelRoutingTaskType = Field(alias="taskType")
-    primary_provider: AiProvider = Field(alias="primaryProvider")
+    primary_provider: RoutingPrimaryProvider = Field(alias="primaryProvider")
     fallback_providers: list[AiProvider] = Field(default_factory=list, alias="fallbackProviders")
     local_fallback_enabled: bool = Field(default=True, alias="localFallbackEnabled")
     updated_at: str = Field(default="", alias="updatedAt")
@@ -466,9 +552,7 @@ class AiModelRoutingRule(BaseModel):
 
     @field_validator("primary_provider")
     @classmethod
-    def validate_primary_provider(cls, value: AiProvider) -> AiProvider:
-        if value == "mock":
-            raise ValueError("mock cannot be used as a routed model provider")
+    def validate_primary_provider(cls, value: RoutingPrimaryProvider) -> RoutingPrimaryProvider:
         return value
 
     @field_validator("fallback_providers")
@@ -485,12 +569,31 @@ class AiModelRoutingRule(BaseModel):
         return cleaned
 
     def model_post_init(self, __context: Any) -> None:
-        if self.primary_provider in self.fallback_providers:
+        if self.primary_provider != "auto" and self.primary_provider in self.fallback_providers:
             raise ValueError("primaryProvider cannot also be a fallback provider")
+
+
+class AiAutoModelPolicy(BaseModel):
+    auto_provider_order: list[AiProvider] = Field(default_factory=list, alias="autoProviderOrder")
+    task_strategy: dict[ModelRoutingTaskType, AutoModelStrategy] = Field(default_factory=dict, alias="taskStrategy")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("auto_provider_order")
+    @classmethod
+    def validate_auto_provider_order(cls, value: list[AiProvider]) -> list[AiProvider]:
+        cleaned: list[AiProvider] = []
+        for provider in value:
+            if provider == "mock":
+                continue
+            if provider not in cleaned:
+                cleaned.append(provider)
+        return cleaned
 
 
 class AiModelRoutingUpdate(BaseModel):
     routing_rules: list[AiModelRoutingRule] = Field(alias="routingRules")
+    auto_model_policy: AiAutoModelPolicy | None = Field(default=None, alias="autoModelPolicy")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -505,6 +608,7 @@ class AiSettingsOut(BaseModel):
     updated_at: str = Field(alias="updatedAt")
     saved_providers: list[AiSavedProvider] = Field(default_factory=list, alias="savedProviders")
     routing_rules: list[AiModelRoutingRule] = Field(default_factory=list, alias="routingRules")
+    auto_model_policy: AiAutoModelPolicy = Field(default_factory=AiAutoModelPolicy, alias="autoModelPolicy")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -551,6 +655,8 @@ class GoalPlanTask(BaseModel):
     estimated_minutes: int = Field(default=45, alias="estimatedMinutes", ge=1, le=1440)
     due_date: str | None = Field(default=None, alias="dueDate")
     priority: GoalPriority = "medium"
+    learning_resources: list[TaskLearningResource] = Field(default_factory=list, alias="learningResources")
+    resource_bundle: TaskResourceBundle | None = Field(default=None, alias="resourceBundle")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -683,6 +789,370 @@ class GoalPlanOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class MemoryHit(BaseModel):
+    id: str = ""
+    kind: MemoryKind
+    title: str
+    summary: str
+    relevance: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MemoryInsightHits(BaseModel):
+    preferences: list[MemoryHit] = Field(default_factory=list)
+    reviews: list[MemoryHit] = Field(default_factory=list)
+    planning_history: list[MemoryHit] = Field(default_factory=list, alias="planningHistory")
+    materials: list[MemoryHit] = Field(default_factory=list)
+    notes: list[MemoryHit] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningInsights(BaseModel):
+    user_style_rules: list[str] = Field(default_factory=list, alias="userStyleRules")
+    past_failure_warnings: list[str] = Field(default_factory=list, alias="pastFailureWarnings")
+    positive_patterns: list[str] = Field(default_factory=list, alias="positivePatterns")
+    constraints_to_respect: list[str] = Field(default_factory=list, alias="constraintsToRespect")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MemoryInsightBrief(BaseModel):
+    memory_hits: MemoryInsightHits = Field(default_factory=MemoryInsightHits, alias="memoryHits")
+    planning_insights: PlanningInsights = Field(default_factory=PlanningInsights, alias="planningInsights")
+    calendar_constraints: list[str] = Field(default_factory=list, alias="calendarConstraints")
+    confidence: float = Field(default=0, ge=0, le=1)
+    missing_memory_warning: str | None = Field(default=None, alias="missingMemoryWarning")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ResourceFitScore(BaseModel):
+    total: int = Field(ge=0, le=100)
+    level_fit: int = Field(default=60, alias="levelFit", ge=0, le=100)
+    task_fit: int = Field(default=60, alias="taskFit", ge=0, le=100)
+    user_preference_fit: int = Field(default=60, alias="userPreferenceFit", ge=0, le=100)
+    time_fit: int = Field(default=60, alias="timeFit", ge=0, le=100)
+    credibility: int = Field(default=60, ge=0, le=100)
+    actionability: int = Field(default=60, ge=0, le=100)
+    reasons: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ResourceCandidate(BaseModel):
+    id: str
+    title: str
+    source_type: PlanningResourceSourceType = Field(alias="sourceType")
+    url: str | None = None
+    section: str | None = None
+    search_keyword: str | None = Field(default=None, alias="searchKeyword")
+    domain: str = ""
+    topics: list[str] = Field(default_factory=list)
+    difficulty: Literal["beginner", "intermediate", "advanced"] = "beginner"
+    language: Literal["zh", "en", "mixed"] = "mixed"
+    estimated_minutes: int = Field(default=20, alias="estimatedMinutes", ge=1, le=240)
+    how_to_use: str = Field(default="", alias="howToUse")
+    expected_output: str = Field(default="", alias="expectedOutput")
+    fallback_if_too_hard: str = Field(default="", alias="fallbackIfTooHard")
+    fit_score: ResourceFitScore = Field(alias="fitScore")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ResourceCoverage(BaseModel):
+    status: Literal["strong", "partial", "weak", "missing"]
+    missing_topics: list[str] = Field(default_factory=list, alias="missingTopics")
+    explanation: str
+    fallback_strategy: Literal[
+        "use_user_material",
+        "use_builtin_catalog",
+        "use_project_template",
+        "use_practice_bank",
+        "use_ai_micro_material",
+        "ask_user",
+        "optional_web_search",
+    ] = Field(alias="fallbackStrategy")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ResourceBrief(BaseModel):
+    resource_candidates: list[ResourceCandidate] = Field(default_factory=list, alias="resourceCandidates")
+    coverage: ResourceCoverage
+    resource_rules_for_this_plan: list[str] = Field(default_factory=list, alias="resourceRulesForThisPlan")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningLearningSlots(BaseModel):
+    subject: str = ""
+    current_level: str = Field(default="", alias="currentLevel")
+    target_level: str = Field(default="", alias="targetLevel")
+    daily_time: str = Field(default="", alias="dailyTime")
+    duration: str = ""
+    purpose: str = ""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningTravelSlots(BaseModel):
+    destination: str = ""
+    places: list[str] = Field(default_factory=list)
+    duration_days: int | None = Field(default=None, alias="durationDays")
+    month: str = ""
+    year: int | None = None
+    transport: str = ""
+    budget: str = ""
+    budget_scope: Literal["whole_trip", "per_day", "unknown"] = Field(default="unknown", alias="budgetScope")
+    interests: list[str] = Field(default_factory=list)
+    fitness_level: str = Field(default="", alias="fitnessLevel")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningSlotState(BaseModel):
+    domain: Literal["learning", "travel", "career", "project", "exam", "fitness", "other"] | None = None
+    goal: str = ""
+    desired_outcome: str = Field(default="", alias="desiredOutcome")
+    learning: PlanningLearningSlots = Field(default_factory=PlanningLearningSlots)
+    travel: PlanningTravelSlots = Field(default_factory=PlanningTravelSlots)
+    constraints: list[str] = Field(default_factory=list)
+    preferences: list[str] = Field(default_factory=list)
+    filled_slots: list[str] = Field(default_factory=list, alias="filledSlots")
+    missing_slots: list[str] = Field(default_factory=list, alias="missingSlots")
+    last_updated_from_user_input: str = Field(default="", alias="lastUpdatedFromUserInput")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PendingPlanningQuestion(BaseModel):
+    asked_fields: list[str] = Field(default_factory=list, alias="askedFields")
+    expected_answer_type: str = Field(default="", alias="expectedAnswerType")
+    question_text: str = Field(default="", alias="questionText")
+    questions: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class UserNeedContract(BaseModel):
+    raw_user_input: str = Field(alias="rawUserInput")
+    interpreted_goal: str = Field(default="", alias="interpretedGoal")
+    desired_outcome: str | None = Field(default=None, alias="desiredOutcome")
+    current_level: str | None = Field(default=None, alias="currentLevel")
+    deadline: str | None = None
+    available_time: str | None = Field(default=None, alias="availableTime")
+    hard_constraints: list[str] = Field(default_factory=list, alias="hardConstraints")
+    soft_preferences: list[str] = Field(default_factory=list, alias="softPreferences")
+    missing_information: list[str] = Field(default_factory=list, alias="missingInformation")
+    user_words_that_must_be_respected: list[str] = Field(default_factory=list, alias="userWordsThatMustBeRespected")
+    can_move_to_design: bool = Field(default=False, alias="canMoveToDesign")
+    clarification_questions: list[str] = Field(default_factory=list, alias="clarificationQuestions")
+    slot_state: PlanningSlotState | None = Field(default=None, alias="slotState")
+    pending_question: PendingPlanningQuestion | None = Field(default=None, alias="pendingQuestion")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanDesignPhase(BaseModel):
+    title: str
+    purpose: str
+    expected_output: str = Field(alias="expectedOutput")
+    resources_to_use: list[str] = Field(default_factory=list, alias="resourcesToUse")
+    why_needed: str = Field(alias="whyNeeded")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanDesignProposal(BaseModel):
+    design_id: str = Field(alias="designId")
+    strategy_name: str = Field(alias="strategyName")
+    target_outcome: str = Field(alias="targetOutcome")
+    plan_style: Literal["project_driven", "steady_learning", "exam_sprint", "career_portfolio", "lightweight", "custom"] = Field(alias="planStyle")
+    phases: list[PlanDesignPhase]
+    design_rationale: str = Field(alias="designRationale")
+    assumptions: list[str] = Field(default_factory=list)
+    user_benefits: list[str] = Field(default_factory=list, alias="userBenefits")
+    tradeoffs: list[str] = Field(default_factory=list)
+    questions_for_user: list[str] = Field(default_factory=list, alias="questionsForUser")
+    status: Literal["waiting_user_approval", "revision_needed", "approved"] = "waiting_user_approval"
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExecutionTaskResourceCoverage(BaseModel):
+    status: Literal["strong", "partial", "weak", "missing"]
+    explanation: str
+
+
+class ExecutionTask(BaseModel):
+    title: str
+    description: str = ""
+    due_date: str | None = Field(default=None, alias="dueDate")
+    estimated_minutes: int = Field(alias="estimatedMinutes", ge=1, le=1440)
+    priority: GoalPriority = "medium"
+    why_this_task_matters: str = Field(alias="whyThisTaskMatters")
+    acceptance_criteria: list[str] = Field(alias="acceptanceCriteria")
+    deliverable: str
+    fallback_adjustment: str = Field(alias="fallbackAdjustment")
+    knowledge_points: list[str] = Field(default_factory=list, alias="knowledgePoints")
+    resource_bundle: TaskResourceBundle = Field(alias="resourceBundle")
+    resource_coverage: ExecutionTaskResourceCoverage = Field(alias="resourceCoverage")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExecutionPlanDraft(BaseModel):
+    design_id: str = Field(alias="designId")
+    tasks: list[ExecutionTask]
+    review_cadence: str = Field(alias="reviewCadence")
+    risk_plan: list[str] = Field(default_factory=list, alias="riskPlan")
+    schedule_summary: str = Field(alias="scheduleSummary")
+    resource_coverage_summary: str = Field(alias="resourceCoverageSummary")
+    status: Literal["waiting_user_approval", "revision_needed", "approved"] = "waiting_user_approval"
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class LearningReflection(BaseModel):
+    what_went_wrong: str | None = Field(default=None, alias="whatWentWrong")
+    why_it_happened: str | None = Field(default=None, alias="whyItHappened")
+    how_to_avoid_next_time: str = Field(alias="howToAvoidNextTime")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class LearningImmediatePatch(BaseModel):
+    target: Literal["design", "execution_task", "resource", "schedule"]
+    action: Literal["revise_design", "split_task", "reduce_load", "replace_resource", "change_style", "change_schedule"]
+    instruction: str
+
+
+class LongTermLearning(BaseModel):
+    new_rule: str = Field(alias="newRule")
+    confidence: float = Field(ge=0, le=1)
+    evidence: str
+    applies_to_domains: list[str] = Field(default_factory=list, alias="appliesToDomains")
+    expires_at: str | None = Field(default=None, alias="expiresAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class LearningMemoryUpdate(BaseModel):
+    kind: Literal["preference", "review"]
+    title: str
+    content: str
+
+
+class LearningPatch(BaseModel):
+    feedback_type: Literal["positive", "negative", "constraint", "preference", "execution_failure", "resource_feedback"] = Field(alias="feedbackType")
+    affected_scope: Literal["current_plan", "future_plans", "specific_task", "planning_style", "resource_selection"] = Field(alias="affectedScope")
+    insight: str
+    reflection: LearningReflection
+    immediate_patch: LearningImmediatePatch | None = Field(default=None, alias="immediatePatch")
+    long_term_learning: LongTermLearning | None = Field(default=None, alias="longTermLearning")
+    memory_updates: list[LearningMemoryUpdate] = Field(default_factory=list, alias="memoryUpdates")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CreatePlanningSessionRequest(BaseModel):
+    entry_point: Literal["p_mode"] = Field(default="p_mode", alias="entryPoint")
+    thread_id: str | None = Field(default=None, alias="threadId")
+    user_input: str = Field(alias="userInput", min_length=1)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningSessionTextRequest(BaseModel):
+    text: str = Field(default="", max_length=4000)
+    accept_missing_resources: bool = Field(default=False, alias="acceptMissingResources")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningArtifact(BaseModel):
+    id: str
+    session_id: str = Field(alias="sessionId")
+    owner_agent: PlanningAgentName = Field(alias="ownerAgent")
+    artifact_type: PlanningArtifactType = Field(alias="artifactType")
+    version: int
+    status: PlanningArtifactStatus
+    content_json: dict[str, Any] = Field(default_factory=dict, alias="contentJson")
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AgentDecision(BaseModel):
+    id: str
+    session_id: str = Field(alias="sessionId")
+    agent: PlanningAgentName
+    decision: PlanningAgentDecisionType
+    reason: str = ""
+    confidence: float = Field(default=1, ge=0, le=1)
+    input_artifact_ids: list[str] = Field(default_factory=list, alias="inputArtifactIds")
+    output_artifact_ids: list[str] = Field(default_factory=list, alias="outputArtifactIds")
+    user_visible_summary: str = Field(default="", alias="userVisibleSummary")
+    model_usage: ModelUsage | None = Field(default=None, alias="modelUsage")
+    created_at: str = Field(alias="createdAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AgentMessage(BaseModel):
+    id: str
+    session_id: str = Field(alias="sessionId")
+    from_agent: PlanningAgentName = Field(alias="fromAgent")
+    to_agent: PlanningAgentName = Field(alias="toAgent")
+    message_type: PlanningAgentMessageType = Field(alias="messageType")
+    reason: str = ""
+    payload_json: dict[str, Any] = Field(default_factory=dict, alias="payloadJson")
+    resolved: bool = False
+    created_at: str = Field(alias="createdAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningBlackboard(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    status: PlanningSessionStatus
+    user_input_history: list[str] = Field(default_factory=list, alias="userInputHistory")
+    artifacts: list[PlanningArtifact] = Field(default_factory=list)
+    decisions: list[AgentDecision] = Field(default_factory=list)
+    messages: list[AgentMessage] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningSessionResponse(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    thread_id: str = Field(default="", alias="threadId")
+    entry_point: Literal["p_mode"] = Field(alias="entryPoint")
+    status: PlanningSessionStatus
+    user_input: str = Field(alias="userInput")
+    user_need_contract: UserNeedContract | None = Field(default=None, alias="userNeedContract")
+    slot_state: PlanningSlotState | None = Field(default=None, alias="slotState")
+    pending_question: PendingPlanningQuestion | None = Field(default=None, alias="pendingQuestion")
+    memory_insight: MemoryInsightBrief | None = Field(default=None, alias="memoryInsight")
+    resource_brief: ResourceBrief | None = Field(default=None, alias="resourceBrief")
+    design_proposal: PlanDesignProposal | None = Field(default=None, alias="designProposal")
+    execution_draft: ExecutionPlanDraft | None = Field(default=None, alias="executionDraft")
+    learning_patch: LearningPatch | None = Field(default=None, alias="learningPatch")
+    artifacts: list[PlanningArtifact] = Field(default_factory=list)
+    decisions: list[AgentDecision] = Field(default_factory=list)
+    messages: list[AgentMessage] = Field(default_factory=list)
+    version: int
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class RefineTaskRequest(BaseModel):
     goal: str = ""
     task_title: str = Field(alias="taskTitle", min_length=1)
@@ -805,6 +1275,16 @@ CommandOutputKind = Literal[
     "memory_write_result",
     "note_write_preview",
     "note_write_result",
+    "planning_session_started",
+    "user_need_contract",
+    "memory_insight_brief",
+    "resource_brief",
+    "plan_design_proposal",
+    "execution_plan_draft",
+    "learning_update",
+    "agent_decision",
+    "agent_message",
+    "planning_session_status",
     "model_usage",
     "clarify_question",
     "execution_result",

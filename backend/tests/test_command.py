@@ -311,7 +311,7 @@ def test_chat_mode_planning_request_does_not_run_runtime(client, monkeypatch):
         assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
 
 
-def test_auto_planning_request_runs_runtime_and_creates_hidden_draft(client, monkeypatch):
+def test_auto_planning_request_starts_deep_planning_session_without_runtime_or_draft(client, monkeypatch):
     FakeRuntime.calls = 0
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
     _patch_decision(
@@ -325,19 +325,394 @@ def test_auto_planning_request_runs_runtime_and_creates_hidden_draft(client, mon
         ),
     )
 
-    response = client.post("/api/command/chat", json={"mode": "auto", "message": DEFAULT_PLANNING_MESSAGE})
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "message": "Plan 30 days to learn Python for an AI internship, daily 30 minutes, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
 
     assert response.status_code == 200
     events = _events(response)
-    assert FakeRuntime.calls == 1
+    assert FakeRuntime.calls == 0
     assert any(event["type"] == "command_decision" and event["intent"] == "create_plan" for event in events)
-    assert any(event["type"] == "runtime_started" for event in events)
-    assert any(event["type"] == "draft_created" for event in events)
+    assert any(event["type"] == "planning_session_started" for event in events)
+    assert any(event["type"] == "agent_decision" and event["data"]["agent"] == "User Advocate Agent" for event in events)
+    assert any(event["type"] == "agent_message" and event["data"]["messageType"] == "handoff" for event in events)
+    assert any(event["type"] == "user_need_contract" and event["data"]["canMoveToDesign"] is True for event in events)
+    assert any(event["type"] == "memory_insight_brief" for event in events)
+    assert any(event["type"] == "resource_brief" for event in events)
+    assert any(event["type"] == "plan_design_proposal" for event in events)
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "waiting_design_approval"
+        for event in events
+    )
+    assert not any(event["type"] == "runtime_event" for event in events)
+    assert not any(event["type"] == "runtime_started" for event in events)
+    assert not any(event["type"] == "draft_created" for event in events)
     assert any(event["type"] == "model_usage" for event in events)
     with get_conn() as conn:
-        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 1
+        assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 1
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
         assert conn.execute("SELECT COUNT(*) AS count FROM command_actions").fetchone()["count"] == 0
         assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
+
+
+def test_deep_planning_unclear_goal_asks_clarification_without_design(client, monkeypatch):
+    ExplodingRuntime.calls = 0
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(
+            intent="create_plan",
+            confidence=0.9,
+            targetType="unknown",
+            action="create",
+            decisionSummary="create plan",
+        ),
+    )
+
+    response = client.post("/api/command/chat", json={"mode": "auto", "message": "I want to learn Python"})
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert ExplodingRuntime.calls == 0
+    contract = next(event for event in events if event["type"] == "user_need_contract")
+    assert contract["data"]["canMoveToDesign"] is False
+    assert contract["data"]["clarificationQuestions"]
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "needs_goal_clarification"
+        for event in events
+    )
+    assert not any(event["type"] == "plan_design_proposal" for event in events)
+    assert not any(event["type"] == "execution_plan_draft" for event in events)
+    assert not any(event["type"] == "draft_created" for event in events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
+
+
+def test_planning_like_clarify_decision_is_guarded_into_deep_planning(client, monkeypatch):
+    ExplodingRuntime.calls = 0
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(
+            intent="clarify",
+            confidence=0.81,
+            targetType="unknown",
+            action="answer",
+            needsClarification=True,
+            clarificationQuestion="Please provide more details.",
+        ),
+    )
+
+    response = client.post("/api/command/chat", json={"mode": "auto", "message": "\u6211\u8981\u5b66go"})
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert ExplodingRuntime.calls == 0
+    assert any(event["type"] == "planning_session_started" for event in events)
+    contract = next(event for event in events if event["type"] == "user_need_contract")
+    assert contract["data"]["canMoveToDesign"] is False
+    questions = "\n".join(contract["data"]["clarificationQuestions"])
+    assert "\u65f6\u95f4" in questions
+    assert "\u9879\u76ee" in questions or "\u5b9e\u4e60" in questions
+    assert not any(event["type"] == "clarify_question" for event in events)
+    assert not any(event["type"] == "runtime_started" for event in events)
+    assert not any(event["type"] == "draft_created" for event in events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
+
+
+def test_deep_planning_clarification_followup_skips_command_decision(client, monkeypatch):
+    class ExplodingDecisionService:
+        def decide(self, *args, **kwargs):
+            raise AssertionError("active planning session follow-up should bypass LLM decision")
+
+    _patch_runtime(monkeypatch, lambda: ExplodingRuntime())
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post("/api/command/chat", json={"mode": "auto", "message": "\u6211\u8981\u5b66go"})
+    thread_id = _events(start)[-1]["threadId"]
+    monkeypatch.setattr("app.services.command_agent.CommandDecisionService", lambda: ExplodingDecisionService())
+
+    response = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "\u7cbe\u901ago"},
+    )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert not any(event["type"] == "command_decision" for event in events)
+    assert any(event["type"] == "user_need_contract" for event in events)
+    contract = next(event for event in events if event["type"] == "user_need_contract")
+    assert "currentLevel" not in contract["data"]["missingInformation"]
+    assert "availableTime" in contract["data"]["missingInformation"]
+    assert "desiredOutcome" in contract["data"]["missingInformation"]
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 1
+
+
+def test_deep_planning_travel_slot_state_accumulates_until_design(client, monkeypatch):
+    class ExplodingDecisionService:
+        def decide(self, *args, **kwargs):
+            raise AssertionError("active travel planning session should bypass LLM decision")
+
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post("/api/command/chat", json={"mode": "auto", "message": "我要去新疆"})
+    start_events = _events(start)
+    thread_id = start_events[-1]["threadId"]
+    start_contract = next(event for event in start_events if event["type"] == "user_need_contract")
+    assert start_contract["data"]["slotState"]["domain"] == "travel"
+    assert start_contract["data"]["canMoveToDesign"] is False
+
+    monkeypatch.setattr("app.services.command_agent.CommandDecisionService", lambda: ExplodingDecisionService())
+    followup = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "旅游，赛里木湖，我要去两个星期"},
+    )
+    followup_events = _events(followup)
+    assert not any(event["type"] == "command_decision" for event in followup_events)
+    contract = next(event for event in followup_events if event["type"] == "user_need_contract")
+    travel = contract["data"]["slotState"]["travel"]
+    assert travel["durationDays"] == 14
+    assert "赛里木湖" in travel["places"]
+    assert contract["data"]["canMoveToDesign"] is False
+
+    complete = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "九月，飞机，1万元，喀纳斯，体能很好"},
+    )
+    complete_events = _events(complete)
+    assert not any(event["type"] == "command_decision" for event in complete_events)
+    assert any(event["type"] == "plan_design_proposal" for event in complete_events)
+    complete_contract = next(event for event in complete_events if event["type"] == "user_need_contract")
+    travel = complete_contract["data"]["slotState"]["travel"]
+    assert travel["month"] == "9月"
+    assert travel["transport"] == "飞机"
+    assert "喀纳斯" in travel["places"]
+
+
+def test_deep_planning_chinese_confirmation_approves_current_stage(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "message": "Plan 30 days to learn Python for an AI internship, daily 30 minutes, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+    thread_id = _events(start)[-1]["threadId"]
+
+    response = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "可以", "context": {"date": "2026-07-05"}},
+    )
+
+    events = _events(response)
+    assert not any(event["type"] == "command_decision" for event in events)
+    assert any(event["type"] == "execution_plan_draft" for event in events)
+
+
+def test_deep_planning_topic_switch_requires_restart_confirmation(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post("/api/command/chat", json={"mode": "auto", "message": "我要学go"})
+    thread_id = _events(start)[-1]["threadId"]
+
+    switch = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "我要去新疆旅行"},
+    )
+
+    events = _events(switch)
+    contract = next(event for event in events if event["type"] == "user_need_contract")
+    assert contract["data"]["missingInformation"] == ["topicSwitchConfirmation"]
+    assert contract["data"]["pendingQuestion"]["askedFields"] == ["topicSwitchConfirmation"]
+    assert not any(event["type"] == "plan_design_proposal" for event in events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 1
+
+
+def test_deep_planning_approve_design_generates_execution_draft_with_resources(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "message": "Plan 30 days to learn Python for an AI internship, daily 30 minutes, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+    thread_id = _events(start)[-1]["threadId"]
+
+    approve = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "approve design", "context": {"date": "2026-07-05"}},
+    )
+
+    assert approve.status_code == 200
+    events = _events(approve)
+    draft = next(event for event in events if event["type"] == "execution_plan_draft")
+    assert draft["data"]["status"] == "waiting_user_approval"
+    assert draft["data"]["tasks"]
+    first_task = draft["data"]["tasks"][0]
+    assert first_task["acceptanceCriteria"]
+    assert first_task["deliverable"]
+    assert first_task["resourceBundle"]["primary"] or first_task["resourceBundle"]["practice"]
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "waiting_execution_approval"
+        for event in events
+    )
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
+
+
+def test_deep_planning_resource_feedback_updates_plan_and_memory(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "message": "Plan 30 days to learn Python for an AI internship, daily 30 minutes, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+    thread_id = _events(start)[-1]["threadId"]
+    client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "approve design", "context": {"date": "2026-07-05"}},
+    )
+
+    feedback = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "\u8d44\u6e90\u592a\u96be", "context": {"date": "2026-07-05"}},
+    )
+
+    assert feedback.status_code == 200
+    events = _events(feedback)
+    learning = next(event for event in events if event["type"] == "learning_update")
+    assert learning["data"]["feedbackType"] == "resource_feedback"
+    assert learning["data"]["immediatePatch"]["action"] == "replace_resource"
+    assert learning["data"]["longTermLearning"]["newRule"]
+    revised_draft = next(event for event in events if event["type"] == "execution_plan_draft")
+    assert revised_draft["data"]["status"] == "waiting_user_approval"
+    assert revised_draft["data"]["tasks"][0]["resourceBundle"]["primary"]["sourceType"] == "practice_bank"
+    assert any(
+        event["type"] == "planning_session_status" and event["status"] == "waiting_execution_approval"
+        for event in events
+    )
+    with get_conn() as conn:
+        preference_count = conn.execute("SELECT COUNT(*) AS count FROM memories WHERE kind = 'preference'").fetchone()["count"]
+        review_count = conn.execute("SELECT COUNT(*) AS count FROM memories WHERE kind = 'review'").fetchone()["count"]
+    assert preference_count >= 1
+    assert review_count >= 1
+
+
+def test_deep_planning_active_session_continues_unless_restart_requested(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "message": "Plan 30 days to learn Python for an AI internship, daily 30 minutes, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+    thread_id = _events(start)[-1]["threadId"]
+
+    revise_same_session = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "threadId": thread_id,
+            "message": "Plan it with more backend project practice",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert revise_same_session.status_code == 200
+    same_events = _events(revise_same_session)
+    assert any(event["type"] == "plan_design_proposal" for event in same_events)
+    assert not any(event["type"] == "planning_session_started" for event in same_events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 1
+
+    restart = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "threadId": thread_id,
+            "message": "start over with a new plan for React, 30 days, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+
+    assert restart.status_code == 200
+    restart_events = _events(restart)
+    assert any(event["type"] == "planning_session_started" for event in restart_events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 2
+
+
+def test_deep_planning_calendar_preview_uses_planning_session_source_keys(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "permission": "low",
+            "message": "Plan 30 days to learn Python for an AI internship, daily 30 minutes, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+    thread_id = _events(start)[-1]["threadId"]
+    client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "permission": "low", "threadId": thread_id, "message": "approve design", "context": {"date": "2026-07-05"}},
+    )
+    client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "permission": "low", "threadId": thread_id, "message": "confirm execution plan", "context": {"date": "2026-07-05"}},
+    )
+
+    write = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "permission": "low", "threadId": thread_id, "message": "write to calendar", "context": {"date": "2026-07-05"}},
+    )
+
+    assert write.status_code == 200
+    events = _events(write)
+    preview = next(event for event in events if event["type"] == "calendar_plan_preview")
+    assert preview["plans"]
+    assert preview["plans"][0]["sourceKey"].startswith("planning-session:")
+    assert ":t0" in preview["plans"][0]["sourceKey"]
+    assert any(event["type"] == "approval_required" for event in events)
 
 
 def test_workbench_mode_creates_hidden_draft(client, monkeypatch):

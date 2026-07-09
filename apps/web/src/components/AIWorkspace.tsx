@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
+  ArrowDown,
+  ArrowUp,
   Bot,
   ClipboardCheck,
   DatabaseZap,
@@ -17,6 +19,7 @@ import {
 } from 'lucide-react';
 import type {
   AiSettings,
+  AiAutoModelPolicy,
   AiSettingsInput,
   AiModelRoutingRule,
   AppliedPlan,
@@ -34,7 +37,9 @@ import type {
   RefinePlanContext,
   RefinedTask,
   Language,
+  AutoModelStrategy,
   ModelRoutingTaskType,
+  RoutingPrimaryProvider,
   StructuredGoalPlan
 } from '../types';
 import {
@@ -110,6 +115,7 @@ type AiProvider = AiSettings['provider'];
 type RoutedProvider = Exclude<AiProvider, 'mock'>;
 
 const routableProviders: RoutedProvider[] = ['deepseek', 'kimi', 'zhipu_glm', 'openai', 'custom'];
+const defaultAutoProviderOrder: RoutedProvider[] = ['zhipu_glm', 'deepseek', 'kimi', 'openai', 'custom'];
 const routingTaskTypes: ModelRoutingTaskType[] = [
   'command_decision',
   'plan_generation',
@@ -120,6 +126,27 @@ const routingTaskTypes: ModelRoutingTaskType[] = [
   'model_knowledge',
   'chat'
 ];
+const defaultTaskStrategies: Record<ModelRoutingTaskType, AutoModelStrategy> = {
+  command_decision: 'fast_low_cost',
+  plan_generation: 'structured_stable',
+  task_refinement: 'fast_low_cost',
+  calendar_patch: 'strict_json',
+  memory_query: 'context_summary',
+  memory_write: 'classification',
+  note_query: 'context_summary',
+  note_write: 'classification',
+  model_knowledge: 'knowledge_reasoning',
+  chat: 'balanced'
+};
+const autoStrategyScores: Record<AutoModelStrategy, Record<RoutedProvider, number>> = {
+  fast_low_cost: { zhipu_glm: 95, deepseek: 88, kimi: 76, openai: 72, custom: 70 },
+  structured_stable: { deepseek: 95, kimi: 90, openai: 86, custom: 82, zhipu_glm: 78 },
+  strict_json: { deepseek: 94, zhipu_glm: 90, openai: 88, custom: 82, kimi: 78 },
+  context_summary: { kimi: 94, deepseek: 88, openai: 86, custom: 82, zhipu_glm: 80 },
+  classification: { zhipu_glm: 92, deepseek: 88, kimi: 82, openai: 80, custom: 78 },
+  knowledge_reasoning: { kimi: 92, deepseek: 90, openai: 88, custom: 84, zhipu_glm: 80 },
+  balanced: { deepseek: 90, kimi: 88, openai: 86, zhipu_glm: 84, custom: 82 }
+};
 
 function providerLabel(provider: AiProvider, t: (key: string) => string): string {
   const labels: Record<AiProvider, string> = {
@@ -131,6 +158,19 @@ function providerLabel(provider: AiProvider, t: (key: string) => string): string
     mock: t('legacy.providerMock')
   };
   return labels[provider] || provider;
+}
+
+function autoStrategyLabel(strategy: AutoModelStrategy, t: (key: string) => string): string {
+  const labels: Record<AutoModelStrategy, string> = {
+    fast_low_cost: t('legacy.autoStrategyFastLowCost'),
+    structured_stable: t('legacy.autoStrategyStructuredStable'),
+    strict_json: t('legacy.autoStrategyStrictJson'),
+    context_summary: t('legacy.autoStrategyContextSummary'),
+    classification: t('legacy.autoStrategyClassification'),
+    knowledge_reasoning: t('legacy.autoStrategyKnowledgeReasoning'),
+    balanced: t('legacy.autoStrategyBalanced')
+  };
+  return labels[strategy] || strategy;
 }
 
 function routingTaskLabel(taskType: ModelRoutingTaskType, t: (key: string) => string): string {
@@ -171,35 +211,69 @@ function normalizeRoutingTaskType(taskType: ModelRoutingTaskType): ModelRoutingT
   return taskType;
 }
 
-function routingPrimaryForSettings(settings: AiSettings): RoutedProvider {
-  return settings.provider === 'mock' ? 'deepseek' : settings.provider;
+function normalizeAutoModelPolicy(settings: AiSettings): AiAutoModelPolicy {
+  const savedKeyProviders = new Set((settings.savedProviders || []).filter((item) => item.hasApiKey).map((item) => item.provider));
+  const sourceOrder = settings.autoModelPolicy?.autoProviderOrder?.length
+    ? settings.autoModelPolicy.autoProviderOrder
+    : [
+        ...defaultAutoProviderOrder.filter((provider) => savedKeyProviders.has(provider)),
+        ...defaultAutoProviderOrder.filter((provider) => !savedKeyProviders.has(provider))
+      ];
+  const autoProviderOrder = [
+    ...sourceOrder.filter((provider): provider is RoutedProvider => routableProviders.includes(provider as RoutedProvider)),
+    ...defaultAutoProviderOrder
+  ].filter((provider, index, providers) => providers.indexOf(provider) === index);
+  const taskStrategy: AiAutoModelPolicy['taskStrategy'] = {};
+  routingTaskTypes.forEach((taskType) => {
+    const normalizedTask = normalizeRoutingTaskType(taskType);
+    taskStrategy[normalizedTask] = settings.autoModelPolicy?.taskStrategy?.[normalizedTask] || defaultTaskStrategies[normalizedTask];
+  });
+  return { autoProviderOrder, taskStrategy };
 }
 
-function recommendedRoutingRules(settings: AiSettings): AiModelRoutingRule[] {
-  const primary = routingPrimaryForSettings(settings);
-  const fallbackProviders: AiProvider[] = primary === 'deepseek' ? [] : ['deepseek'];
+function predictedAutoProvider(taskType: ModelRoutingTaskType, policy: AiAutoModelPolicy, savedKeyByProvider: Map<AiProvider, boolean>): RoutedProvider | '' {
+  const normalizedTask = normalizeRoutingTaskType(taskType);
+  const strategy = policy.taskStrategy[normalizedTask] || defaultTaskStrategies[normalizedTask];
+  const order = policy.autoProviderOrder.length ? policy.autoProviderOrder : defaultAutoProviderOrder;
+  const ranked = order
+    .filter((provider): provider is RoutedProvider => routableProviders.includes(provider as RoutedProvider) && Boolean(savedKeyByProvider.get(provider)))
+    .map((provider, index) => ({
+      provider,
+      score: (autoStrategyScores[strategy]?.[provider] || 70) + Math.max(0, 10 - index * 2)
+    }))
+    .sort((left, right) => right.score - left.score);
+  return ranked[0]?.provider || '';
+}
+
+function recommendedRoutingRules(): AiModelRoutingRule[] {
   return routingTaskTypes.map((taskType) => ({
     taskType,
-    primaryProvider: primary,
-    fallbackProviders,
+    primaryProvider: 'auto',
+    fallbackProviders: ['deepseek'],
     localFallbackEnabled: true
   }));
 }
 
 function normalizedRoutingRules(settings: AiSettings): AiModelRoutingRule[] {
   const existing = new Map((settings.routingRules || []).map((rule) => [normalizeRoutingTaskType(rule.taskType), rule]));
-  const defaults = recommendedRoutingRules(settings);
+  const defaults = recommendedRoutingRules();
   return defaults.map((defaultRule) => {
     const existingRule = existing.get(defaultRule.taskType);
-    if (!existingRule || existingRule.primaryProvider === 'mock') return defaultRule;
+    if (!existingRule) return defaultRule;
+    const primaryProvider: RoutingPrimaryProvider = existingRule.primaryProvider === 'auto'
+      ? 'auto'
+      : routableProviders.includes(existingRule.primaryProvider as RoutedProvider)
+        ? existingRule.primaryProvider as RoutedProvider
+        : 'auto';
     const fallbacks = (existingRule.fallbackProviders || [])
       .filter((provider): provider is RoutedProvider => provider !== 'mock' && routableProviders.includes(provider as RoutedProvider))
-      .filter((provider, index, providers) => provider !== existingRule.primaryProvider && providers.indexOf(provider) === index)
+      .filter((provider, index, providers) => (primaryProvider === 'auto' || provider !== primaryProvider) && providers.indexOf(provider) === index)
       .slice(0, 2);
     return {
       ...defaultRule,
       ...existingRule,
       taskType: defaultRule.taskType,
+      primaryProvider,
       fallbackProviders: fallbacks
     };
   });
@@ -887,11 +961,11 @@ export function AIWorkspace(props: AIWorkspaceProps) {
     }
   }
 
-  async function saveRoutingSettings(routingRules: AiModelRoutingRule[], options: { showSuccess?: boolean } = {}) {
+  async function saveRoutingSettings(routingRules: AiModelRoutingRule[], autoModelPolicy?: AiAutoModelPolicy, options: { showSuccess?: boolean } = {}) {
     setSettingsStatus('');
     setSettingsBusy('routing');
     try {
-      const saved = await saveAiSettingsRouting({ routingRules });
+      const saved = await saveAiSettingsRouting({ routingRules, autoModelPolicy });
       const normalized = upgradeLegacyKimiDefaults(saved);
       setSettings(normalized);
       onSettingsChange?.(normalized);
@@ -1576,7 +1650,7 @@ function ModelSettings(props: {
   setApiKey: (value: string) => void;
   clearSettingsStatus: () => void;
   saveModelSettings: () => void;
-  saveRoutingSettings: (routingRules: AiModelRoutingRule[], options?: { showSuccess?: boolean }) => void;
+  saveRoutingSettings: (routingRules: AiModelRoutingRule[], autoModelPolicy?: AiAutoModelPolicy, options?: { showSuccess?: boolean }) => void;
   clearSavedApiKey: (provider?: AiProvider) => void;
   testModel: () => void;
   settingsBusy: 'save' | 'test' | 'clear' | 'routing' | '';
@@ -1591,6 +1665,7 @@ function ModelSettings(props: {
   const recommendedModels = providerModelRecommendations[settings.provider] || providerModelRecommendations.custom;
   const routingRules = normalizedRoutingRules(settings);
   const savedKeyByProvider = new Map(savedProviderConfigs.map((item) => [item.provider, item.hasApiKey]));
+  const autoModelPolicy = normalizeAutoModelPolicy(settings);
   const apiKeyLabel = (() => {
     if (settings.provider === 'kimi') return t('legacy.kimiApiKey');
     if (settings.provider === 'zhipu_glm') return t('legacy.zhipuApiKey');
@@ -1641,8 +1716,9 @@ function ModelSettings(props: {
     if (provider === 'mock') return t('legacy.routingLocalFallback');
     return savedKeyByProvider.get(provider) ? t('legacy.hasKey') : t('legacy.routingMissingKey');
   };
-  const providerHasSavedKey = (provider: AiProvider | ''): boolean => {
+  const providerHasSavedKey = (provider: AiProvider | RoutingPrimaryProvider | ''): boolean => {
     if (!provider) return true;
+    if (provider === 'auto') return true;
     if (provider === 'mock') return true;
     return Boolean(savedKeyByProvider.get(provider));
   };
@@ -1655,7 +1731,7 @@ function ModelSettings(props: {
         if (rule.taskType !== taskType) return rule;
         const next = updater(rule);
         const fallbacks = (next.fallbackProviders || [])
-          .filter((provider) => provider !== 'mock' && provider !== next.primaryProvider)
+          .filter((provider) => provider !== 'mock' && (next.primaryProvider === 'auto' || provider !== next.primaryProvider))
           .filter((provider, index, providers) => providers.indexOf(provider) === index)
           .slice(0, 2);
         return { ...next, fallbackProviders: fallbacks };
@@ -1674,8 +1750,29 @@ function ModelSettings(props: {
       return { ...rule, fallbackProviders: fallbacks };
     });
   };
+  const moveAutoProvider = (provider: RoutedProvider, direction: -1 | 1) => {
+    updateSettings((current) => {
+      const policy = normalizeAutoModelPolicy(current);
+      const order = [...policy.autoProviderOrder];
+      const index = order.indexOf(provider);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= order.length) return current;
+      [order[index], order[nextIndex]] = [order[nextIndex], order[index]];
+      return { ...current, autoModelPolicy: { ...policy, autoProviderOrder: order } };
+    });
+  };
   const restoreRecommendedRouting = () => {
-    updateSettings((current) => ({ ...current, routingRules: recommendedRoutingRules(current) }));
+    updateSettings((current) => ({
+      ...current,
+      routingRules: recommendedRoutingRules(),
+      autoModelPolicy: {
+        autoProviderOrder: [
+          ...defaultAutoProviderOrder.filter((provider) => savedKeyByProvider.get(provider)),
+          ...defaultAutoProviderOrder.filter((provider) => !savedKeyByProvider.get(provider))
+        ],
+        taskStrategy: defaultTaskStrategies
+      }
+    }));
   };
 
   return (
@@ -1801,6 +1898,57 @@ function ModelSettings(props: {
           <span><RotateCcw size={15} />{t('legacy.modelRouting')}</span>
           <strong>{t('legacy.modelRoutingHint')}</strong>
         </div>
+        <div className="auto-model-policy">
+          <div className="auto-model-policy-head">
+            <strong>{t('legacy.autoModelPolicy')}</strong>
+            <span>{t('legacy.autoModelPolicyHint')}</span>
+          </div>
+          <div className="auto-provider-order">
+            {autoModelPolicy.autoProviderOrder.map((provider, index) => (
+              <div className={`auto-provider-chip ${providerHasSavedKey(provider) ? '' : 'missing-key'}`} key={provider}>
+                <span>{index + 1}. {providerLabel(provider, t)}</span>
+                <small>{providerKeyHint(provider)}</small>
+                <button
+                  type="button"
+                  aria-label={t('legacy.moveProviderUp')}
+                  disabled={Boolean(settingsBusy) || index === 0}
+                  onClick={() => moveAutoProvider(provider, -1)}
+                >
+                  <ArrowUp size={13} />
+                </button>
+                <button
+                  type="button"
+                  aria-label={t('legacy.moveProviderDown')}
+                  disabled={Boolean(settingsBusy) || index === autoModelPolicy.autoProviderOrder.length - 1}
+                  onClick={() => moveAutoProvider(provider, 1)}
+                >
+                  <ArrowDown size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="auto-task-preview">
+            {routingRules.map((rule) => {
+              const strategy = autoModelPolicy.taskStrategy[rule.taskType] || defaultTaskStrategies[rule.taskType];
+              const predicted = rule.primaryProvider === 'auto'
+                ? predictedAutoProvider(rule.taskType, autoModelPolicy, savedKeyByProvider)
+                : '';
+              return (
+                <div className="auto-task-preview-row" key={`auto-${rule.taskType}`}>
+                  <span>{routingTaskLabel(rule.taskType, t)}</span>
+                  <strong>{autoStrategyLabel(strategy, t)}</strong>
+                  <small>
+                    {rule.primaryProvider === 'auto'
+                      ? predicted
+                        ? t('legacy.autoWillUse').replace('{provider}', providerLabel(predicted, t))
+                        : t('legacy.autoNoSavedProvider')
+                      : t('legacy.manualProviderSelected')}
+                  </small>
+                </div>
+              );
+            })}
+          </div>
+        </div>
         <div className="routing-grid" role="table" aria-label={t('legacy.modelRouting')}>
           <div className="routing-row routing-head" role="row">
             <span>{t('legacy.routingTask')}</span>
@@ -1820,9 +1968,10 @@ function ModelSettings(props: {
                 value={rule.primaryProvider}
                 onChange={(event) => updateRoutingRule(rule.taskType, (current) => ({
                   ...current,
-                  primaryProvider: event.target.value as AiProvider
+                  primaryProvider: event.target.value as RoutingPrimaryProvider
                 }))}
               >
+                <option value="auto">{t('legacy.routingAutoProvider')}</option>
                 {routableProviders.map((provider) => (
                   <option key={provider} value={provider}>
                     {providerLabel(provider, t)} / {providerKeyHint(provider)}
@@ -1861,7 +2010,7 @@ function ModelSettings(props: {
         <div className="settings-actions">
           <button
             type="button"
-            onClick={() => saveRoutingSettings(routingRules, { showSuccess: true })}
+            onClick={() => saveRoutingSettings(routingRules, autoModelPolicy, { showSuccess: true })}
             disabled={Boolean(settingsBusy)}
           >
             <Save size={16} />{settingsBusy === 'routing' ? t('legacy.savingRouting') : t('legacy.saveRouting')}

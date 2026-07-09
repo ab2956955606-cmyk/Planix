@@ -19,16 +19,20 @@ from ..schemas import (
     CommandMessageOut,
     CommandPermission,
     CommandThreadSummaryOut,
+    CreatePlanningSessionRequest,
     MemoryCreate,
     ModelUsage,
     MonthNotePut,
     PlanCreate,
+    PlanningSessionResponse,
+    PlanningSessionTextRequest,
     PlanRefinedTaskUpdate,
     PlanUpdate,
     RefinedTask,
     RefineTaskRequest,
 )
 from .command_decision import CommandDecisionResult, CommandDecisionService, local_fallback_usage, usage_from_llm_result
+from .deep_planning import DeepPlanningService
 from .llm import LlmClient
 from .memory_agent import MemoryAgentService, detect_query_kinds
 from .memory_store import MemoryService
@@ -129,10 +133,31 @@ def _looks_english(text: str) -> bool:
     return len(ascii_letters) / max(1, len(letters)) > 0.8
 
 
+def _looks_like_learning_plan_request(text: str) -> bool:
+    cleaned = text.strip().lower()
+    if not cleaned:
+        return False
+    if re.search(
+        r"(查看|查询|搜索|找|修改|改到|改成|移动|挪到|删除|取消|写入|保存|记录|记一下|记住|第\s*\d+\s*个|今天|明天|后天|本周|下周|周[一二三四五六日天]|change|move|delete|reschedule)",
+        cleaned,
+    ):
+        return False
+    learning_signal = re.search(
+        r"(我要学|我想学|想学|学习|学会|掌握|精通|入门|进阶|帮我学|帮我规划|做个规划|学习计划|学习路线|roadmap|learn|master)",
+        cleaned,
+        re.I,
+    )
+    if not learning_signal:
+        return False
+    return bool(re.search(r"[a-z][a-z0-9+#.-]*|[\u4e00-\u9fff]{2,}", cleaned, re.I))
+
+
 def detect_command_intent(message: str) -> CommandIntent:
     text = message.strip().lower()
     if not text:
         return "normal_chat"
+    if _looks_like_learning_plan_request(text):
+        return "planning_request"
     if re.search(r"(记住|偏好|适合|不喜欢|只能|希望以后|记一下|记录一下|保存一下|保存成笔记|保存为笔记|记录一条记忆|记录记忆|save memory|remember)", text):
         return "save_memory"
     if re.search(r"(查一下|查询|搜索|找|看看).{0,16}(记忆|个人记录|笔记|资料|材料|文档|历史规划|规划档案|偏好|复盘|memory|note|material|document)", text):
@@ -577,6 +602,81 @@ def _query_terms(message: str) -> list[str]:
 def _contains_any(text: str, words: tuple[str, ...]) -> bool:
     lowered = text.lower()
     return any(word in lowered for word in words)
+
+
+def _planning_approval_text(text: str) -> bool:
+    stripped = text.strip().lower()
+    if stripped in {"1", "好", "好的", "可以", "可以的", "确认", "没问题", "嗯", "ok", "okay", "yes"}:
+        return True
+    return _contains_any(
+        text,
+        (
+            "确认",
+            "可以",
+            "没问题",
+            "方向对",
+            "按这个",
+            "就这样",
+            "生成执行",
+            "确认方向",
+            "确认执行计划",
+            "approve",
+            "confirm",
+            "looks good",
+            "go ahead",
+        ),
+    )
+
+
+def _planning_revision_text(text: str) -> bool:
+    return _contains_any(
+        text,
+        (
+            "调整",
+            "修改",
+            "不对",
+            "不是",
+            "太理论",
+            "更想",
+            "换",
+            "资源太难",
+            "任务太重",
+            "太多",
+            "太难",
+            "看不懂",
+            "revise",
+            "change",
+            "too hard",
+        ),
+    )
+
+
+def _planning_calendar_write_text(text: str) -> bool:
+    return _contains_any(text, ("写入日历", "保存到日历", "同步到日历", "write calendar", "write to calendar", "save to calendar"))
+
+
+def _planning_feedback_text(text: str) -> bool:
+    return _contains_any(text, ("资源太难", "任务太重", "太理论", "看不懂", "没完成", "时间不够", "喜欢这种", "太多", "too hard"))
+
+
+def _planning_restart_text(text: str) -> bool:
+    return _contains_any(
+        text,
+        (
+            "重新开始",
+            "新建一个计划",
+            "新建计划",
+            "新的计划",
+            "忽略上一个计划",
+            "忽略上一个",
+            "重新做一个",
+            "restart",
+            "start over",
+            "new plan",
+            "ignore previous",
+            "ignore the previous",
+        ),
+    )
 
 
 def _plan_card_from_row(row) -> dict[str, Any]:
@@ -1191,6 +1291,221 @@ class CommandAgentService:
             updatedAt=thread["updated_at"],
         )
 
+    def _add_planning_session_card(
+        self,
+        thread_id: str,
+        kind: str,
+        content: str,
+        payload: dict[str, Any],
+    ) -> None:
+        self.add_message(thread_id, "card", content, kind=kind, payload=payload)
+
+    def _planning_event(
+        self,
+        thread_id: str,
+        kind: str,
+        session_id: str,
+        *,
+        data: dict[str, Any] | None = None,
+        status: str | None = None,
+        content: str = "",
+    ) -> str:
+        payload: dict[str, Any] = {"sessionId": session_id}
+        if status is not None:
+            payload["status"] = status
+        if data is not None:
+            payload["data"] = data
+        self._add_planning_session_card(thread_id, kind, content or status or session_id, payload)
+        event = {"type": kind, **payload}
+        return _ndjson(event)
+
+    def _planning_agent_event(self, name: str, status: str, summary: str) -> str:
+        return _ndjson({"type": "runtime_event", "name": name, "status": status, "summary": summary})
+
+    def _stream_planning_session_snapshot(
+        self,
+        thread_id: str,
+        session: PlanningSessionResponse,
+        *,
+        include_start: bool = False,
+        agents: list[tuple[str, str]] | None = None,
+    ) -> Iterator[str]:
+        if include_start:
+            yield self._planning_event(
+                thread_id,
+                "planning_session_started",
+                session.session_id,
+                status=session.status,
+                content=f"Planning session {session.status}",
+            )
+        _ = agents
+        for decision in session.decisions:
+            data = decision.model_dump(by_alias=True, exclude_none=True)
+            yield self._planning_event(
+                thread_id,
+                "agent_decision",
+                session.session_id,
+                data=data,
+                content=decision.user_visible_summary or decision.reason or decision.decision,
+            )
+        for message in session.messages:
+            data = message.model_dump(by_alias=True)
+            yield self._planning_event(
+                thread_id,
+                "agent_message",
+                session.session_id,
+                data=data,
+                content=message.reason or message.message_type,
+            )
+        if session.user_need_contract:
+            data = session.user_need_contract.model_dump(by_alias=True)
+            yield self._planning_event(thread_id, "user_need_contract", session.session_id, data=data, content=session.user_need_contract.interpreted_goal)
+        if session.memory_insight:
+            data = session.memory_insight.model_dump(by_alias=True)
+            yield self._planning_event(thread_id, "memory_insight_brief", session.session_id, data=data, content="Memory Insight Agent")
+        if session.resource_brief:
+            data = session.resource_brief.model_dump(by_alias=True)
+            yield self._planning_event(thread_id, "resource_brief", session.session_id, data=data, content="Resource Intelligence Agent")
+        if session.design_proposal:
+            data = session.design_proposal.model_dump(by_alias=True)
+            yield self._planning_event(thread_id, "plan_design_proposal", session.session_id, data=data, content=session.design_proposal.strategy_name)
+        if session.execution_draft:
+            data = session.execution_draft.model_dump(by_alias=True)
+            yield self._planning_event(thread_id, "execution_plan_draft", session.session_id, data=data, content=session.execution_draft.schedule_summary)
+        if session.learning_patch:
+            data = session.learning_patch.model_dump(by_alias=True)
+            yield self._planning_event(thread_id, "learning_update", session.session_id, data=data, content=session.learning_patch.insight)
+        yield self._planning_event(thread_id, "planning_session_status", session.session_id, status=session.status, content=session.status)
+
+    def _stream_deep_planning_start(self, thread_id: str, payload: CommandChatRequest) -> Iterator[str]:
+        service = DeepPlanningService()
+        session = service.create_session(
+            CreatePlanningSessionRequest(
+                entryPoint="p_mode",
+                threadId=thread_id,
+                userInput=payload.message,
+                context=payload.context if isinstance(payload.context, dict) else {},
+            )
+        )
+        agents = [("User Advocate Agent", "Protected the user goal and checked whether planning can start.")]
+        if session.status != "needs_goal_clarification":
+            agents.extend(
+                [
+                    ("Memory Insight Agent", "Read memories and translated them into planning constraints."),
+                    ("Resource Intelligence Agent", "Selected learning resources and coverage warnings."),
+                    ("Plan Co-Designer Agent", "Created a design proposal and stopped for user approval."),
+                ]
+            )
+        yield from self._stream_planning_session_snapshot(thread_id, session, include_start=True, agents=agents)
+
+    def _planning_session_followup_action(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        intent: CommandIntent,
+    ) -> tuple[str, PlanningSessionResponse] | None:
+        if intent in {"query_plan", "query_memory", "query_notes", "patch_calendar_plan", "save_memory", "save_note", "navigate_ui"}:
+            return None
+        session = DeepPlanningService().latest_for_thread(thread_id)
+        if not session:
+            return None
+        text = payload.message
+        if _planning_restart_text(text):
+            return None
+        if session.status == "needs_goal_clarification":
+            return "clarify", session
+        if session.status == "waiting_design_approval":
+            if _planning_approval_text(text):
+                return "approve_design", session
+            if _planning_revision_text(text) or intent == "planning_request":
+                return "revise_design", session
+        if session.status == "waiting_execution_approval":
+            if _planning_approval_text(text):
+                return "approve_execution", session
+            if _planning_revision_text(text) or _planning_feedback_text(text) or intent == "planning_request":
+                return "revise_execution", session
+        if session.status == "ready_to_write_calendar":
+            if intent == "sync_to_calendar" or _planning_calendar_write_text(text):
+                return "prepare_calendar_write", session
+            if _planning_revision_text(text) or _planning_feedback_text(text) or intent == "planning_request":
+                return "revise_execution", session
+        if session.status == "waiting_calendar_write_approval":
+            if _planning_revision_text(text) or _planning_feedback_text(text) or intent == "planning_request":
+                return "revise_execution", session
+        if session.status == "learning_from_feedback" and (_planning_revision_text(text) or _planning_feedback_text(text) or intent == "planning_request"):
+            return "feedback", session
+        return None
+
+    def _stream_deep_planning_followup(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        action: str,
+        session: PlanningSessionResponse,
+    ) -> Iterator[str]:
+        service = DeepPlanningService()
+        request = PlanningSessionTextRequest(text=payload.message)
+        if action == "clarify":
+            updated = service.clarify(session.session_id, request)
+            agents = [("User Advocate Agent", "Merged the clarification and checked whether the goal is now clear.")]
+            if updated.status != "needs_goal_clarification":
+                agents.extend([
+                    ("Memory Insight Agent", "Read memories after clarification."),
+                    ("Resource Intelligence Agent", "Selected resources after clarification."),
+                    ("Plan Co-Designer Agent", "Created a design proposal after clarification."),
+                ])
+            yield from self._stream_planning_session_snapshot(thread_id, updated, agents=agents)
+            return
+        if action == "approve_design":
+            updated = service.approve_design(session.session_id)
+            yield from self._stream_planning_session_snapshot(thread_id, updated)
+            return
+        if action == "revise_design":
+            updated = service.revise_design(session.session_id, request)
+            yield from self._stream_planning_session_snapshot(thread_id, updated)
+            return
+        if action == "approve_execution":
+            updated = service.approve_execution(session.session_id)
+            yield from self._stream_planning_session_snapshot(thread_id, updated)
+            return
+        if action in {"revise_execution", "feedback"}:
+            updated = service.revise_execution(session.session_id, request)
+            yield from self._stream_planning_session_snapshot(thread_id, updated)
+            return
+        if action == "prepare_calendar_write":
+            yield from self._stream_deep_planning_calendar_write(thread_id, payload, session)
+
+    def _stream_deep_planning_calendar_write(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        session: PlanningSessionResponse,
+    ) -> Iterator[str]:
+        service = DeepPlanningService()
+        updated = service.prepare_calendar_write(session.session_id)
+        structured_plan = service.execution_to_structured_plan(updated)
+        title = updated.user_need_contract.interpreted_goal if updated.user_need_contract else _plan_title(structured_plan, updated.user_input)
+        summary = updated.execution_draft.schedule_summary if updated.execution_draft else title
+        self._create_calendar_draft(
+            thread_id=thread_id,
+            title=title,
+            summary=summary,
+            source_run_id=updated.session_id,
+            payload={
+                "structuredPlan": structured_plan,
+                "planningSessionId": updated.session_id,
+                "executionDraft": updated.execution_draft.model_dump(by_alias=True) if updated.execution_draft else {},
+                "designProposal": updated.design_proposal.model_dump(by_alias=True) if updated.design_proposal else {},
+                "goal": updated.user_input,
+                "mode": "deep_planning_session",
+                "qualityStatus": "passed",
+                "sourceType": "local_context",
+                "summary": summary,
+            },
+        )
+        yield from self._stream_planning_session_snapshot(thread_id, updated, agents=[("Calendar Write Gate", "Execution draft approved; preparing Calendar preview.")])
+        yield from self._stream_calendar_write_impl(thread_id, payload)
+
     def _thread_context_summary(self, thread_id: str, exclude_message_id: str = "", limit: int = 8) -> str:
         with get_conn() as conn:
             rows = conn.execute(
@@ -1295,8 +1610,17 @@ class CommandAgentService:
             notes_summary=self._notes_decision_summary(),
         )
         if decision_result.decision:
+            resolved_intent = _decision_to_intent(decision_result.decision)
+            if pre_intent == "planning_request" and resolved_intent == "clarify":
+                return (
+                    "planning_request",
+                    _fallback_decision("planning_request", payload.message),
+                    "local_guardrail",
+                    decision_result.usage,
+                    decision_result.error,
+                )
             return (
-                _decision_to_intent(decision_result.decision),
+                resolved_intent,
                 decision_result.decision,
                 decision_result.source,
                 decision_result.usage,
@@ -1326,6 +1650,19 @@ class CommandAgentService:
         try:
             thread_id = self.ensure_thread(payload.thread_id, title=payload.message)
             if payload.mode == "auto":
+                current_draft = self._get_current_draft(thread_id)
+                local_intent = resolve_command_intent(
+                    payload.message,
+                    intent,
+                    has_current_draft=current_draft is not None,
+                )
+                if self._planning_session_followup_action(thread_id, payload, local_intent):
+                    yield from self._stream_chat_impl(
+                        thread_id,
+                        payload,
+                        intent=local_intent,
+                    )
+                    return
                 intent, decision, decision_source, model_usage, decision_error = self._resolve_auto_decision(thread_id, payload)
             else:
                 intent = resolve_command_intent(
@@ -1391,13 +1728,21 @@ class CommandAgentService:
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
+        if payload.mode == "auto":
+            session_followup = self._planning_session_followup_action(thread_id, payload, intent)
+            if session_followup:
+                followup_action, session = session_followup
+                yield from self._stream_deep_planning_followup(thread_id, payload, followup_action, session)
+                yield _ndjson({"type": "done", "threadId": thread_id})
+                return
+
         if payload.mode == "workbench":
             yield from self._stream_runtime_handoff(thread_id, payload, exclude_message_id=user_message.id, auto_detail=True)
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
         if payload.mode == "auto" and intent == "planning_request":
-            yield from self._stream_runtime_handoff(thread_id, payload, exclude_message_id=user_message.id, auto_detail=True)
+            yield from self._stream_deep_planning_start(thread_id, payload)
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
@@ -2507,7 +2852,8 @@ class CommandAgentService:
                     continue
                 target_date = _normalize_task_date(task.get("dueDate"), _today())
                 task_key = _task_key(milestone_index, task_index)
-                source_key = f"command-draft:{draft.id}:m{milestone_index}:t{task_index}"
+                task_source_key = str(task.get("sourceKey") or "").strip()
+                source_key = task_source_key or f"command-draft:{draft.id}:m{milestone_index}:t{task_index}"
                 item = {
                     "title": title,
                     "date": target_date,
@@ -2530,6 +2876,8 @@ class CommandAgentService:
         action_id = str(uuid4())
         now = _now()
         payload = {"draftId": draft.id, "plans": items}
+        if draft.payload.get("planningSessionId"):
+            payload["planningSessionId"] = draft.payload.get("planningSessionId")
         with get_conn() as conn:
             conn.execute(
                 """
@@ -2966,6 +3314,11 @@ class CommandAgentService:
             "plans": written_plans,
         }
         self._update_action(action_id, status="success" if failed == 0 else "failed", result=result, error="; ".join(errors))
+        if failed == 0 and payload.get("planningSessionId"):
+            try:
+                DeepPlanningService().mark_calendar_written(str(payload.get("planningSessionId")))
+            except Exception:
+                pass
         return result
 
     def _upsert_calendar_plan(self, item: dict[str, Any]):

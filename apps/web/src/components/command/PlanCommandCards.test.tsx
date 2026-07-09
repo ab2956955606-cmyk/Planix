@@ -4,6 +4,19 @@ import { describe, expect, it } from 'vitest';
 import { AgentThread } from './AgentThread';
 import { ApprovalCard } from './ApprovalCard';
 import { CommandDecisionCard } from './CommandDecisionCard';
+import {
+  AgentDecisionCard,
+  AgentMessageCard,
+  ExecutionPlanDraftCard,
+  LearningUpdateBadge,
+  MemoryInsightCard,
+  PlanDesignProposalCard,
+  PlanningSessionStatusCard,
+  ResourceBriefCard,
+  UserNeedContractCard
+} from './DeepPlanningCards';
+import { DeepPlanningActionBar } from './DeepPlanningActionBar';
+import { deriveDeepPlanningStatus } from './deepPlanningStatus';
 import { MemorySearchResultsCard } from './MemorySearchResultsCard';
 import { MemoryWritePreviewCard } from './MemoryWritePreviewCard';
 import { MemoryWriteResultCard } from './MemoryWriteResultCard';
@@ -14,7 +27,6 @@ import { NoteWriteResultCard } from './NoteWriteResultCard';
 import { PlanPatchPreviewCard } from './PlanPatchPreviewCard';
 import { PlanPatchResultCard } from './PlanPatchResultCard';
 import { PlanSearchResultsCard } from './PlanSearchResultsCard';
-import { QuickActionBar } from './QuickActionBar';
 
 const labels: Record<string, string> = {
   'command.title': 'Planix',
@@ -146,6 +158,85 @@ const labels: Record<string, string> = {
   'command.quickRecordMemoryMessage': '记录一条记忆',
   'command.actionUseMemoryInPlanMessage': '把第 {index} 条记忆引用到规划',
   'command.actionContinueMemoryViewMessage': '继续查看第 {index} 条记忆',
+  'command.planningSessionStarted': 'Deep planning session',
+  'command.planningSessionStatus': 'Planning status',
+  'command.userNeedContract': 'Goal understanding',
+  'command.memoryInsightAgent': 'Memory Insight Agent',
+  'command.resourceIntelligenceAgent': 'Resource Intelligence Agent',
+  'command.planDesignProposal': 'Planning direction',
+  'command.executionPlanDraft': 'Execution plan draft',
+  'command.learningUpdate': 'Feedback learning',
+  'command.agentDecision': 'Agent decision',
+  'command.agentMessage': 'Agent handoff',
+  'command.agentDecisionReason': 'Decision reason',
+  'command.agentMessageReason': 'Handoff reason',
+  'command.agentMessageResolved': 'Resolved',
+  'command.agentInputs': 'Input artifacts',
+  'command.agentOutputs': 'Output artifacts',
+  'command.agentPayload': 'Payload',
+  'command.canMoveToDesign': 'Ready for design',
+  'command.needsClarification': 'Needs clarification',
+  'command.targetOutcome': 'Target outcome',
+  'command.hardConstraints': 'Hard constraints',
+  'command.missingInformation': 'Missing information',
+  'command.clarificationQuestions': 'Clarification questions',
+  'command.slotReceived': 'Captured information',
+  'command.slotMissing': 'Still missing',
+  'command.nextQuestion': 'Next question',
+  'command.slotDomain': 'Type',
+  'command.domainLearning': 'Learning plan',
+  'command.domainTravel': 'Travel plan',
+  'command.slotSubject': 'Subject',
+  'command.slotCurrentLevel': 'Current level',
+  'command.slotTargetLevel': 'Target level',
+  'command.slotDailyTime': 'Available time',
+  'command.slotDuration': 'Duration',
+  'command.slotPurpose': 'Purpose',
+  'command.slotDestination': 'Destination',
+  'command.slotPlaces': 'Places',
+  'command.slotDurationDays': 'Travel days',
+  'command.slotMonth': 'Travel month',
+  'command.slotTransport': 'Transport',
+  'command.slotBudget': 'Budget',
+  'command.slotFitness': 'Fitness',
+  'command.memoryInfluence': 'Memory influence',
+  'command.missingTopics': 'Missing topics',
+  'command.resourceUntitled': 'Untitled resource',
+  'command.expectedOutput': 'Expected output',
+  'command.confirmDesign': 'Confirm direction',
+  'command.reviseDesign': 'Adjust direction',
+  'command.confirmDesignMessage': 'Confirm direction',
+  'command.reviseDesignMessage': 'Adjust direction',
+  'command.confirmExecution': 'Confirm execution plan',
+  'command.confirmExecutionMessage': 'Confirm execution plan',
+  'command.feedbackTooHeavy': 'Too heavy',
+  'command.feedbackTooHeavyMessage': 'The tasks are too heavy',
+  'command.feedbackResourceHard': 'Resource too hard',
+  'command.feedbackResourceHardMessage': 'The resource is too hard',
+  'command.deliverable': 'Deliverable',
+  'command.fallbackAdjustment': 'Fallback if stuck',
+  'command.whereToLearn': 'Where/how to learn',
+  'command.reflection': 'Reflection',
+  'command.currentPatch': 'Current plan patch',
+  'command.longTermLearning': 'Long-term rule',
+  'command.noHardConstraints': 'No hard constraints captured yet.',
+  'command.noMemoryHits': 'No related memory',
+  'command.noResourceCandidates': 'No usable resources',
+  'command.noExecutionTasks': 'No execution tasks',
+  'command.acceptanceCriteria': 'Completion standard',
+  'command.noAcceptanceCriteria': 'No completion standard',
+  'command.resourceCoverage': 'Resource coverage',
+  'command.knowledgePoints': 'Knowledge points',
+  'command.whatWentWrong': 'What went wrong',
+  'command.whyItHappened': 'Why it happened',
+  'command.noImmediatePatch': 'No patch needed',
+  'command.deepPlanningActions': 'Deep planning actions',
+  'command.startDeepPlanning': 'Start deep planning',
+  'command.startDeepPlanningMessage': 'I want to do deep planning. Please ask me what information I need to add first.',
+  'command.supplementGoal': 'Add goal details',
+  'command.supplementGoalMessage': 'I will add more goal details',
+  'command.moreActions': 'More actions',
+  'command.waitingCalendarApproval': 'Waiting for Calendar approval',
   'common.done': 'Done',
   'common.pending': 'Pending',
   'common.unknown': 'Unknown',
@@ -318,7 +409,7 @@ describe('Plan command cards', () => {
         { provider: 'zhipu_glm', model: 'glm-4-flash', totalTokens: 8, latencyMs: 90, mode: 'llm', taskType: 'note_write' }
       ]} t={t} />
     );
-    const quickHtml = renderToStaticMarkup(<QuickActionBar onSend={() => undefined} t={t} />);
+    const quickHtml = renderToStaticMarkup(<DeepPlanningActionBar messages={[]} onSend={() => undefined} t={t} />);
 
     expect(decisionHtml).toContain('Intent decision');
     expect(decisionHtml).toContain('I understand');
@@ -337,7 +428,8 @@ describe('Plan command cards', () => {
     expect(usageHtml).toContain('Task: memory query');
     expect(usageHtml).toContain('Fallback: Yes');
     expect(usageHtml).toContain('Route: zhipu_glm / glm-4-flash missing API key -&gt; kimi / moonshot-v1-8k success');
-    expect(quickHtml).toContain('Quick actions');
+    expect(quickHtml).toContain('Start deep planning');
+    expect(quickHtml).toContain('More actions');
     expect(quickHtml).toContain('记录记忆');
   });
 
@@ -378,11 +470,68 @@ describe('Plan command cards', () => {
     expect(resultHtml).toContain('Recorded');
   });
 
-  it('sends fixed natural language messages from quick and row actions', () => {
+  it('derives deep planning actions from replayed planning status', () => {
+    const messages = [{
+      id: 'm-status',
+      role: 'card' as const,
+      kind: 'planning_session_status' as const,
+      content: 'waiting_design_approval',
+      createdAt: 1,
+      payload: { sessionId: 'session-1', status: 'waiting_design_approval' }
+    }];
+    const html = renderToStaticMarkup(<DeepPlanningActionBar messages={messages} onSend={() => undefined} t={t} />);
+
+    expect(deriveDeepPlanningStatus(messages)).toBe('waiting_design_approval');
+    expect(html).toContain('Confirm direction');
+    expect(html).toContain('Adjust direction');
+    expect(html).not.toContain('Start deep planning');
+  });
+
+  it('derives deep planning status from replay cards by priority', () => {
+    const messages = [
+      {
+        id: 'm-start',
+        role: 'card' as const,
+        kind: 'planning_session_started' as const,
+        content: 'waiting_design_approval',
+        createdAt: 1,
+        payload: { sessionId: 'session-1', status: 'waiting_design_approval' }
+      },
+      {
+        id: 'm-draft',
+        role: 'card' as const,
+        kind: 'execution_plan_draft' as const,
+        content: 'draft',
+        createdAt: 2,
+        payload: { sessionId: 'session-1', data: { status: 'approved' } }
+      }
+    ];
+    expect(deriveDeepPlanningStatus(messages)).toBe('ready_to_write_calendar');
+    const html = renderToStaticMarkup(<DeepPlanningActionBar messages={messages} onSend={() => undefined} t={t} />);
+    expect(html).toContain('写入日历');
+
+    const withExplicitStatus = [
+      ...messages,
+      {
+        id: 'm-status',
+        role: 'card' as const,
+        kind: 'planning_session_status' as const,
+        content: 'waiting_execution_approval',
+        createdAt: 3,
+        payload: { sessionId: 'session-1', status: 'waiting_execution_approval' }
+      }
+    ];
+    expect(deriveDeepPlanningStatus(withExplicitStatus)).toBe('waiting_execution_approval');
+  });
+
+  it('sends fixed natural language messages from deep planning, more, and row actions', () => {
     const sent: string[] = [];
-    const quick = QuickActionBar({ onSend: (value) => sent.push(value), t });
+    const quick = DeepPlanningActionBar({ messages: [], onSend: (value) => sent.push(value), t });
     collectButtons(quick).forEach((button) => button.props.onClick());
-    expect(sent).toEqual(['查看我的计划', '查一下我的记忆', '记录一条记忆', '细化当前计划', '修改我的计划', '写入日历']);
+    expect(sent[0]).toBe('I want to do deep planning. Please ask me what information I need to add first.');
+    expect(sent).toContain('查看我的计划');
+    expect(sent).toContain('记录一条记忆');
+    expect(sent).toHaveLength(7);
 
     sent.length = 0;
     const planCard = PlanSearchResultsCard({
@@ -401,6 +550,188 @@ describe('Plan command cards', () => {
     });
     collectButtons(noteCard).forEach((button) => button.props.onClick());
     expect(sent).toEqual(['把第 1 条笔记引用到规划', '继续查看第 1 条笔记']);
+  });
+
+  it('renders deep planning session cards and sends feedback actions', () => {
+    const sent: string[] = [];
+    const statusHtml = renderToStaticMarkup(<PlanningSessionStatusCard status="waiting_design_approval" t={t} />);
+    const contractHtml = renderToStaticMarkup(
+      <UserNeedContractCard
+        t={t}
+        data={{
+          interpretedGoal: '30-day Python AI internship plan',
+          desiredOutcome: 'Portfolio-ready project',
+          canMoveToDesign: true,
+          hardConstraints: ['30 minutes daily'],
+          slotState: {
+            domain: 'learning',
+            learning: {
+              subject: 'Python',
+              currentLevel: 'Beginner',
+              dailyTime: '30 minutes daily',
+              purpose: 'AI internship'
+            },
+            missingSlots: ['duration']
+          },
+          pendingQuestion: {
+            questionText: 'How many days should this plan cover?',
+            questions: ['How many days should this plan cover?']
+          }
+        }}
+      />
+    );
+    const memoryHtml = renderToStaticMarkup(
+      <MemoryInsightCard
+        t={t}
+        data={{
+          confidence: 0.82,
+          memoryHits: {
+            preferences: [{ title: 'Project-driven learning' }],
+            reviews: [],
+            planningHistory: [{ title: 'Previous Python plan' }],
+            materials: [],
+            notes: []
+          },
+          planningInsights: {
+            userStyleRules: ['Prefer project-driven tasks'],
+            pastFailureWarnings: ['Avoid long theory blocks'],
+            constraintsToRespect: ['Keep tasks under 60 minutes']
+          }
+        }}
+      />
+    );
+    const resourceHtml = renderToStaticMarkup(
+      <ResourceBriefCard
+        t={t}
+        data={{
+          coverage: { status: 'partial', explanation: 'Python basics are covered.', missingTopics: ['deployment'] },
+          resourceCandidates: [{
+            id: 'r1',
+            title: 'FastAPI Tutorial',
+            sourceType: 'official_doc',
+            domain: 'FastAPI',
+            difficulty: 'beginner',
+            howToUse: 'Read only the first two examples.'
+          }]
+        }}
+      />
+    );
+    const design = PlanDesignProposalCard({
+      t,
+      onSend: (value) => sent.push(value),
+      data: {
+        status: 'waiting_user_approval',
+        strategyName: 'Portfolio-driven plan',
+        designRationale: 'Use project outputs instead of pure theory.',
+        phases: [{ title: 'Foundation', purpose: 'Build minimum Python fluency', expectedOutput: 'Small CLI artifact' }]
+      }
+    });
+    const designHtml = renderToStaticMarkup(design);
+    collectButtons(design).forEach((button) => button.props.onClick());
+    const execution = ExecutionPlanDraftCard({
+      t,
+      onSend: (value) => sent.push(value),
+      data: {
+        scheduleSummary: '30 days, low-density progression.',
+        resourceCoverageSummary: 'Core resources available.',
+        tasks: [{
+          title: 'Build a Python CLI checklist',
+          dueDate: '2026-07-10',
+          estimatedMinutes: 30,
+          priority: 'high',
+          whyThisTaskMatters: 'It proves practical Python basics.',
+          deliverable: 'cli_checklist.py',
+          fallbackAdjustment: 'Only implement one command.',
+          resourceBundle: {
+            primary: {
+              title: 'Python control flow',
+              sourceType: 'official_doc',
+              section: 'Control Flow',
+              useStep: 'Read one example, then code.',
+              expectedOutput: 'A running script'
+            },
+            practice: {
+              title: 'If/else exercise',
+              sourceType: 'practice_bank',
+              searchKeyword: 'python if else practice',
+              useStep: 'Finish the smallest exercise.'
+            }
+          }
+        }]
+      }
+    });
+    const executionHtml = renderToStaticMarkup(execution);
+    collectButtons(execution).forEach((button) => button.props.onClick());
+    const learningHtml = renderToStaticMarkup(
+      <LearningUpdateBadge
+        t={t}
+        data={{
+          feedbackType: 'resource_feedback',
+          insight: 'The resource was too hard.',
+          reflection: { howToAvoidNextTime: 'Prefer project examples before official docs.' },
+          immediatePatch: { action: 'replace_resource', instruction: 'Use practice bank first.' },
+          longTermLearning: { newRule: 'Do not start beginners with pure theory.' }
+        }}
+      />
+    );
+    const decisionHtml = renderToStaticMarkup(
+      <AgentDecisionCard
+        t={t}
+        data={{
+          agent: 'Resource Intelligence Agent',
+          decision: 'request_agent_revision',
+          reason: 'The Go concurrency task is too broad for a concrete resource bundle.',
+          userVisibleSummary: 'Resource Agent requested task splitting.',
+          inputArtifactIds: ['a1'],
+          outputArtifactIds: ['a2'],
+          confidence: 0.87
+        }}
+      />
+    );
+    const messageHtml = renderToStaticMarkup(
+      <AgentMessageCard
+        t={t}
+        data={{
+          fromAgent: 'Feedback Evolution Agent',
+          toAgent: 'Resource Intelligence Agent',
+          messageType: 'revision_request',
+          reason: 'Replace this task resource with beginner practice.',
+          resolved: true,
+          payloadJson: { taskId: 't3' }
+        }}
+      />
+    );
+
+    expect(statusHtml).toContain('waiting_design_approval');
+    expect(contractHtml).toContain('Goal understanding');
+    expect(contractHtml).toContain('30-day Python AI internship plan');
+    expect(contractHtml).toContain('Captured information');
+    expect(contractHtml).toContain('Subject: Python');
+    expect(contractHtml).toContain('Still missing');
+    expect(contractHtml).toContain('Next question');
+    expect(memoryHtml).toContain('Memory Insight Agent');
+    expect(memoryHtml).toContain('Prefer project-driven tasks');
+    expect(resourceHtml).toContain('Resource Intelligence Agent');
+    expect(resourceHtml).toContain('FastAPI Tutorial');
+    expect(designHtml).toContain('Portfolio-driven plan');
+    expect(executionHtml).toContain('Build a Python CLI checklist');
+    expect(executionHtml).toContain('Where/how to learn');
+    expect(executionHtml).toContain('cli_checklist.py');
+    expect(learningHtml).toContain('replace_resource');
+    expect(learningHtml).toContain('Long-term rule');
+    expect(decisionHtml).toContain('Resource Intelligence Agent');
+    expect(decisionHtml).toContain('request_agent_revision');
+    expect(decisionHtml).toContain('Decision reason');
+    expect(messageHtml).toContain('Feedback Evolution Agent');
+    expect(messageHtml).toContain('Resource Intelligence Agent');
+    expect(messageHtml).toContain('revision_request');
+    expect(sent).toEqual([
+      'Confirm direction',
+      'Adjust direction',
+      'Confirm execution plan',
+      'The tasks are too heavy',
+      'The resource is too hard'
+    ]);
   });
 
   it('renders approval labels by action target and operation', () => {

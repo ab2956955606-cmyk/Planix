@@ -40,6 +40,21 @@ const labels: Record<string, string> = {
   'legacy.modelRoutingHint': 'Choose primary and fallback models per task',
   'legacy.routingTask': 'Task',
   'legacy.routingPrimary': 'Primary',
+  'legacy.routingAutoProvider': 'Auto select',
+  'legacy.autoModelPolicy': 'Auto selection policy',
+  'legacy.autoModelPolicyHint': 'Choose by saved keys, task type, and provider priority',
+  'legacy.autoStrategyFastLowCost': 'Speed first',
+  'legacy.autoStrategyStructuredStable': 'Structured stable',
+  'legacy.autoStrategyStrictJson': 'Strict JSON',
+  'legacy.autoStrategyContextSummary': 'Long-context summary',
+  'legacy.autoStrategyClassification': 'Classification',
+  'legacy.autoStrategyKnowledgeReasoning': 'Knowledge reasoning',
+  'legacy.autoStrategyBalanced': 'Balanced',
+  'legacy.autoWillUse': 'Will prefer: {provider}',
+  'legacy.autoNoSavedProvider': 'No saved-key candidate yet',
+  'legacy.manualProviderSelected': 'Manual primary selected',
+  'legacy.moveProviderUp': 'Move provider up',
+  'legacy.moveProviderDown': 'Move provider down',
   'legacy.routingFallbackOne': 'Fallback 1',
   'legacy.routingFallbackTwo': 'Fallback 2',
   'legacy.routingNoFallback': 'No fallback',
@@ -98,6 +113,8 @@ describe('AIWorkspace settings', () => {
 
     expect(html).toContain('DeepSeek API Key');
     expect(html).toContain('Model Routing');
+    expect(html).toContain('Auto selection policy');
+    expect(html).toContain('Auto select');
     expect(html).toContain('Plan generation');
     expect(html).toContain('Memory query');
     expect(html).toContain('Searches memory');

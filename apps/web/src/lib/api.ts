@@ -112,6 +112,16 @@ export type CommandChatEvent =
   | { type: 'memory_write_result'; actionId?: string; operation?: 'create' | 'update' | 'delete'; status: 'success' | 'failed'; kind?: string; title?: string; content?: string; summary?: string; tags?: unknown[]; memory?: unknown; updatedAt?: string; error?: string }
   | { type: 'note_write_preview'; actionId: string; operation: 'create' | 'update'; risk: 'write'; year: number; month: number; date: string; noteText: string; before?: string; after?: string }
   | { type: 'note_write_result'; actionId?: string; operation?: 'create' | 'update'; status: 'success' | 'failed'; year?: number; month?: number; date?: string; noteText?: string; before?: string; after?: string; updatedAt?: string; error?: string }
+  | { type: 'planning_session_started'; sessionId: string; status: string }
+  | { type: 'user_need_contract'; sessionId: string; data: unknown }
+  | { type: 'memory_insight_brief'; sessionId: string; data: unknown }
+  | { type: 'resource_brief'; sessionId: string; data: unknown }
+  | { type: 'plan_design_proposal'; sessionId: string; data: unknown }
+  | { type: 'execution_plan_draft'; sessionId: string; data: unknown }
+  | { type: 'learning_update'; sessionId: string; data: unknown }
+  | { type: 'agent_decision'; sessionId: string; data: unknown }
+  | { type: 'agent_message'; sessionId: string; data: unknown }
+  | { type: 'planning_session_status'; sessionId: string; status: string }
   | { type: 'model_usage'; usage: unknown }
   | { type: 'clarify_question'; question: string; decision?: unknown }
   | { type: 'execution_result'; actionId?: string; status: 'success' | 'failed' | 'rejected'; text: string }

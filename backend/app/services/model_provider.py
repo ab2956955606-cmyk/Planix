@@ -10,6 +10,7 @@ from ..api_key import INVALID_API_KEY_MESSAGE, validate_api_key_format
 from .ai_settings import (
     EffectiveAiSettings,
     KEYED_PROVIDERS,
+    get_auto_model_provider_chain,
     get_effective_ai_settings_for_provider,
     get_model_routing_rule,
 )
@@ -490,14 +491,19 @@ class ModelRouter:
             return self._complete_direct(request)
 
         rule = get_model_routing_rule(request.task_type, self.settings.provider)
-        chain: list[str] = []
-        for provider in [rule.primary_provider, *rule.fallback_providers]:
-            if provider in KEYED_PROVIDERS and provider not in chain:
-                chain.append(provider)
+        if rule.primary_provider == "auto":
+            chain = list(get_auto_model_provider_chain(request.task_type, rule.fallback_providers))
+            configured_primary = chain[0] if chain else "deepseek"
+        else:
+            configured_primary = rule.primary_provider
+            chain: list[str] = []
+            for provider in [configured_primary, *rule.fallback_providers]:
+                if provider in KEYED_PROVIDERS and provider not in chain:
+                    chain.append(provider)
 
         attempts: list[ModelRouteAttempt] = []
         last_error: ModelCallError | None = None
-        primary_provider = chain[0] if chain else rule.primary_provider
+        primary_provider = configured_primary if configured_primary in KEYED_PROVIDERS else (chain[0] if chain else "deepseek")
         for provider in chain:
             routed_settings = get_effective_ai_settings_for_provider(provider, self.settings)
             if not routed_settings.has_api_key:

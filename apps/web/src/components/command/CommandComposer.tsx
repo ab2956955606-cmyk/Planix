@@ -1,12 +1,14 @@
 import { ArrowUp, MessageCircle, Plus } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
+import type { CommandThreadMessage } from '../../stores/commandAgentStore';
 import type { CommandMode, CommandPermission } from '../../types';
+import { DeepPlanningActionBar } from './DeepPlanningActionBar';
 import { PermissionPopover } from './PermissionPopover';
-import { QuickActionBar } from './QuickActionBar';
 import { WorkbenchToggle } from './WorkbenchToggle';
 
 interface CommandComposerProps {
   sending: boolean;
+  messages: CommandThreadMessage[];
   mode: CommandMode;
   permission: CommandPermission;
   onSend: (value: string) => void;
@@ -19,6 +21,7 @@ interface CommandComposerProps {
 export function CommandComposer(props: CommandComposerProps) {
   const {
     sending,
+    messages,
     mode,
     permission,
     onSend,
@@ -108,7 +111,7 @@ export function CommandComposer(props: CommandComposerProps) {
           <ArrowUp size={18} />
         </button>
       </div>
-      <QuickActionBar disabled={sending} onSend={onSend} t={t} />
+      <DeepPlanningActionBar disabled={sending} messages={messages} onSend={onSend} t={t} />
     </div>
   );
 }

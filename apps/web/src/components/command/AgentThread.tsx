@@ -6,6 +6,17 @@ import { ApprovalCard } from './ApprovalCard';
 import { CalendarPlanPreviewCard } from './CalendarPlanPreviewCard';
 import { CalendarWriteResultCard } from './CalendarWriteResultCard';
 import { CommandDecisionCard } from './CommandDecisionCard';
+import {
+  AgentDecisionCard,
+  AgentMessageCard,
+  ExecutionPlanDraftCard,
+  LearningUpdateBadge,
+  MemoryInsightCard,
+  PlanDesignProposalCard,
+  PlanningSessionStatusCard,
+  ResourceBriefCard,
+  UserNeedContractCard
+} from './DeepPlanningCards';
 import { ExecutionMiniCard } from './ExecutionMiniCard';
 import { InlinePlanDetailCard } from './InlinePlanDetailCard';
 import { InlinePlanSummaryCard } from './InlinePlanSummaryCard';
@@ -367,6 +378,46 @@ export function AgentThread({ messages, sending, onApprove, onSend, t }: AgentTh
               error={typeof payloadOf(message).error === 'string' ? payloadOf(message).error as string : undefined}
               t={t}
             />
+          )}
+
+          {message.role === 'card' && message.kind === 'planning_session_started' && (
+            <PlanningSessionStatusCard status={String(payloadOf(message).status || message.content || '')} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'user_need_contract' && (
+            <UserNeedContractCard data={payloadOf(message).data} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'memory_insight_brief' && (
+            <MemoryInsightCard data={payloadOf(message).data} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'resource_brief' && (
+            <ResourceBriefCard data={payloadOf(message).data} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'plan_design_proposal' && (
+            <PlanDesignProposalCard data={payloadOf(message).data} onSend={onSend} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'execution_plan_draft' && (
+            <ExecutionPlanDraftCard data={payloadOf(message).data} onSend={onSend} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'learning_update' && (
+            <LearningUpdateBadge data={payloadOf(message).data} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'agent_decision' && (
+            <AgentDecisionCard data={payloadOf(message).data} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'agent_message' && (
+            <AgentMessageCard data={payloadOf(message).data} t={t} />
+          )}
+
+          {message.role === 'card' && message.kind === 'planning_session_status' && (
+            <PlanningSessionStatusCard status={String(payloadOf(message).status || message.content || '')} t={t} />
           )}
 
           {message.role === 'card' && message.kind === 'model_usage' && (

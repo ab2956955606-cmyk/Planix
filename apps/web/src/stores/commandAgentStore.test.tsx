@@ -90,4 +90,56 @@ describe('commandAgentStore workbench mode', () => {
     expect(html).toContain('command_decision');
     expect(html).toContain('model_usage');
   });
+
+  it('stores deep planning session events from the stream for replay', async () => {
+    apiMocks.runCommandChat.mockImplementationOnce(async (_payload, handlers) => {
+      handlers.onEvent({ type: 'planning_session_started', sessionId: 'session-1', status: 'waiting_design_approval' });
+      handlers.onEvent({
+        type: 'user_need_contract',
+        sessionId: 'session-1',
+        data: { interpretedGoal: 'Python plan', canMoveToDesign: true }
+      });
+      handlers.onEvent({
+        type: 'memory_insight_brief',
+        sessionId: 'session-1',
+        data: { memoryHits: {}, planningInsights: {}, confidence: 0.5 }
+      });
+      handlers.onEvent({
+        type: 'resource_brief',
+        sessionId: 'session-1',
+        data: { coverage: { status: 'partial', explanation: 'Some resources found.' }, resourceCandidates: [] }
+      });
+      handlers.onEvent({
+        type: 'plan_design_proposal',
+        sessionId: 'session-1',
+        data: { strategyName: 'Project-driven', phases: [], status: 'waiting_user_approval' }
+      });
+      handlers.onEvent({
+        type: 'execution_plan_draft',
+        sessionId: 'session-1',
+        data: { tasks: [], status: 'waiting_user_approval' }
+      });
+      handlers.onEvent({
+        type: 'learning_update',
+        sessionId: 'session-1',
+        data: { feedbackType: 'resource_feedback', insight: 'Replace resource' }
+      });
+      handlers.onEvent({ type: 'planning_session_status', sessionId: 'session-1', status: 'waiting_execution_approval' });
+      handlers.onEvent({ type: 'done', threadId: 'thread-planning' });
+    });
+    apiMocks.listCommandThreads.mockResolvedValue([]);
+
+    commandAgentActions.newThread();
+    await commandAgentActions.sendCommand('Plan Python', (key) => key);
+
+    const html = renderMessageKinds();
+    expect(html).toContain('planning_session_started');
+    expect(html).toContain('user_need_contract');
+    expect(html).toContain('memory_insight_brief');
+    expect(html).toContain('resource_brief');
+    expect(html).toContain('plan_design_proposal');
+    expect(html).toContain('execution_plan_draft');
+    expect(html).toContain('learning_update');
+    expect(html).toContain('planning_session_status');
+  });
 });

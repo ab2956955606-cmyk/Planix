@@ -4,13 +4,14 @@ import re
 from dataclasses import dataclass
 
 from ..db import get_conn
-from ..schemas import AiModelRoutingRule, AiModelRoutingUpdate, AiProvider, AiSavedProvider, AiSettingsOut, AiSettingsUpdate
+from ..schemas import AiAutoModelPolicy, AiModelRoutingRule, AiModelRoutingUpdate, AiProvider, AiSavedProvider, AiSettingsOut, AiSettingsUpdate
 
 
 SETTINGS_ID = "local-default"
 SUPPORTED_PROVIDERS = {"mock", "deepseek", "kimi", "zhipu_glm", "openai", "custom"}
 KEYED_PROVIDERS = {"deepseek", "kimi", "zhipu_glm", "openai", "custom"}
 PROVIDER_ORDER = ["deepseek", "kimi", "zhipu_glm", "openai", "custom"]
+AUTO_PROVIDER_DEFAULT_ORDER = ["zhipu_glm", "deepseek", "kimi", "openai", "custom"]
 ROUTABLE_TASK_TYPES = [
     "command_decision",
     "plan_generation",
@@ -24,6 +25,26 @@ ROUTABLE_TASK_TYPES = [
 LEGACY_ROUTING_TASK_ALIASES = {
     "note_query": "memory_query",
     "note_write": "memory_write",
+}
+AUTO_MODEL_POLICY_KEY = "ai.autoModelPolicy"
+DEFAULT_TASK_STRATEGIES = {
+    "command_decision": "fast_low_cost",
+    "plan_generation": "structured_stable",
+    "task_refinement": "fast_low_cost",
+    "calendar_patch": "strict_json",
+    "memory_query": "context_summary",
+    "memory_write": "classification",
+    "chat": "balanced",
+    "model_knowledge": "knowledge_reasoning",
+}
+AUTO_STRATEGY_SCORES = {
+    "fast_low_cost": {"zhipu_glm": 95, "deepseek": 88, "kimi": 76, "openai": 72, "custom": 70},
+    "structured_stable": {"deepseek": 95, "kimi": 90, "openai": 86, "custom": 82, "zhipu_glm": 78},
+    "strict_json": {"deepseek": 94, "zhipu_glm": 90, "openai": 88, "custom": 82, "kimi": 78},
+    "context_summary": {"kimi": 94, "deepseek": 88, "openai": 86, "custom": 82, "zhipu_glm": 80},
+    "classification": {"zhipu_glm": 92, "deepseek": 88, "kimi": 82, "openai": 80, "custom": 78},
+    "knowledge_reasoning": {"kimi": 92, "deepseek": 90, "openai": 88, "custom": 84, "zhipu_glm": 80},
+    "balanced": {"deepseek": 90, "kimi": 88, "openai": 86, "zhipu_glm": 84, "custom": 82},
 }
 DEFAULT_BASE_URLS = {
     "mock": "https://api.deepseek.com",
@@ -197,18 +218,95 @@ def _saved_provider_rows(conn) -> list[AiSavedProvider]:
     ]
 
 
+def _normalize_auto_provider_order(value: object) -> list[str]:
+    raw = value if isinstance(value, list) else []
+    cleaned: list[str] = []
+    for provider in raw:
+        if provider in KEYED_PROVIDERS and provider not in cleaned:
+            cleaned.append(provider)
+    for provider in AUTO_PROVIDER_DEFAULT_ORDER:
+        if provider not in cleaned:
+            cleaned.append(provider)
+    return cleaned
+
+
+def _normalize_task_strategies(value: object) -> dict[str, str]:
+    raw = value if isinstance(value, dict) else {}
+    valid_strategies = set(AUTO_STRATEGY_SCORES)
+    strategies: dict[str, str] = {}
+    for task_type in ROUTABLE_TASK_TYPES:
+        strategy = raw.get(task_type) if isinstance(raw, dict) else None
+        strategies[task_type] = strategy if strategy in valid_strategies else DEFAULT_TASK_STRATEGIES[task_type]
+    return strategies
+
+
+def _saved_key_provider_order(conn) -> list[str]:
+    rows = conn.execute("SELECT provider, api_key_encrypted, api_key_source FROM ai_provider_configs").fetchall()
+    saved = {
+        row["provider"]
+        for row in rows
+        if row["provider"] in KEYED_PROVIDERS
+        and row["api_key_source"] == "user"
+        and (row["api_key_encrypted"] or "").strip()
+    }
+    ordered = [provider for provider in AUTO_PROVIDER_DEFAULT_ORDER if provider in saved]
+    ordered.extend(provider for provider in AUTO_PROVIDER_DEFAULT_ORDER if provider not in ordered)
+    return ordered
+
+
+def _default_auto_model_policy(conn=None) -> AiAutoModelPolicy:
+    return AiAutoModelPolicy(
+        autoProviderOrder=_saved_key_provider_order(conn) if conn is not None else AUTO_PROVIDER_DEFAULT_ORDER,
+        taskStrategy=DEFAULT_TASK_STRATEGIES,
+    )
+
+
+def _auto_model_policy(conn) -> AiAutoModelPolicy:
+    row = conn.execute("SELECT value FROM user_preferences WHERE key = ?", (AUTO_MODEL_POLICY_KEY,)).fetchone()
+    if not row:
+        return _default_auto_model_policy(conn)
+    try:
+        raw = json.loads(row["value"] or "{}")
+    except json.JSONDecodeError:
+        raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    return AiAutoModelPolicy(
+        autoProviderOrder=_normalize_auto_provider_order(raw.get("autoProviderOrder")),
+        taskStrategy=_normalize_task_strategies(raw.get("taskStrategy")),
+    )
+
+
+def _save_auto_model_policy(conn, policy: AiAutoModelPolicy | None) -> None:
+    if policy is None:
+        return
+    normalized = AiAutoModelPolicy(
+        autoProviderOrder=_normalize_auto_provider_order(policy.auto_provider_order),
+        taskStrategy=_normalize_task_strategies(policy.task_strategy),
+    )
+    conn.execute(
+        """
+        INSERT INTO user_preferences(key, value, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key)
+        DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            AUTO_MODEL_POLICY_KEY,
+            json.dumps(normalized.model_dump(by_alias=True), ensure_ascii=False, separators=(",", ":")),
+        ),
+    )
+
+
 def _routing_primary_for_active(active_provider: str) -> str:
     return active_provider if active_provider in KEYED_PROVIDERS else "deepseek"
 
 
 def _default_routing_rule_configs(active_provider: str) -> list[ModelRoutingRuleConfig]:
-    primary = _routing_primary_for_active(active_provider)
-    fallback = ("deepseek",) if primary != "deepseek" else ()
     return [
         ModelRoutingRuleConfig(
             task_type=task_type,
-            primary_provider=primary,
-            fallback_providers=fallback,
+            primary_provider="auto",
+            fallback_providers=("deepseek",),
             local_fallback_enabled=True,
         )
         for task_type in ROUTABLE_TASK_TYPES
@@ -229,8 +327,9 @@ def _routing_row_to_config(row) -> ModelRoutingRuleConfig | None:
                 fallbacks.append(provider)
             if len(fallbacks) >= 2:
                 break
-    primary = row["primary_provider"] if row["primary_provider"] in KEYED_PROVIDERS else "deepseek"
-    fallbacks = [provider for provider in fallbacks if provider != primary]
+    primary = row["primary_provider"] if row["primary_provider"] == "auto" or row["primary_provider"] in KEYED_PROVIDERS else "auto"
+    if primary != "auto":
+        fallbacks = [provider for provider in fallbacks if provider != primary]
     task_type = normalize_routing_task_type(row["task_type"])
     return ModelRoutingRuleConfig(
         task_type=task_type,
@@ -333,6 +432,7 @@ def _to_public(
     settings: EffectiveAiSettings,
     saved_providers: list[AiSavedProvider],
     routing_rules: list[AiModelRoutingRule],
+    auto_model_policy: AiAutoModelPolicy,
 ) -> AiSettingsOut:
     return AiSettingsOut(
         provider=settings.provider,
@@ -344,6 +444,7 @@ def _to_public(
         updatedAt=settings.updated_at,
         savedProviders=saved_providers,
         routingRules=routing_rules,
+        autoModelPolicy=auto_model_policy,
     )
 
 
@@ -387,11 +488,10 @@ def get_effective_ai_settings_for_provider(provider: str, active_settings: Effec
 def get_model_routing_rule(task_type: str, active_provider: str) -> ModelRoutingRuleConfig:
     task_type = normalize_routing_task_type(task_type)
     if task_type not in ROUTABLE_TASK_TYPES:
-        primary = _routing_primary_for_active(active_provider)
         return ModelRoutingRuleConfig(
             task_type=task_type,
-            primary_provider=primary,
-            fallback_providers=("deepseek",) if primary != "deepseek" else (),
+            primary_provider="auto",
+            fallback_providers=("deepseek",),
             local_fallback_enabled=True,
         )
     with get_conn() as conn:
@@ -404,13 +504,33 @@ def get_model_routing_rule(task_type: str, active_provider: str) -> ModelRouting
         config = _routing_row_to_config(row)
     if config:
         return config
-    primary = _routing_primary_for_active(active_provider)
     return ModelRoutingRuleConfig(
         task_type=task_type,
-        primary_provider=primary,
-        fallback_providers=("deepseek",) if primary != "deepseek" else (),
+        primary_provider="auto",
+        fallback_providers=("deepseek",),
         local_fallback_enabled=True,
     )
+
+
+def get_auto_model_provider_chain(task_type: str, fallback_providers: tuple[str, ...] = ()) -> tuple[str, ...]:
+    task_type = normalize_routing_task_type(task_type)
+    with get_conn() as conn:
+        policy = _auto_model_policy(conn)
+    strategy = policy.task_strategy.get(task_type, DEFAULT_TASK_STRATEGIES.get(task_type, "balanced"))
+    order = _normalize_auto_provider_order(policy.auto_provider_order)
+    order_rank = {provider: index for index, provider in enumerate(order)}
+    scores = AUTO_STRATEGY_SCORES.get(strategy, AUTO_STRATEGY_SCORES["balanced"])
+
+    def score(provider: str) -> int:
+        priority_bonus = max(0, 10 - order_rank.get(provider, 99) * 2)
+        return int(scores.get(provider, 70)) + priority_bonus
+
+    selected = sorted(order, key=lambda provider: (-score(provider), order_rank.get(provider, 99)))
+    chain: list[str] = []
+    for provider in [*selected, *fallback_providers]:
+        if provider in KEYED_PROVIDERS and provider not in chain:
+            chain.append(provider)
+    return tuple(chain)
 
 
 def get_public_ai_settings() -> AiSettingsOut:
@@ -421,7 +541,8 @@ def get_public_ai_settings() -> AiSettingsOut:
         settings = _effective_from_rows(settings_row, config)
         saved_providers = _saved_provider_rows(conn)
         routing_rules = _routing_rule_rows(conn)
-    return _to_public(settings, saved_providers, routing_rules)
+        auto_model_policy = _auto_model_policy(conn)
+    return _to_public(settings, saved_providers, routing_rules, auto_model_policy)
 
 
 def _redact_sensitive_error_text(value: str, api_key: str) -> str:
@@ -581,13 +702,18 @@ def save_model_routing_rules(payload: AiModelRoutingUpdate) -> AiSettingsOut:
         settings_row = conn.execute("SELECT * FROM ai_settings WHERE id = ?", (SETTINGS_ID,)).fetchone()
         active_provider = settings_row["provider"] if settings_row else _env_provider()
         defaults = {rule.task_type: rule for rule in _default_routing_rule_configs(active_provider)}
+        _save_auto_model_policy(conn, payload.auto_model_policy)
         for legacy_task in LEGACY_ROUTING_TASK_ALIASES:
             conn.execute("DELETE FROM ai_model_routing_rules WHERE task_type = ?", (legacy_task,))
         for task_type in ROUTABLE_TASK_TYPES:
             rule = incoming.get(task_type)
             if rule:
                 primary = rule.primary_provider
-                fallbacks = [provider for provider in rule.fallback_providers if provider != primary]
+                fallbacks = [
+                    provider
+                    for provider in rule.fallback_providers
+                    if primary == "auto" or provider != primary
+                ]
                 local_fallback_enabled = rule.local_fallback_enabled
             else:
                 default = defaults[task_type]

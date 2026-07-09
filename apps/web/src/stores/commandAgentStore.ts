@@ -18,7 +18,7 @@ export interface CommandThreadMessage {
   role: 'user' | 'assistant' | 'card';
   content: string;
   createdAt: number;
-  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'command_decision' | 'plan_search_results' | 'memory_search_results' | 'note_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'memory_write_preview' | 'memory_write_result' | 'note_write_preview' | 'note_write_result' | 'model_usage' | 'clarify_question' | 'execution_result';
+  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'command_decision' | 'plan_search_results' | 'memory_search_results' | 'note_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'memory_write_preview' | 'memory_write_result' | 'note_write_preview' | 'note_write_result' | 'planning_session_started' | 'user_need_contract' | 'memory_insight_brief' | 'resource_brief' | 'plan_design_proposal' | 'execution_plan_draft' | 'learning_update' | 'agent_decision' | 'agent_message' | 'planning_session_status' | 'model_usage' | 'clarify_question' | 'execution_result';
   status?: 'running' | 'success' | 'error';
   title?: string;
   draftId?: string;
@@ -121,6 +121,16 @@ const CARD_KINDS = new Set([
   'memory_write_result',
   'note_write_preview',
   'note_write_result',
+  'planning_session_started',
+  'user_need_contract',
+  'memory_insight_brief',
+  'resource_brief',
+  'plan_design_proposal',
+  'execution_plan_draft',
+  'learning_update',
+  'agent_decision',
+  'agent_message',
+  'planning_session_status',
   'model_usage',
   'clarify_question',
   'execution_result'
@@ -458,6 +468,112 @@ function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
       payload: { ...event }
     });
   }
+  if (event.type === 'planning_session_started') {
+    addMessage({
+      role: 'card',
+      kind: 'planning_session_started',
+      status: 'running',
+      title: t('command.planningSessionStarted'),
+      content: event.status,
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'user_need_contract') {
+    const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+    addMessage({
+      role: 'card',
+      kind: 'user_need_contract',
+      status: 'success',
+      title: t('command.userNeedContract'),
+      content: String(data.interpretedGoal || t('command.userNeedContract')),
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'memory_insight_brief') {
+    addMessage({
+      role: 'card',
+      kind: 'memory_insight_brief',
+      status: 'success',
+      title: t('command.memoryInsightAgent'),
+      content: t('command.memoryInsightAgent'),
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'resource_brief') {
+    addMessage({
+      role: 'card',
+      kind: 'resource_brief',
+      status: 'success',
+      title: t('command.resourceIntelligenceAgent'),
+      content: t('command.resourceIntelligenceAgent'),
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'plan_design_proposal') {
+    const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+    addMessage({
+      role: 'card',
+      kind: 'plan_design_proposal',
+      status: 'running',
+      title: t('command.planDesignProposal'),
+      content: String(data.strategyName || t('command.planDesignProposal')),
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'execution_plan_draft') {
+    const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+    addMessage({
+      role: 'card',
+      kind: 'execution_plan_draft',
+      status: 'running',
+      title: t('command.executionPlanDraft'),
+      content: String(data.scheduleSummary || t('command.executionPlanDraft')),
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'learning_update') {
+    const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+    addMessage({
+      role: 'card',
+      kind: 'learning_update',
+      status: 'success',
+      title: t('command.learningUpdate'),
+      content: String(data.insight || t('command.learningUpdate')),
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'agent_decision') {
+    const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+    addMessage({
+      role: 'card',
+      kind: 'agent_decision',
+      status: data.decision === 'block' ? 'error' : 'success',
+      title: t('command.agentDecision'),
+      content: String(data.userVisibleSummary || data.reason || data.decision || t('command.agentDecision')),
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'agent_message') {
+    const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+    addMessage({
+      role: 'card',
+      kind: 'agent_message',
+      status: data.messageType === 'block' ? 'error' : 'success',
+      title: t('command.agentMessage'),
+      content: String(data.reason || data.messageType || t('command.agentMessage')),
+      payload: { ...event }
+    });
+  }
+  if (event.type === 'planning_session_status') {
+    addMessage({
+      role: 'card',
+      kind: 'planning_session_status',
+      status: event.status === 'written_to_calendar' ? 'success' : 'running',
+      title: t('command.planningSessionStatus'),
+      content: event.status,
+      payload: { ...event }
+    });
+  }
   if (event.type === 'model_usage') {
     addMessage({
       role: 'card',
@@ -544,6 +660,16 @@ function createStreamHandler(t: (key: string) => string) {
         event.type === 'memory_write_result' ||
         event.type === 'note_write_preview' ||
         event.type === 'note_write_result' ||
+        event.type === 'planning_session_started' ||
+        event.type === 'user_need_contract' ||
+        event.type === 'memory_insight_brief' ||
+        event.type === 'resource_brief' ||
+        event.type === 'plan_design_proposal' ||
+        event.type === 'execution_plan_draft' ||
+        event.type === 'learning_update' ||
+        event.type === 'agent_decision' ||
+        event.type === 'agent_message' ||
+        event.type === 'planning_session_status' ||
         event.type === 'model_usage' ||
         event.type === 'clarify_question' ||
         event.type === 'execution_result'

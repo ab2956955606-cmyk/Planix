@@ -1866,6 +1866,93 @@ select:focus {
   border-top: 1px solid rgba(148, 163, 184, 0.12);
 }
 
+.auto-model-policy {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.auto-model-policy-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auto-model-policy-head strong {
+  color: #e2e8f0;
+  font-size: 13px;
+}
+
+.auto-model-policy-head span,
+.auto-task-preview-row small,
+.auto-provider-chip small {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.auto-provider-order {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.auto-provider-chip {
+  display: inline-grid;
+  grid-template-columns: auto auto 24px 24px;
+  gap: 6px;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 6px 5px 9px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.58);
+  color: #e2e8f0;
+  font-size: 12px;
+}
+
+.auto-provider-chip.missing-key {
+  color: #94a3b8;
+}
+
+.auto-provider-chip button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+}
+
+.auto-task-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 6px;
+}
+
+.auto-task-preview-row {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.auto-task-preview-row span {
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.auto-task-preview-row strong {
+  color: #a5b4fc;
+  font-size: 12px;
+}
+
 .routing-grid {
   display: grid;
   gap: 6px;
@@ -3284,6 +3371,79 @@ select:focus {
 .command-quick-actions button:disabled {
   opacity: 0.52;
   cursor: not-allowed;
+}
+
+.command-deep-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.command-primary-actions,
+.command-more-action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.command-primary-actions button,
+.command-more-actions summary,
+.command-more-action-grid button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.1);
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.command-primary-actions button {
+  background: rgba(45, 212, 191, 0.14);
+  color: #e0fdfa;
+}
+
+.command-primary-actions button:hover:not(:disabled),
+.command-more-actions summary:hover,
+.command-more-action-grid button:hover:not(:disabled) {
+  background: rgba(45, 212, 191, 0.2);
+  color: #ffffff;
+}
+
+.command-primary-actions button:disabled,
+.command-more-action-grid button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.command-more-actions {
+  position: relative;
+}
+
+.command-more-actions summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.command-more-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.command-more-action-grid {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 10;
+  width: min(360px, calc(100vw - 32px));
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
 }
 
 .command-composer {

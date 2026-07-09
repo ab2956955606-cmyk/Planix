@@ -77,6 +77,78 @@ def init_db(conn: sqlite3.Connection) -> None:
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS planning_sessions (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL DEFAULT '',
+          entry_point TEXT NOT NULL DEFAULT 'p_mode',
+          status TEXT NOT NULL,
+          user_input TEXT NOT NULL,
+          user_need_contract_json TEXT NOT NULL DEFAULT '{}',
+          slot_state_json TEXT NOT NULL DEFAULT '{}',
+          pending_question_json TEXT NOT NULL DEFAULT '{}',
+          memory_insight_json TEXT NOT NULL DEFAULT '{}',
+          resource_brief_json TEXT NOT NULL DEFAULT '{}',
+          design_proposal_json TEXT NOT NULL DEFAULT '{}',
+          execution_draft_json TEXT NOT NULL DEFAULT '{}',
+          latest_learning_patch_json TEXT NOT NULL DEFAULT '{}',
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_planning_sessions_thread_status
+          ON planning_sessions(thread_id, status, updated_at);
+
+        CREATE TABLE IF NOT EXISTS planning_artifacts (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          owner_agent TEXT NOT NULL,
+          artifact_type TEXT NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'draft',
+          content_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(session_id) REFERENCES planning_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_planning_artifacts_session_type
+          ON planning_artifacts(session_id, artifact_type, version);
+
+        CREATE TABLE IF NOT EXISTS agent_decisions (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          agent TEXT NOT NULL,
+          decision TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          confidence REAL NOT NULL DEFAULT 1,
+          input_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+          output_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+          user_visible_summary TEXT NOT NULL DEFAULT '',
+          model_usage_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(session_id) REFERENCES planning_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_decisions_session_time
+          ON agent_decisions(session_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS agent_messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          from_agent TEXT NOT NULL,
+          to_agent TEXT NOT NULL,
+          message_type TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          resolved INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(session_id) REFERENCES planning_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_messages_session_time
+          ON agent_messages(session_id, created_at);
+
         CREATE TABLE IF NOT EXISTS ai_settings (
           id TEXT PRIMARY KEY,
           provider TEXT NOT NULL DEFAULT 'deepseek',
@@ -286,6 +358,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "command_actions", "draft_id", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "command_actions", "error_message", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "command_approvals", "decision", "TEXT NOT NULL DEFAULT 'pending'")
+    ensure_column(conn, "planning_sessions", "slot_state_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "pending_question_json", "TEXT NOT NULL DEFAULT '{}'")
     action_columns = {row["name"] for row in conn.execute("PRAGMA table_info(command_actions)").fetchall()}
     if {"error", "error_message"} <= action_columns:
         conn.execute(
