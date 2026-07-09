@@ -479,6 +479,27 @@ export interface TaskResourceBundle {
   fallback?: TaskLearningResource | null;
 }
 
+export type ExecutionPlanQualityStatus = 'passed' | 'needs_repair' | 'needs_user_confirmation' | 'blocked';
+
+export interface ExecutionPlanQualityChecks {
+  goalAlignment: boolean;
+  timeFit: boolean;
+  taskSpecificity: boolean;
+  resourceDiversity: boolean;
+  deliverableQuality: boolean;
+  internshipFit?: boolean | null;
+  calendarWritable: boolean;
+}
+
+export interface ExecutionPlanQualityReport {
+  status: ExecutionPlanQualityStatus;
+  score: number;
+  blockers: string[];
+  warnings: string[];
+  repairSuggestions: string[];
+  checks: ExecutionPlanQualityChecks;
+}
+
 export interface PlanFitCheck {
   fitsCurrentMilestone: boolean;
   advancesOverallGoal: boolean;

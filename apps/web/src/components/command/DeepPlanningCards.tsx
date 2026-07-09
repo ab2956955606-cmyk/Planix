@@ -23,6 +23,11 @@ function text(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
 }
 
+function label(t: Translator, key: string, fallback: string): string {
+  const value = t(key);
+  return value === key ? fallback : value;
+}
+
 function lines(value: unknown): string[] {
   return list(value).map((item) => text(item)).filter(Boolean);
 }
@@ -78,11 +83,11 @@ export function UserNeedContractCard({ data, t }: CardProps) {
   const received = compact([
     text(slotState.domain) ? `${t('command.slotDomain')}: ${text(slotState.domain) === 'travel' ? t('command.domainTravel') : t('command.domainLearning')}` : '',
     text(learning.subject) ? `${t('command.slotSubject')}: ${text(learning.subject)}` : '',
-    text(learning.currentLevel) ? `${t('command.slotCurrentLevel')}: ${text(learning.currentLevel)}` : '',
+    text(learning.currentLevelText) || text(learning.currentLevel) ? `${t('command.slotCurrentLevel')}: ${text(learning.currentLevelText, text(learning.currentLevel))}` : '',
     text(learning.targetLevel) ? `${t('command.slotTargetLevel')}: ${text(learning.targetLevel)}` : '',
     text(learning.dailyTime) ? `${t('command.slotDailyTime')}: ${text(learning.dailyTime)}` : '',
     text(learning.duration) ? `${t('command.slotDuration')}: ${text(learning.duration)}` : '',
-    text(learning.purpose) ? `${t('command.slotPurpose')}: ${text(learning.purpose)}` : '',
+    text(learning.purposeText) || text(learning.purpose) ? `${t('command.slotPurpose')}: ${text(learning.purposeText, text(learning.purpose))}` : '',
     text(travel.destination) ? `${t('command.slotDestination')}: ${text(travel.destination)}` : '',
     list(travel.places).length ? `${t('command.slotPlaces')}: ${list(travel.places).map((item) => text(item)).filter(Boolean).join(' / ')}` : '',
     typeof travel.durationDays === 'number' ? `${t('command.slotDurationDays')}: ${travel.durationDays}` : '',
@@ -243,6 +248,13 @@ export function ExecutionPlanDraftCard({ data, onSend, t, planningStatus, action
   const tasks = list(raw.tasks);
   const draftStatus = text(raw.status);
   const effectiveStatus = planningStatus || (draftStatus === 'approved' ? 'ready_to_write_calendar' : draftStatus || 'waiting_execution_approval');
+  const qualityReport = record(raw.qualityReport);
+  const qualityStatus = text(raw.qualityStatus || qualityReport.status);
+  const qualityPassed = !qualityStatus || qualityStatus === 'passed';
+  const qualityBlockers = lines(qualityReport.blockers);
+  const qualityWarnings = lines(qualityReport.warnings);
+  const qualitySuggestions = lines(qualityReport.repairSuggestions);
+  const qualityScore = typeof qualityReport.score === 'number' ? Math.round(qualityReport.score) : null;
   const canAct = actionsEnabled && Boolean(onSend);
   const toggleAllTasks = (event: MouseEvent<HTMLButtonElement> | undefined, open: boolean) => {
     if (!event?.currentTarget) return;
@@ -259,6 +271,26 @@ export function ExecutionPlanDraftCard({ data, onSend, t, planningStatus, action
       </div>
       <p>{text(raw.scheduleSummary)}</p>
       <p>{text(raw.resourceCoverageSummary)}</p>
+      {qualityStatus ? (
+        <div className={`execution-quality-report ${qualityPassed ? 'passed' : 'blocked'}`}>
+          <strong>{qualityPassed ? label(t, 'command.executionQualityPassed', '\u6267\u884c\u8ba1\u5212\u8d28\u91cf\u5df2\u901a\u8fc7') : label(t, 'command.executionQualityBlocked', '\u6267\u884c\u8ba1\u5212\u9700\u8981\u5148\u4fee\u590d')}</strong>
+          <small>
+            {label(t, 'command.executionQualityStatus', '\u8d28\u91cf\u72b6\u6001')}: {qualityStatus}
+            {qualityScore !== null ? ` · ${label(t, 'command.executionQualityScore', '\u5206\u6570')}: ${qualityScore}` : ''}
+          </small>
+          {qualityBlockers.length ? (
+            <ul>
+              {qualityBlockers.map((item, index) => <li key={`blocker-${index}`}>{item}</li>)}
+            </ul>
+          ) : null}
+          {!qualityBlockers.length && qualityWarnings.length ? (
+            <ul>
+              {qualityWarnings.map((item, index) => <li key={`warning-${index}`}>{item}</li>)}
+            </ul>
+          ) : null}
+          {qualitySuggestions.length ? <small>{label(t, 'command.executionQualityRepair', '\u4fee\u590d\u5efa\u8bae')}: {qualitySuggestions.join(' / ')}</small> : null}
+        </div>
+      ) : null}
       {!tasks.length ? <p>{t('command.noExecutionTasks')}</p> : null}
       {tasks.length > 1 ? (
         <div className="command-row-actions compact">
@@ -308,8 +340,8 @@ export function ExecutionPlanDraftCard({ data, onSend, t, planningStatus, action
       </div>
       {effectiveStatus === 'ready_to_write_calendar' ? (
         <div className="command-row-actions">
-          <p className="command-action-hint">{t('command.executionReadyToWrite')}</p>
-          {canAct ? <button type="button" onClick={() => onSend?.(t('command.quickWriteCalendarMessage'))}>{t('command.quickWriteCalendar')}</button> : null}
+          <p className="command-action-hint">{qualityPassed ? t('command.executionReadyToWrite') : label(t, 'command.executionQualityCannotWrite', '\u8fd9\u4e2a\u6267\u884c\u8ba1\u5212\u8fd8\u4e0d\u591f\u5177\u4f53\uff0c\u6682\u4e0d\u5efa\u8bae\u5199\u5165\u65e5\u5386\uff0c\u8bf7\u5148\u4fee\u590d\u3002')}</p>
+          {canAct && qualityPassed ? <button type="button" onClick={() => onSend?.(t('command.quickWriteCalendarMessage'))}>{t('command.quickWriteCalendar')}</button> : null}
         </div>
       ) : null}
       {effectiveStatus === 'waiting_calendar_write_approval' ? (
@@ -324,7 +356,7 @@ export function ExecutionPlanDraftCard({ data, onSend, t, planningStatus, action
       ) : null}
       {canAct && !['ready_to_write_calendar', 'waiting_calendar_write_approval', 'written_to_calendar'].includes(effectiveStatus) ? (
         <div className="command-row-actions">
-          <button type="button" onClick={() => onSend?.(t('command.confirmExecutionMessage'))}>{t('command.confirmExecution')}</button>
+          {qualityPassed ? <button type="button" onClick={() => onSend?.(t('command.confirmExecutionMessage'))}>{t('command.confirmExecution')}</button> : null}
           <button type="button" onClick={() => onSend?.(t('command.feedbackTooHeavyMessage'))}>{t('command.feedbackTooHeavy')}</button>
           <button type="button" onClick={() => onSend?.(t('command.feedbackResourceHardMessage'))}>{t('command.feedbackResourceHard')}</button>
         </div>

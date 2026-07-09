@@ -523,9 +523,11 @@ def test_deep_planning_clarification_answer_preempts_query_plan_fallback(client,
     contract = next(event for event in events if event["type"] == "user_need_contract")
     assert contract["sessionId"] == start_session_id
     learning = contract["data"]["slotState"]["learning"]
-    assert "零基础" in learning["currentLevel"]
+    assert learning["currentLevel"] == "zero_beginner"
+    assert "零基础" in learning["currentLevelText"]
     assert "3" in learning["dailyTime"]
-    assert "实习" in learning["purpose"]
+    assert learning["purpose"] == "internship"
+    assert "实习" in learning["purposeText"]
     with get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 1
         assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
@@ -564,10 +566,12 @@ def test_deep_planning_learning_short_clarification_normalizes_slots_without_goa
     assert contract["sessionId"] == session_id
     assert "补充信息" not in contract["data"]["interpretedGoal"]
     learning = contract["data"]["slotState"]["learning"]
-    assert learning["currentLevel"] == "零基础"
+    assert learning["currentLevel"] == "zero_beginner"
+    assert learning["currentLevelText"] == "零基础"
     assert learning["dailyTime"] == "4小时"
     assert learning["availableTimeScope"] == "unknown"
-    assert "提升" in learning["purpose"]
+    assert learning["purpose"] == "skill_improvement"
+    assert "提升" in learning["purposeText"]
     resource_brief = next(event for event in events if event["type"] == "resource_brief")
     candidate_titles = [item["title"] for item in resource_brief["data"]["resourceCandidates"]]
     assert all("补充信息" not in title for title in candidate_titles)
@@ -800,6 +804,103 @@ def test_deep_planning_approve_design_generates_execution_draft_with_resources(c
     )
     with get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
+
+
+def test_deep_planning_python_internship_draft_passes_semantic_quality_gate(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "message": "Plan 30 days to learn Python for an AI internship, daily 3 hours, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+    thread_id = _events(start)[-1]["threadId"]
+
+    approve = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "approve design", "context": {"date": "2026-07-05"}},
+    )
+
+    assert approve.status_code == 200
+    draft = next(event for event in _events(approve) if event["type"] == "execution_plan_draft")["data"]
+    tasks = draft["tasks"]
+    assert draft["qualityStatus"] == "passed"
+    assert draft["qualityReport"]["status"] == "passed"
+    assert draft["qualityReport"]["checks"]["internshipFit"] is True
+    assert draft["qualityReport"]["checks"]["timeFit"] is True
+    assert len(tasks) >= 12
+    assert sum(task["estimatedMinutes"] for task in tasks) >= 900
+    titles = " ".join(task["title"] for task in tasks).lower()
+    assert "readme" in titles
+    assert "github" in titles
+    assert "resume" in titles
+    assert "interview" in titles
+    assert "learn and reproduce" not in titles
+    assert "checkable output" not in titles
+    primary_titles = [
+        task["resourceBundle"]["primary"]["title"]
+        for task in tasks
+        if task.get("resourceBundle", {}).get("primary")
+    ]
+    most_repeated = max(primary_titles.count(title) for title in set(primary_titles))
+    assert most_repeated <= len(tasks) // 2
+
+
+def test_deep_planning_calendar_write_blocks_failed_quality_report(client, monkeypatch):
+    _patch_decision(
+        monkeypatch,
+        CommandDecision(intent="create_plan", confidence=0.9, targetType="unknown", action="create"),
+    )
+    start = client.post(
+        "/api/command/chat",
+        json={
+            "mode": "auto",
+            "message": "Plan 30 days to learn Python for an AI internship, daily 3 hours, project driven",
+            "context": {"date": "2026-07-05"},
+        },
+    )
+    events = _events(start)
+    thread_id = events[-1]["threadId"]
+    session_id = next(event for event in events if event["type"] == "planning_session_started")["sessionId"]
+    approve = client.post(
+        "/api/command/chat",
+        json={"mode": "auto", "threadId": thread_id, "message": "approve design", "context": {"date": "2026-07-05"}},
+    )
+    draft = next(event for event in _events(approve) if event["type"] == "execution_plan_draft")["data"]
+    draft["qualityStatus"] = "needs_repair"
+    draft["qualityReport"] = {
+        "status": "needs_repair",
+        "score": 42,
+        "blockers": ["The plan is too sparse for the user's time horizon and availability."],
+        "warnings": [],
+        "repairSuggestions": ["Increase task count and total planned minutes."],
+        "checks": {
+            "goalAlignment": True,
+            "timeFit": False,
+            "taskSpecificity": True,
+            "resourceDiversity": True,
+            "deliverableQuality": True,
+            "internshipFit": True,
+            "calendarWritable": False,
+        },
+    }
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE planning_sessions SET status = 'ready_to_write_calendar', execution_draft_json = ? WHERE id = ?",
+            (json.dumps(draft), session_id),
+        )
+
+    response = client.post(f"/api/planning/sessions/{session_id}/prepare-calendar-write", json={})
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["qualityStatus"] == "needs_repair"
+    assert "too sparse" in detail["blockers"][0]
 
 
 def test_deep_planning_resource_feedback_updates_plan_and_memory(client, monkeypatch):

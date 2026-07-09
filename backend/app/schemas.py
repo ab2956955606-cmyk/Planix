@@ -890,11 +890,13 @@ class ResourceBrief(BaseModel):
 class PlanningLearningSlots(BaseModel):
     subject: str = ""
     current_level: str = Field(default="", alias="currentLevel")
+    current_level_text: str = Field(default="", alias="currentLevelText")
     target_level: str = Field(default="", alias="targetLevel")
     daily_time: str = Field(default="", alias="dailyTime")
     available_time_scope: str = Field(default="", alias="availableTimeScope")
     duration: str = ""
     purpose: str = ""
+    purpose_text: str = Field(default="", alias="purposeText")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1005,6 +1007,32 @@ class ExecutionTask(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+ExecutionPlanQualityStatus = Literal["passed", "needs_repair", "needs_user_confirmation", "blocked"]
+
+
+class ExecutionPlanQualityChecks(BaseModel):
+    goal_alignment: bool = Field(alias="goalAlignment")
+    time_fit: bool = Field(alias="timeFit")
+    task_specificity: bool = Field(alias="taskSpecificity")
+    resource_diversity: bool = Field(alias="resourceDiversity")
+    deliverable_quality: bool = Field(alias="deliverableQuality")
+    internship_fit: bool | None = Field(default=None, alias="internshipFit")
+    calendar_writable: bool = Field(alias="calendarWritable")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExecutionPlanQualityReport(BaseModel):
+    status: ExecutionPlanQualityStatus
+    score: int = Field(ge=0, le=100)
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    repair_suggestions: list[str] = Field(default_factory=list, alias="repairSuggestions")
+    checks: ExecutionPlanQualityChecks
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class ExecutionPlanDraft(BaseModel):
     design_id: str = Field(alias="designId")
     tasks: list[ExecutionTask]
@@ -1013,6 +1041,8 @@ class ExecutionPlanDraft(BaseModel):
     schedule_summary: str = Field(alias="scheduleSummary")
     resource_coverage_summary: str = Field(alias="resourceCoverageSummary")
     status: Literal["waiting_user_approval", "revision_needed", "approved"] = "waiting_user_approval"
+    quality_report: ExecutionPlanQualityReport | None = Field(default=None, alias="qualityReport")
+    quality_status: ExecutionPlanQualityStatus | None = Field(default=None, alias="qualityStatus")
 
     model_config = ConfigDict(populate_by_name=True)
 

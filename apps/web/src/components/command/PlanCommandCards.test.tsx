@@ -216,6 +216,12 @@ const labels: Record<string, string> = {
   'command.confirmExecution': 'Confirm execution plan',
   'command.confirmExecutionMessage': 'Confirm execution plan',
   'command.executionReadyToWrite': 'Execution plan confirmed; ready to write to Calendar',
+  'command.executionQualityPassed': 'Plan quality passed',
+  'command.executionQualityBlocked': 'Plan quality needs repair',
+  'command.executionQualityStatus': 'Quality status',
+  'command.executionQualityScore': 'Score',
+  'command.executionQualityRepair': 'Repair suggestions',
+  'command.executionQualityCannotWrite': 'This execution plan is not specific enough for Calendar yet. Please revise it first.',
   'command.executionWrittenToCalendar': 'Execution plan written to Calendar',
   'command.feedbackTooHeavy': 'Too heavy',
   'command.feedbackTooHeavyMessage': 'The tasks are too heavy',
@@ -576,6 +582,33 @@ describe('Plan command cards', () => {
     expect(readyHtml).toContain('\u5199\u5165\u65e5\u5386');
     expect(readyHtml).not.toContain('Confirm execution plan');
     expect(sent).toEqual(['\u5199\u5165\u65e5\u5386']);
+
+    sent.length = 0;
+    const blocked = ExecutionPlanDraftCard({
+      t,
+      onSend: (value) => sent.push(value),
+      planningStatus: 'ready_to_write_calendar',
+      data: {
+        status: 'approved',
+        scheduleSummary: 'Ready status but weak quality.',
+        resourceCoverageSummary: 'Resources repeat too much.',
+        qualityStatus: 'needs_repair',
+        qualityReport: {
+          status: 'needs_repair',
+          score: 44,
+          blockers: ['The plan is too sparse.'],
+          warnings: [],
+          repairSuggestions: ['Add concrete project packaging tasks.']
+        },
+        tasks: []
+      }
+    });
+    const blockedHtml = renderToStaticMarkup(blocked);
+    collectButtons(blocked).forEach((button) => button.props.onClick());
+    expect(blockedHtml).toContain('Plan quality needs repair');
+    expect(blockedHtml).toContain('The plan is too sparse.');
+    expect(blockedHtml).not.toContain('\u5199\u5165\u65e5\u5386</button>');
+    expect(sent).toEqual([]);
 
     const historical = renderToStaticMarkup(
       <ExecutionPlanDraftCard

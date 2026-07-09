@@ -12,6 +12,8 @@ from ..db import get_conn
 from ..schemas import (
     CreatePlanningSessionRequest,
     ExecutionPlanDraft,
+    ExecutionPlanQualityChecks,
+    ExecutionPlanQualityReport,
     ExecutionTask,
     ExecutionTaskResourceCoverage,
     LearningImmediatePatch,
@@ -440,6 +442,12 @@ def _available_time_with_scope(text: str) -> tuple[str | None, str | None]:
     )
     match = re.search(pattern, text, flags=re.I)
     if not match:
+        match = re.search(
+            r"(?:(\u6bcf\u5929|\u6bcf\u65e5|\u6bcf\u5468|daily|weekly).{0,12}?)?([\u96f6\u4e00\u4e8c\u4e24\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u534a]+)\s*(\u5c0f\u65f6|\u5206\u949f|hour|hours|minute|minutes|min)",
+            text,
+            flags=re.I,
+        )
+    if not match:
         return None, None
     frequency = (match.group(1) or "").lower()
     amount = match.group(2)
@@ -576,36 +584,46 @@ def _extract_learning_subject(text: str, current: str = "") -> str:
     return current
 
 
-def _extract_learning_purpose(text: str, current: str = "") -> str:
+def _extract_learning_purpose(text: str, current: str = "", current_text: str = "") -> tuple[str, str]:
     if _contains(text, "实习", "求职", "找工作", "就业", "面试", "internship", "job", "interview"):
-        return "找实习/求职"
+        return "internship", "找实习/求职"
     if _contains(text, "项目", "作品集", "实战", "project", "portfolio"):
-        return "做项目/作品集"
+        return "project", "做项目/作品集"
     if _contains(text, "考试", "考证", "exam"):
-        return "考试/考证"
+        return "exam", "考试/考证"
     if _contains(text, "工作", "后端", "云原生", "提升能力", "提升", "work", "backend"):
-        return "提升工作能力"
+        return "skill_improvement", "提升工作能力"
     if _contains(text, "兴趣", "爱好", "好玩", "hobby"):
-        return "兴趣学习"
-    return current
+        return "interest", "兴趣学习"
+    return current, current_text
 
 
-def _extract_learning_level(text: str, current_level: str = "", target_level: str = "") -> tuple[str, str]:
+def _extract_learning_level(
+    text: str,
+    current_level: str = "",
+    target_level: str = "",
+    current_level_text: str = "",
+) -> tuple[str, str, str]:
     if _contains(text, "零基础", "小白", "没学过", "完全不会", "刚开始", "beginner"):
-        current_level = "零基础"
+        current_level = "zero_beginner"
+        current_level_text = "零基础"
     elif _contains(text, "学过一点", "有点基础", "入门"):
-        current_level = "有基础/入门"
+        current_level = "beginner"
+        current_level_text = "学过一点/入门"
     elif _contains(text, "有基础", "能做小项目", "有项目经验"):
-        current_level = "已有基础/能做小项目"
+        current_level = "intermediate"
+        current_level_text = "已有基础/能做小项目"
     elif _contains(text, "进阶", "熟练", "高级"):
-        current_level = current_level or "已有基础"
+        current_level = current_level or "intermediate"
+        current_level_text = current_level_text or "已有基础"
         target_level = target_level or "进阶/熟练"
     if _contains(text, "精通"):
-        current_level = current_level or "已有基础，目标是进阶到精通"
+        current_level = current_level or "intermediate"
+        current_level_text = current_level_text or "已有基础，目标是进阶到精通"
         target_level = "精通"
     elif _contains(text, "掌握"):
         target_level = target_level or "掌握"
-    return current_level, target_level
+    return current_level, target_level, current_level_text
 
 
 def _extract_duration_text(text: str, current: str = "") -> str:
@@ -788,20 +806,26 @@ def _slot_state_from_text(text: str, previous: PlanningSlotState | None = None) 
     else:
         learning = slot.learning or PlanningLearningSlots()
         learning.subject = _extract_learning_subject(text, learning.subject)
-        learning.current_level, learning.target_level = _extract_learning_level(text, learning.current_level, learning.target_level)
+        learning.current_level, learning.target_level, learning.current_level_text = _extract_learning_level(
+            text,
+            learning.current_level,
+            learning.target_level,
+            learning.current_level_text,
+        )
         available_time, available_time_scope = _available_time_with_scope(text)
         if available_time:
             learning.daily_time = available_time
             learning.available_time_scope = available_time_scope or learning.available_time_scope
         learning.duration = _extract_duration_text(text, learning.duration)
-        learning.purpose = _extract_learning_purpose(text, learning.purpose)
+        learning.purpose, learning.purpose_text = _extract_learning_purpose(text, learning.purpose, learning.purpose_text)
         if (
             not learning.current_level
             and learning.subject
             and (learning.target_level or learning.purpose)
             and (learning.daily_time or learning.duration)
         ):
-            learning.current_level = "未说明当前水平，先按入门到进阶的保守假设"
+            learning.current_level = "assumed_beginner_to_intermediate"
+            learning.current_level_text = "未说明当前水平，先按入门到进阶的保守假设"
         slot.learning = learning
         if learning.subject:
             slot.goal = f"{learning.subject}学习规划"
@@ -827,8 +851,8 @@ def _slot_contract(raw_input: str, slot: PlanningSlotState) -> UserNeedContract:
         available_time = f"{travel.duration_days}天" if travel.duration_days else None
         deadline = travel.month or None
     else:
-        outcome = learning.purpose or learning.target_level or None
-        current_level = learning.current_level or None
+        outcome = learning.purpose_text or learning.target_level or learning.purpose or None
+        current_level = learning.current_level_text or learning.current_level or None
         available_time = learning.daily_time or learning.duration or None
         deadline = learning.duration or None
     return UserNeedContract(
@@ -847,6 +871,161 @@ def _slot_contract(raw_input: str, slot: PlanningSlotState) -> UserNeedContract:
         slotState=slot,
         pendingQuestion=pending,
     )
+
+
+def _number_from_text(value: str) -> float | None:
+    value = (value or "").strip().lower()
+    if not value:
+        return None
+    if match := re.search(r"\d+(?:\.\d+)?", value):
+        return float(match.group(0))
+    zh_digits = {
+        "\u96f6": 0,
+        "\u4e00": 1,
+        "\u4e8c": 2,
+        "\u4e24": 2,
+        "\u4e09": 3,
+        "\u56db": 4,
+        "\u4e94": 5,
+        "\u516d": 6,
+        "\u4e03": 7,
+        "\u516b": 8,
+        "\u4e5d": 9,
+        "\u534a": 0.5,
+    }
+    if "\u5341" in value:
+        parts = value.split("\u5341", 1)
+        tens = zh_digits.get(parts[0], 1 if not parts[0] else 0)
+        ones = zh_digits.get(parts[1][:1], 0) if parts[1] else 0
+        return float(tens * 10 + ones)
+    for char, number in zh_digits.items():
+        if char in value:
+            return float(number)
+    return None
+
+
+def _minutes_from_time_text(value: str | None) -> int | None:
+    if not value:
+        return None
+    amount = _number_from_text(value)
+    if amount is None:
+        return None
+    lowered = value.lower()
+    if "\u5206\u949f" in value or "minute" in lowered or "min" in lowered:
+        return max(1, int(amount))
+    return max(1, int(amount * 60))
+
+
+def _daily_available_minutes(contract: UserNeedContract | None) -> int | None:
+    if not contract:
+        return None
+    slot = contract.slot_state
+    if slot and slot.domain == "learning":
+        scope = slot.learning.available_time_scope or ""
+        minutes = _minutes_from_time_text(slot.learning.daily_time)
+        if minutes and scope == "daily":
+            return minutes
+        if minutes and scope == "weekly":
+            return max(15, minutes // 5)
+    value = contract.available_time or ""
+    minutes = _minutes_from_time_text(value)
+    if minutes and ("\u6bcf\u5929" in value or "daily" in value.lower() or "per day" in value.lower()):
+        return minutes
+    return minutes
+
+
+def _learning_plan_subject(contract: UserNeedContract | None, fallback: str) -> str:
+    slot = contract.slot_state if contract else None
+    if slot and slot.domain == "learning" and slot.learning.subject:
+        return slot.learning.subject
+    text = f"{fallback} {contract.interpreted_goal if contract else ''}".lower()
+    if "python" in text:
+        return "Python"
+    if re.search(r"\bgo\b|golang", text):
+        return "Go"
+    return contract.interpreted_goal if contract else _title_from_goal(fallback)
+
+
+def _is_internship_learning_plan(contract: UserNeedContract | None, fallback: str) -> bool:
+    text = " ".join(
+        [
+            fallback,
+            contract.interpreted_goal if contract else "",
+            contract.desired_outcome if contract and contract.desired_outcome else "",
+            contract.raw_user_input if contract else "",
+        ]
+    )
+    slot = contract.slot_state if contract else None
+    purpose = slot.learning.purpose if slot and slot.domain == "learning" else ""
+    return purpose in {"internship", "job"} or _contains(
+        text,
+        "\u5b9e\u4e60",
+        "\u6c42\u804c",
+        "\u7b80\u5386",
+        "\u9762\u8bd5",
+        "internship",
+        "job",
+        "resume",
+        "interview",
+    )
+
+
+def _task_text(task: ExecutionTask) -> str:
+    return " ".join(
+        [
+            task.title,
+            task.description,
+            task.deliverable,
+            task.why_this_task_matters,
+            " ".join(task.acceptance_criteria),
+            " ".join(task.knowledge_points),
+        ]
+    )
+
+
+def _primary_resource_title(task: ExecutionTask) -> str:
+    resource = task.resource_bundle.primary or task.resource_bundle.practice
+    return resource.title if resource else ""
+
+
+def _generic_task_title(title: str) -> bool:
+    lowered = title.lower()
+    generic_phrases = (
+        "\u5b66\u4e60\u5e76\u590d\u73b0",
+        "\u5b8c\u6210\u4e00\u4e2a\u53ef\u68c0\u67e5\u4ea7\u51fa",
+        "\u786e\u8ba4\u57fa\u7840\u4e0e\u6700\u5c0f\u8def\u5f84",
+        "\u9879\u76ee\u9a71\u52a8\u7ec3\u4e60",
+        "\u5305\u88c5\u4e0e\u590d\u76d8",
+        "learn and reproduce",
+        "checkable output",
+    )
+    return any(phrase in lowered or phrase in title for phrase in generic_phrases)
+
+
+def _has_concrete_deliverable(task: ExecutionTask) -> bool:
+    text = f"{task.title} {task.deliverable}".lower()
+    concrete_markers = (
+        ".py",
+        ".md",
+        "readme",
+        "github",
+        "repo",
+        "json",
+        "cli",
+        "api",
+        "todo",
+        "bullet",
+        "interview",
+        "script",
+        "\u811a\u672c",
+        "\u9879\u76ee",
+        "\u7b80\u5386",
+        "\u9762\u8bd5",
+        "\u4ed3\u5e93",
+        "\u7b54\u6848",
+        "\u7ec3\u4e60",
+    )
+    return any(marker in text for marker in concrete_markers) and len(task.deliverable.strip()) >= 6
 
 
 def _topic_switch_pending(previous: PlanningSlotState, text: str) -> PendingPlanningQuestion | None:
@@ -1225,7 +1404,7 @@ class DeepPlanningService:
         session = self.get_session(session_id)
         if session.status != "ready_to_write_calendar" or not session.execution_draft:
             raise HTTPException(status_code=409, detail={"message": "execution draft must be approved before writing calendar"})
-        self.validate_execution_draft(session.execution_draft, accept_missing_resources=accept_missing_resources)
+        self.validate_execution_draft(session.execution_draft, accept_missing_resources=accept_missing_resources, require_quality=True)
         self._update_session(session_id, status="waiting_calendar_write_approval")
         return self.get_session(session_id)
 
@@ -1397,7 +1576,13 @@ class DeepPlanningService:
             status="waiting_user_approval",
         )
 
-    def validate_execution_draft(self, execution: ExecutionPlanDraft, *, accept_missing_resources: bool = False) -> None:
+    def validate_execution_draft(
+        self,
+        execution: ExecutionPlanDraft,
+        *,
+        accept_missing_resources: bool = False,
+        require_quality: bool = False,
+    ) -> None:
         if not execution.tasks:
             raise HTTPException(status_code=422, detail={"message": "execution draft has no tasks"})
         for index, task in enumerate(execution.tasks, start=1):
@@ -1410,6 +1595,17 @@ class DeepPlanningService:
                 raise HTTPException(status_code=422, detail={"message": f"task {index} missing resourceBundle"})
             if task.resource_coverage.status == "missing" and not accept_missing_resources:
                 raise HTTPException(status_code=422, detail={"message": f"task {index} resource coverage is missing"})
+        if require_quality and execution.quality_status != "passed":
+            report = execution.quality_report
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "execution plan quality is not strong enough for Calendar write",
+                    "qualityStatus": execution.quality_status or "needs_repair",
+                    "blockers": report.blockers if report else ["missing execution plan quality report"],
+                    "repairSuggestions": report.repair_suggestions if report else ["regenerate or revise the execution plan before writing Calendar"],
+                },
+            )
 
     def build_learning_patch(self, feedback: str, session: PlanningSessionResponse) -> LearningPatch:
         resource_feedback = _contains(feedback, "资源", "资料", "文档", "看不懂", "太理论")
@@ -2179,6 +2375,380 @@ class DeepPlanningService:
             whyThisResource=candidate.fit_score.reasons[0] if candidate.fit_score.reasons else candidate.how_to_use,
             expectedOutput=candidate.expected_output,
             fallbackIfTooHard=candidate.fallback_if_too_hard,
+        )
+
+    def _domain_candidate(
+        self,
+        candidate_id: str,
+        title: str,
+        source_type: str,
+        topics: list[str],
+        use_step: str,
+        expected_output: str,
+        *,
+        domain: str = "Python",
+        url: str | None = None,
+        section: str | None = None,
+        search: str | None = None,
+    ) -> ResourceCandidate:
+        return self._candidate(
+            candidate_id,
+            title,
+            source_type,
+            domain,
+            topics,
+            use_step,
+            expected_output,
+            url=url,
+            section=section,
+            search=search,
+        )
+
+    def _matching_candidate(
+        self,
+        candidates: list[ResourceCandidate],
+        keywords: tuple[str, ...],
+        fallback: ResourceCandidate,
+    ) -> ResourceCandidate:
+        lowered = [(item, f"{item.title} {' '.join(item.topics)} {item.domain}".lower()) for item in candidates]
+        for item, haystack in lowered:
+            if any(keyword.lower() in haystack for keyword in keywords):
+                return item
+        return fallback
+
+    def _task_bundle(
+        self,
+        primary: ResourceCandidate,
+        practice: ResourceCandidate | None,
+        fallback: ResourceCandidate,
+        *,
+        use_step: str,
+    ) -> TaskResourceBundle:
+        return TaskResourceBundle(
+            primary=self._resource_for_task(primary, use_step=use_step),
+            practice=self._resource_for_task(practice, use_step="Do the smallest runnable exercise and keep the output checkable.") if practice else None,
+            fallback=self._resource_for_task(fallback, use_step="If stuck, use this smaller fallback and record the blocker."),
+        )
+
+    def _python_internship_candidates(self, resource_brief: ResourceBrief) -> dict[str, ResourceCandidate]:
+        existing = list(resource_brief.resource_candidates)
+        control = self._matching_candidate(
+            existing,
+            ("control", "if", "loop", "function"),
+            self._domain_candidate(
+                "official:python:control-flow",
+                "Python Tutorial - Control Flow",
+                "official_doc",
+                ["control flow", "functions", "loops"],
+                "Read only the if/for/function examples, then code the matching exercise.",
+                "A runnable Python script using if, loops, and a function.",
+                url="https://docs.python.org/3/tutorial/controlflow.html",
+                section="Control Flow Tools",
+            ),
+        )
+        data_structures = self._domain_candidate(
+            "official:python:data-structures",
+            "Python Tutorial - Data Structures",
+            "official_doc",
+            ["list", "dict", "set", "tuple"],
+            "Read the list and dict examples, then model a small data record.",
+            "A runnable script using list and dict operations.",
+            url="https://docs.python.org/3/tutorial/datastructures.html",
+            section="Data Structures",
+        )
+        files_json = self._domain_candidate(
+            "practice:python:files-json",
+            "Python file and JSON mini practice",
+            "practice_bank",
+            ["file io", "json", "persistence"],
+            "Write one script that saves and loads structured data from a JSON file.",
+            "A JSON-backed Python script.",
+            search="Python JSON file read write beginner exercise",
+        )
+        cli_project = self._domain_candidate(
+            "project:python:todo-cli",
+            "Python Todo CLI project template",
+            "project_template",
+            ["cli", "todo", "project"],
+            "Build a tiny Todo command-line tool with add/list/done actions.",
+            "todo_cli.py with a README usage example.",
+            search="Python todo CLI beginner project argparse JSON",
+        )
+        readme = self._domain_candidate(
+            "practice:project:readme",
+            "README project packaging checklist",
+            "practice_bank",
+            ["README", "GitHub", "project packaging"],
+            "Write install, usage, demo output, and next-step sections for the project.",
+            "README.md that a recruiter can scan.",
+            search="software project README checklist beginner",
+        )
+        resume = self._matching_candidate(
+            existing,
+            ("resume", "interview", "portfolio", "project packaging"),
+            self._domain_candidate(
+                "practice:career:star",
+                "STAR resume bullet rewrite practice",
+                "practice_bank",
+                ["resume", "interview", "project packaging"],
+                "Rewrite project work into three result-oriented bullets and one interview story.",
+                "Three resume bullets and one interview answer outline.",
+                domain="career",
+                search="STAR resume bullet project rewrite examples",
+            ),
+        )
+        interview = self._domain_candidate(
+            "practice:python:interview",
+            "Python internship interview drill",
+            "practice_bank",
+            ["interview", "Python basics", "project explanation"],
+            "Answer six beginner Python questions and explain the Todo CLI project in three minutes.",
+            "Six Q&A notes and a three-minute project pitch.",
+            domain="career",
+            search="Python internship interview questions beginner project explanation",
+        )
+        api = self._domain_candidate(
+            "practice:python:http-api",
+            "Python public API JSON practice",
+            "practice_bank",
+            ["requests", "api", "json"],
+            "Call one public API, parse the JSON response, and save the useful fields.",
+            "api_fetch.py plus saved JSON sample.",
+            search="Python requests public API JSON beginner exercise",
+        )
+        return {
+            "control": control,
+            "data": data_structures,
+            "files": files_json,
+            "cli": cli_project,
+            "readme": readme,
+            "resume": resume,
+            "interview": interview,
+            "api": api,
+        }
+
+    def _build_python_internship_execution_draft(
+        self,
+        session: PlanningSessionResponse,
+        design: PlanDesignProposal,
+        resource_brief: ResourceBrief,
+    ) -> ExecutionPlanDraft:
+        start = datetime.fromisoformat(_context_date({})).date()
+        duration = max(21, _duration_days(session.user_input))
+        daily_minutes = _daily_available_minutes(session.user_need_contract) or 90
+        task_minutes = max(75, min(150, daily_minutes))
+        resources = self._python_internship_candidates(resource_brief)
+        tasks_spec = [
+            ("Set up Python and submit hello_python.py", "hello_python.py", resources["control"], resources["control"], ["python setup", "print", "terminal"]),
+            ("Finish if/for/function drills and commit control_flow_practice.py", "control_flow_practice.py", resources["control"], resources["control"], ["control flow", "functions", "loops"]),
+            ("Build list/dict practice scripts for internship basics", "data_structures_practice.py", resources["data"], resources["data"], ["list", "dict", "data structures"]),
+            ("Write a notes parser that reads and writes text files", "file_io_notes.py", resources["files"], resources["files"], ["file io", "strings", "error handling"]),
+            ("Save Todo data to JSON and reload it from disk", "todo_json_store.py", resources["files"], resources["cli"], ["json", "persistence", "data model"]),
+            ("Implement a Todo CLI with add/list commands", "todo_cli.py", resources["cli"], resources["cli"], ["cli", "project", "functions"]),
+            ("Add done/delete commands and basic error handling to Todo CLI", "todo_cli_v2.py", resources["cli"], resources["control"], ["error handling", "cli", "project iteration"]),
+            ("Call a public API and save a JSON sample for portfolio evidence", "api_fetch.py and api_sample.json", resources["api"], resources["files"], ["requests", "api", "json"]),
+            ("Refactor the project into clear files and add a usage demo", "python_todo_cli/ package with demo output", resources["cli"], resources["readme"], ["project structure", "demo", "packaging"]),
+            ("Write README.md with install, usage, screenshots, and next steps", "README.md", resources["readme"], resources["cli"], ["README", "GitHub", "documentation"]),
+            ("Prepare a GitHub repository checklist for the Python mini project", "GitHub repo checklist and commit plan", resources["readme"], resources["resume"], ["GitHub", "version control", "portfolio"]),
+            ("Write three internship resume bullets from the project", "three resume bullets", resources["resume"], resources["readme"], ["resume", "STAR", "internship"]),
+            ("Prepare six Python internship interview Q&A notes", "python_interview_qa.md", resources["interview"], resources["control"], ["interview", "Python basics", "project explanation"]),
+            ("Record a three-minute project walkthrough script", "project_pitch.md", resources["interview"], resources["resume"], ["communication", "interview", "portfolio"]),
+            ("Do a final review and produce an internship-ready action list", "internship_ready_review.md", resources["resume"], resources["interview"], ["review", "next actions", "applications"]),
+        ]
+        if duration < 28:
+            tasks_spec = tasks_spec[:10]
+        spacing = max(1, duration // max(1, len(tasks_spec) - 1))
+        tasks: list[ExecutionTask] = []
+        for index, (title, deliverable, primary, practice, knowledge) in enumerate(tasks_spec):
+            due = (start + timedelta(days=min(duration - 1, index * spacing))).isoformat()
+            fallback = self._ai_generated_candidate(f"Python internship task {index + 1}", index)
+            bundle = self._task_bundle(
+                primary,
+                practice,
+                fallback,
+                use_step="Use the named section or search keyword first, then produce the deliverable before reading more theory.",
+            )
+            tasks.append(
+                ExecutionTask(
+                    title=title,
+                    description="A concrete Python internship-prep step with a checkable artifact.",
+                    dueDate=due,
+                    estimatedMinutes=task_minutes if index < 10 else max(60, min(task_minutes, 120)),
+                    priority="high" if index < 8 else "medium",
+                    whyThisTaskMatters="It turns learning into portfolio or interview evidence instead of passive reading.",
+                    acceptanceCriteria=[
+                        f"{deliverable} exists and matches the task title.",
+                        "The output can be checked by running a command, reading the file, or reviewing the written answer.",
+                        "One blocker or next improvement is recorded for follow-up.",
+                    ],
+                    deliverable=deliverable,
+                    fallbackAdjustment="If stuck, reduce to a 30-minute version: finish the smallest runnable example and record the exact blocker.",
+                    knowledgePoints=knowledge,
+                    resourceBundle=bundle,
+                    resourceCoverage=ExecutionTaskResourceCoverage(
+                        status="partial" if resource_brief.coverage.status in {"weak", "missing"} else resource_brief.coverage.status,
+                        explanation="Resources are matched to each concrete Python internship task using docs, practice, project, README, resume, and interview assets.",
+                    ),
+                )
+            )
+        draft = ExecutionPlanDraft(
+            designId=design.design_id,
+            tasks=tasks,
+            reviewCadence="Review progress every 3 days: keep runnable code, update README notes, and trim tasks that exceed the available daily time.",
+            riskPlan=[
+                "If basics feel hard, keep the project scope but shrink each step to one runnable script.",
+                "If internship packaging feels early, still keep README/resume/interview tasks as lightweight drafts.",
+            ],
+            scheduleSummary=f"{duration} days with {len(tasks)} concrete Python internship tasks, paced around the user's available time.",
+            resourceCoverageSummary="Uses Python docs, practice bank, project template, README/GitHub packaging, resume bullets, and interview drills instead of repeating one resource.",
+            status="waiting_user_approval",
+        )
+        return self._attach_quality_report(draft, session)
+
+    def _build_general_execution_draft(
+        self,
+        session: PlanningSessionResponse,
+        design: PlanDesignProposal,
+        resource_brief: ResourceBrief,
+    ) -> ExecutionPlanDraft:
+        start = datetime.fromisoformat(_context_date({})).date()
+        duration = _duration_days(session.user_input)
+        candidates = resource_brief.resource_candidates or [self._ai_generated_candidate(session.user_input, 0)]
+        task_count = max(8, min(14, duration // 3 if duration >= 21 else len(design.phases) * 3))
+        tasks: list[ExecutionTask] = []
+        for index in range(task_count):
+            phase = design.phases[min(len(design.phases) - 1, index * len(design.phases) // task_count)]
+            candidate = candidates[index % len(candidates)]
+            practice = next((item for item in candidates[index:] + candidates[:index] if item.source_type in {"practice_bank", "project_template"}), candidate)
+            fallback = self._ai_generated_candidate(f"{phase.title} task {index + 1}", index)
+            due = (start + timedelta(days=min(duration - 1, index * max(1, duration // max(task_count - 1, 1))))).isoformat()
+            deliverable = f"{_resource_topic_from_goal(phase.expected_output)} artifact {index + 1}"
+            tasks.append(
+                ExecutionTask(
+                    title=f"{phase.title}: produce artifact {index + 1} with {candidate.domain or 'resource'} practice",
+                    description=phase.purpose,
+                    dueDate=due,
+                    estimatedMinutes=max(45, min(120, _daily_available_minutes(session.user_need_contract) or 60)),
+                    priority="high" if index < 3 else "medium",
+                    whyThisTaskMatters=phase.why_needed,
+                    acceptanceCriteria=[
+                        "Finish the named small practice or reading section.",
+                        "Create a checkable output file, note, script, or answer.",
+                        "Record one follow-up improvement.",
+                    ],
+                    deliverable=deliverable,
+                    fallbackAdjustment="If stuck, reduce to one example or one written answer and log the blocker.",
+                    knowledgePoints=candidate.topics or [candidate.domain or _resource_topic_from_goal(session.user_input)],
+                    resourceBundle=self._task_bundle(
+                        candidate,
+                        practice,
+                        fallback,
+                        use_step="Use only the relevant section or search keyword, then produce the deliverable.",
+                    ),
+                    resourceCoverage=ExecutionTaskResourceCoverage(
+                        status="partial" if resource_brief.coverage.status == "weak" else resource_brief.coverage.status,
+                        explanation=resource_brief.coverage.explanation,
+                    ),
+                )
+            )
+        draft = ExecutionPlanDraft(
+            designId=design.design_id,
+            tasks=tasks,
+            reviewCadence="Review every few days and keep each task tied to a checkable output.",
+            riskPlan=[
+                "If a task is too broad, reduce it to one concrete output.",
+                "If resources are hard, switch to the practice or fallback resource first.",
+            ],
+            scheduleSummary=f"{duration} days with {len(tasks)} concrete execution tasks.",
+            resourceCoverageSummary=resource_brief.coverage.explanation,
+            status="waiting_user_approval",
+        )
+        return self._attach_quality_report(draft, session)
+
+    def build_execution_draft(self, session: PlanningSessionResponse, design: PlanDesignProposal, resource_brief: ResourceBrief) -> ExecutionPlanDraft:
+        subject = _learning_plan_subject(session.user_need_contract, session.user_input).lower()
+        if "python" in subject and _is_internship_learning_plan(session.user_need_contract, session.user_input):
+            return self._build_python_internship_execution_draft(session, design, resource_brief)
+        return self._build_general_execution_draft(session, design, resource_brief)
+
+    def _attach_quality_report(self, draft: ExecutionPlanDraft, session: PlanningSessionResponse) -> ExecutionPlanDraft:
+        report = self._execution_quality_report(draft, session)
+        data = draft.model_dump(by_alias=True)
+        data["qualityReport"] = report.model_dump(by_alias=True)
+        data["qualityStatus"] = report.status
+        return ExecutionPlanDraft.model_validate(data)
+
+    def _execution_quality_report(self, draft: ExecutionPlanDraft, session: PlanningSessionResponse) -> ExecutionPlanQualityReport:
+        contract = session.user_need_contract
+        duration = max(1, _duration_days(session.user_input))
+        daily_minutes = _daily_available_minutes(contract)
+        total_minutes = sum(task.estimated_minutes for task in draft.tasks)
+        internship = _is_internship_learning_plan(contract, session.user_input)
+        task_text = "\n".join(_task_text(task) for task in draft.tasks).lower()
+        min_tasks = 12 if internship and duration >= 28 else (8 if duration >= 21 else 4)
+        if daily_minutes and daily_minutes >= 120 and duration >= 28:
+            min_minutes = min(1800, max(900, int(daily_minutes * duration * 0.25)))
+        else:
+            min_minutes = min_tasks * 45
+        generic_titles = [task.title for task in draft.tasks if _generic_task_title(task.title)]
+        concrete_deliverables = [task for task in draft.tasks if _has_concrete_deliverable(task)]
+        primary_titles = [_primary_resource_title(task) for task in draft.tasks if _primary_resource_title(task)]
+        most_common_primary = max((primary_titles.count(title) for title in set(primary_titles)), default=0)
+        resource_diverse = not primary_titles or most_common_primary <= max(2, len(draft.tasks) // 2)
+        internship_terms = ("readme", "github", "resume", "bullet", "interview", "\u7b80\u5386", "\u9762\u8bd5", "\u4f5c\u54c1", "\u9879\u76ee")
+        internship_fit = (not internship) or sum(1 for term in internship_terms if term in task_text) >= 3
+        checks = {
+            "goalAlignment": bool(draft.tasks and _learning_plan_subject(contract, session.user_input).lower() in task_text),
+            "timeFit": len(draft.tasks) >= min_tasks and total_minutes >= min_minutes,
+            "taskSpecificity": not generic_titles,
+            "resourceDiversity": resource_diverse,
+            "deliverableQuality": len(concrete_deliverables) >= max(1, int(len(draft.tasks) * 0.8)),
+            "internshipFit": internship_fit,
+        }
+        blockers: list[str] = []
+        warnings: list[str] = []
+        suggestions: list[str] = []
+        if not checks["goalAlignment"]:
+            blockers.append("Execution tasks do not clearly align with the user's learning goal.")
+            suggestions.append("Rewrite task titles and deliverables around the requested subject.")
+        if not checks["timeFit"]:
+            blockers.append("The plan is too sparse for the user's time horizon and availability.")
+            suggestions.append("Increase task count and total planned minutes, or ask the user to confirm a lighter plan.")
+        if not checks["taskSpecificity"]:
+            blockers.append("Some task titles are generic and not directly actionable.")
+            suggestions.append("Replace generic phase labels with concrete action + topic + output titles.")
+        if not checks["resourceDiversity"]:
+            blockers.append("More than half of the tasks reuse the same primary resource.")
+            suggestions.append("Match resources to the task topic: basics, project, README, resume, interview, or API as needed.")
+        if not checks["deliverableQuality"]:
+            blockers.append("Too many tasks lack concrete deliverables.")
+            suggestions.append("Each task should produce a file, repo update, README section, resume bullet, or interview answer.")
+        if not internship_fit:
+            blockers.append("The internship/job outcome is not reflected in project packaging, resume, GitHub, or interview tasks.")
+            suggestions.append("Add portfolio packaging, README/GitHub, resume bullet, and interview preparation tasks.")
+        if primary_titles and most_common_primary > 1:
+            warnings.append(f"Most repeated primary resource appears {most_common_primary} times.")
+        score = 100
+        score -= len(blockers) * 12
+        score -= max(0, min_tasks - len(draft.tasks)) * 2
+        score = max(0, min(100, score))
+        calendar_writable = not blockers and all(task.resource_coverage.status != "missing" for task in draft.tasks)
+        status = "passed" if calendar_writable and score >= 80 else ("blocked" if len(blockers) >= 4 else "needs_repair")
+        return ExecutionPlanQualityReport(
+            status=status,
+            score=score,
+            blockers=blockers,
+            warnings=warnings,
+            repairSuggestions=suggestions,
+            checks=ExecutionPlanQualityChecks(
+                goalAlignment=checks["goalAlignment"],
+                timeFit=checks["timeFit"],
+                taskSpecificity=checks["taskSpecificity"],
+                resourceDiversity=checks["resourceDiversity"],
+                deliverableQuality=checks["deliverableQuality"],
+                internshipFit=internship_fit if internship else None,
+                calendarWritable=calendar_writable,
+            ),
         )
 
     def _bundle_summary(self, bundle: TaskResourceBundle) -> str:
