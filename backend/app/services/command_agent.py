@@ -1471,11 +1471,23 @@ class CommandAgentService:
             yield from self._stream_planning_session_snapshot(thread_id, updated)
             return
         if action == "ready_to_write_status":
-            yield from self._stream_planning_session_snapshot(
+            summary = "Execution plan is already confirmed and ready for Calendar write."
+            yield self._planning_event(
                 thread_id,
-                session,
-                agents=[("Execution Planner Agent", "Execution plan is already confirmed and ready for calendar write.")],
+                "agent_decision",
+                session.session_id,
+                data={
+                    "agent": "Execution Planner Agent",
+                    "decision": "approve",
+                    "reason": summary,
+                    "confidence": 1,
+                    "inputArtifactIds": [],
+                    "outputArtifactIds": [],
+                    "userVisibleSummary": summary,
+                },
+                content=summary,
             )
+            yield self._planning_event(thread_id, "planning_session_status", session.session_id, status=session.status, content=session.status)
             return
         if action in {"revise_execution", "feedback"}:
             updated = service.revise_execution(session.session_id, request)

@@ -312,7 +312,19 @@ function CollapsiblePanel({
   );
 }
 
-function PlanningCardContent({ message, onSend, t }: { message: CommandThreadMessage; onSend: (value: string) => void; t: (key: string) => string }) {
+function PlanningCardContent({
+  message,
+  onSend,
+  t,
+  planningStatus,
+  actionsEnabled
+}: {
+  message: CommandThreadMessage;
+  onSend: (value: string) => void;
+  t: (key: string) => string;
+  planningStatus: string;
+  actionsEnabled: boolean;
+}) {
   const payload = payloadOf(message);
   if (message.kind === 'planning_session_started' || message.kind === 'planning_session_status') {
     return <PlanningSessionStatusCard status={String(payload.status || message.content || '')} t={t} />;
@@ -327,10 +339,10 @@ function PlanningCardContent({ message, onSend, t }: { message: CommandThreadMes
     return <ResourceBriefCard data={payload.data} t={t} />;
   }
   if (message.kind === 'plan_design_proposal') {
-    return <PlanDesignProposalCard data={payload.data} onSend={onSend} t={t} />;
+    return <PlanDesignProposalCard data={payload.data} onSend={onSend} t={t} planningStatus={planningStatus} actionsEnabled={actionsEnabled} />;
   }
   if (message.kind === 'execution_plan_draft') {
-    return <ExecutionPlanDraftCard data={payload.data} onSend={onSend} t={t} />;
+    return <ExecutionPlanDraftCard data={payload.data} onSend={onSend} t={t} planningStatus={planningStatus} actionsEnabled={actionsEnabled} />;
   }
   if (message.kind === 'learning_update') {
     return <LearningUpdateBadge data={payload.data} t={t} />;
@@ -378,7 +390,13 @@ function DeepPlanningCardGroup({
             t={t}
             className={`deep-planning-card-item ${message.kind || ''}`}
           >
-            <PlanningCardContent message={message} onSend={onSend} t={t} />
+            <PlanningCardContent
+              message={message}
+              onSend={onSend}
+              t={t}
+              planningStatus={status}
+              actionsEnabled={isLatest}
+            />
           </CollapsiblePanel>
         ))}
       </div>

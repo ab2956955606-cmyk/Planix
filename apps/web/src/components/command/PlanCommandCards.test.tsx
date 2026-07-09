@@ -215,6 +215,8 @@ const labels: Record<string, string> = {
   'command.reviseDesignMessage': 'Adjust direction',
   'command.confirmExecution': 'Confirm execution plan',
   'command.confirmExecutionMessage': 'Confirm execution plan',
+  'command.executionReadyToWrite': 'Execution plan confirmed; ready to write to Calendar',
+  'command.executionWrittenToCalendar': 'Execution plan written to Calendar',
   'command.feedbackTooHeavy': 'Too heavy',
   'command.feedbackTooHeavyMessage': 'The tasks are too heavy',
   'command.feedbackResourceHard': 'Resource too hard',
@@ -546,6 +548,46 @@ describe('Plan command cards', () => {
     expect(deriveDeepPlanningStatus(readyStatusOnly)).toBe('ready_to_write_calendar');
     expect(readyHtml).toContain('写入日历');
     expect(readyHtml).not.toContain('Confirm execution plan');
+  });
+
+  it('gates execution draft actions by planning group status', () => {
+    const sent: string[] = [];
+    const waiting = ExecutionPlanDraftCard({
+      t,
+      onSend: (value) => sent.push(value),
+      planningStatus: 'waiting_execution_approval',
+      data: { scheduleSummary: 'Ready for review.', resourceCoverageSummary: 'Resources available.', tasks: [] }
+    });
+    const waitingHtml = renderToStaticMarkup(waiting);
+    collectButtons(waiting).forEach((button) => button.props.onClick());
+    expect(waitingHtml).toContain('Confirm execution plan');
+    expect(sent).toEqual(['Confirm execution plan', 'The tasks are too heavy', 'The resource is too hard']);
+
+    sent.length = 0;
+    const ready = ExecutionPlanDraftCard({
+      t,
+      onSend: (value) => sent.push(value),
+      planningStatus: 'ready_to_write_calendar',
+      data: { status: 'approved', scheduleSummary: 'Ready for calendar.', resourceCoverageSummary: 'Resources available.', tasks: [] }
+    });
+    const readyHtml = renderToStaticMarkup(ready);
+    collectButtons(ready).forEach((button) => button.props.onClick());
+    expect(readyHtml).toContain('Execution plan confirmed; ready to write to Calendar');
+    expect(readyHtml).toContain('\u5199\u5165\u65e5\u5386');
+    expect(readyHtml).not.toContain('Confirm execution plan');
+    expect(sent).toEqual(['\u5199\u5165\u65e5\u5386']);
+
+    const historical = renderToStaticMarkup(
+      <ExecutionPlanDraftCard
+        t={t}
+        onSend={() => undefined}
+        planningStatus="waiting_execution_approval"
+        actionsEnabled={false}
+        data={{ scheduleSummary: 'Historical draft.', resourceCoverageSummary: 'Resources available.', tasks: [] }}
+      />
+    );
+    expect(historical).not.toContain('Confirm execution plan');
+    expect(historical).not.toContain('The tasks are too heavy');
   });
 
   it('auto-collapses historical deep planning groups and keeps the latest group expanded', () => {

@@ -5,6 +5,8 @@ type Translator = (key: string) => string;
 interface CardProps {
   data?: unknown;
   status?: string;
+  planningStatus?: string;
+  actionsEnabled?: boolean;
   onSend?: (value: string) => void;
   t: Translator;
 }
@@ -199,9 +201,10 @@ export function ResourceBriefCard({ data, t }: CardProps) {
   );
 }
 
-export function PlanDesignProposalCard({ data, onSend, t }: CardProps) {
+export function PlanDesignProposalCard({ data, onSend, t, planningStatus, actionsEnabled = true }: CardProps) {
   const raw = record(data);
   const phases = list(raw.phases);
+  const canAct = actionsEnabled && Boolean(onSend) && (!planningStatus || planningStatus === 'waiting_design_approval' || planningStatus === 'design_revision');
   return (
     <div className="command-inline-card wide plan-design-proposal">
       <div className="command-card-heading">
@@ -225,17 +228,22 @@ export function PlanDesignProposalCard({ data, onSend, t }: CardProps) {
           );
         })}
       </ul>
-      <div className="command-row-actions">
-        <button type="button" disabled={!onSend} onClick={() => onSend?.(t('command.confirmDesignMessage'))}>{t('command.confirmDesign')}</button>
-        <button type="button" disabled={!onSend} onClick={() => onSend?.(t('command.reviseDesignMessage'))}>{t('command.reviseDesign')}</button>
-      </div>
+      {canAct ? (
+        <div className="command-row-actions">
+          <button type="button" onClick={() => onSend?.(t('command.confirmDesignMessage'))}>{t('command.confirmDesign')}</button>
+          <button type="button" onClick={() => onSend?.(t('command.reviseDesignMessage'))}>{t('command.reviseDesign')}</button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function ExecutionPlanDraftCard({ data, onSend, t }: CardProps) {
+export function ExecutionPlanDraftCard({ data, onSend, t, planningStatus, actionsEnabled = true }: CardProps) {
   const raw = record(data);
   const tasks = list(raw.tasks);
+  const draftStatus = text(raw.status);
+  const effectiveStatus = planningStatus || (draftStatus === 'approved' ? 'ready_to_write_calendar' : draftStatus || 'waiting_execution_approval');
+  const canAct = actionsEnabled && Boolean(onSend);
   const toggleAllTasks = (event: MouseEvent<HTMLButtonElement> | undefined, open: boolean) => {
     if (!event?.currentTarget) return;
     const root = event.currentTarget.closest('.execution-plan-draft');
@@ -298,11 +306,29 @@ export function ExecutionPlanDraftCard({ data, onSend, t }: CardProps) {
           );
         })}
       </div>
-      <div className="command-row-actions">
-        <button type="button" disabled={!onSend} onClick={() => onSend?.(t('command.confirmExecutionMessage'))}>{t('command.confirmExecution')}</button>
-        <button type="button" disabled={!onSend} onClick={() => onSend?.(t('command.feedbackTooHeavyMessage'))}>{t('command.feedbackTooHeavy')}</button>
-        <button type="button" disabled={!onSend} onClick={() => onSend?.(t('command.feedbackResourceHardMessage'))}>{t('command.feedbackResourceHard')}</button>
-      </div>
+      {effectiveStatus === 'ready_to_write_calendar' ? (
+        <div className="command-row-actions">
+          <p className="command-action-hint">{t('command.executionReadyToWrite')}</p>
+          {canAct ? <button type="button" onClick={() => onSend?.(t('command.quickWriteCalendarMessage'))}>{t('command.quickWriteCalendar')}</button> : null}
+        </div>
+      ) : null}
+      {effectiveStatus === 'waiting_calendar_write_approval' ? (
+        <div className="command-row-actions">
+          <p className="command-action-hint">{t('command.waitingCalendarApproval')}</p>
+        </div>
+      ) : null}
+      {effectiveStatus === 'written_to_calendar' ? (
+        <div className="command-row-actions">
+          <p className="command-action-hint">{t('command.executionWrittenToCalendar')}</p>
+        </div>
+      ) : null}
+      {canAct && !['ready_to_write_calendar', 'waiting_calendar_write_approval', 'written_to_calendar'].includes(effectiveStatus) ? (
+        <div className="command-row-actions">
+          <button type="button" onClick={() => onSend?.(t('command.confirmExecutionMessage'))}>{t('command.confirmExecution')}</button>
+          <button type="button" onClick={() => onSend?.(t('command.feedbackTooHeavyMessage'))}>{t('command.feedbackTooHeavy')}</button>
+          <button type="button" onClick={() => onSend?.(t('command.feedbackResourceHardMessage'))}>{t('command.feedbackResourceHard')}</button>
+        </div>
+      ) : null}
     </div>
   );
 }

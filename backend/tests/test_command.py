@@ -720,9 +720,16 @@ def test_deep_planning_execution_confirmation_gate_and_ready_noop(client, monkey
         json={"mode": "auto", "threadId": thread_id, "message": "确认执行计划", "context": {"date": "2026-07-05"}},
     )
     repeat_events = _events(repeat)
+    repeat_types = [event["type"] for event in repeat_events]
     assert not any(event["type"] == "command_decision" for event in repeat_events)
     assert not any(event["type"] == "learning_update" for event in repeat_events)
     assert not any(event["type"] == "planning_session_started" for event in repeat_events)
+    assert "agent_decision" in repeat_types
+    assert "user_need_contract" not in repeat_types
+    assert "memory_insight_brief" not in repeat_types
+    assert "resource_brief" not in repeat_types
+    assert "plan_design_proposal" not in repeat_types
+    assert "execution_plan_draft" not in repeat_types
     assert any(
         event["type"] == "planning_session_status" and event["status"] == "ready_to_write_calendar"
         for event in repeat_events

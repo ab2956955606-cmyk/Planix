@@ -466,6 +466,8 @@ export const enUS: I18nNamespace = {
     reviseDesignMessage: 'Adjust the direction; make it more project-driven',
     confirmExecution: 'Confirm execution plan',
     confirmExecutionMessage: 'Confirm execution plan',
+    executionReadyToWrite: 'The execution plan is confirmed and ready to write to Calendar',
+    executionWrittenToCalendar: 'The execution plan has been written to Calendar',
     feedbackTooHeavy: 'Too heavy',
     feedbackTooHeavyMessage: 'The tasks are too heavy; lower the intensity',
     feedbackResourceHard: 'Resource too hard',

@@ -324,6 +324,8 @@ export const zhCN: I18nNamespace = {
     reviseDesignMessage: '调整方向，我想更项目驱动一点',
     confirmExecution: '确认执行计划',
     confirmExecutionMessage: '确认执行计划',
+    executionReadyToWrite: '执行计划已确认，可以写入日历',
+    executionWrittenToCalendar: '执行计划已写入日历',
     feedbackTooHeavy: '任务太重',
     feedbackTooHeavyMessage: '任务太重，请帮我降低强度',
     feedbackResourceHard: '资源太难',
