@@ -533,7 +533,7 @@ class ModelRouter:
                     replace(
                         result,
                         attempts=all_attempts,
-                        fallback_used=routed_settings.provider != primary_provider or bool(attempts),
+                        fallback_used=routed_settings.provider != primary_provider,
                         local_fallback_allowed=rule.local_fallback_enabled,
                     ),
                     None,
@@ -574,7 +574,7 @@ class ModelRouter:
             replace(
                 last_error,
                 attempts=tuple(attempts),
-                fallback_used=bool(attempts),
+                fallback_used=any(attempt.provider != primary_provider for attempt in attempts),
                 local_fallback_allowed=rule.local_fallback_enabled,
             ),
         )

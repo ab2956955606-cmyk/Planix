@@ -10,7 +10,7 @@ Portfolio-facing documentation version: `v3.0.0`. This is a presentation label f
 
 ## Current Phase
 
-The current phase is **Phase 7: Cognitive Planning OS** for P Mode. The canonical implementation lives under `backend/app/cognitive_planning`. Goal Intelligence, Reality, Evidence, Strategy, Execution, and Critic agents make independent model-backed judgments over typed artifacts; LangGraph coordinates transitions only. Users approve strategy and execution before Calendar preview. If any required model call fails or violates its contract, the session enters exact status `MODEL_UNAVAILABLE`, preserves understood facts, and must not expose a fabricated strategy, execution plan, critique pass, or Calendar action. Existing Planning Session APIs/events, Phase 6 compatibility code, Workbench Runtime, Dashboard Runtime, and Goals remain compatible.
+The architecture boundary remains **Phase 7: Cognitive Planning OS** for P Mode, with the **Phase 7.1 Goal Understanding + Cognitive UX** refinement completed inside it. The canonical Cognitive OS implementation lives under `backend/app/cognitive_planning`. Goal Intelligence, Reality, Evidence, Strategy, Execution, and Critic agents make independent model-backed judgments over typed artifacts; LangGraph coordinates transitions only. Users approve strategy and execution before Calendar preview. If any required formal-planning model call fails or violates its contract, the session enters exact status `MODEL_UNAVAILABLE`, preserves understood facts, and must not expose a fabricated strategy, execution plan, critique pass, or Calendar action. Existing Planning Session APIs/events, Phase 6 compatibility code, Workbench Runtime, Dashboard Runtime, and Goals remain compatible.
 
 Allowed in this phase:
 
@@ -24,6 +24,12 @@ Allowed in this phase:
 - Keep P Mode Codex-like: outputs appear as inline conversation cards, not as a fixed workspace preview panel.
 - Keep P Mode defaulting to `auto`: normal commands remain conversational, planning requests enter the active Planning Session, and `PLANIX_COGNITIVE_MODE=true` selects Cognitive OS. Forced `chat` remains non-executing; manual `workbench` may still use the old Runtime/hidden-draft path.
 - Keep P Mode context thread-local: recent user/assistant text from the current thread may inform chat and planning, but new chats must not inherit prior thread context.
+- Let Phase 7.1 run a model-backed `GoalUnderstandingResult` before generic `CommandDecision` routing for new `auto`-mode input. The only intent states are `clear_goal`, `ambiguous_goal`, `normal_chat`, and `command`; there is no goal-understanding `unknown` state.
+- Treat destination-only goals such as `我要去北京` and `我要去乌鲁木齐` as `ambiguous_goal`: preserve the literal location, ask for purpose, and never infer travel or select a local travel template from the city name alone.
+- Keep `extract_obvious_goal_facts` literal-only for explicit locations, dates, durations, time expressions, skills, and constraints. It must not assign domains or semantic purpose, and the `goal_understanding` model route must keep semantic local fallback disabled.
+- Treat every non-empty `consistencyWarnings` list as a planning blocker. An incompatible purpose such as `学滑雪` plus `做项目` must remain unresolved and must not be stored as a project, portfolio, or README outcome.
+- Keep default P Mode to one planning overview with Current Stage, Current Understanding, Important Decisions, Next Action, friendly stage names, and one collapsed five-step planning process. Raw Agent names, handoffs, artifacts, model usage, routing, and fallback diagnostics require the persisted Advanced Debug Mode preference and remain hidden by default.
+- Persist surfaced `goal_understanding` cards in `command_messages`, stream them as the additive `goal_understanding` event, and restore them through command-thread replay.
 - Let cognitive P Mode write Calendar plans only after explicit strategy approval, explicit execution approval, a writable independent critique, deterministic Calendar guards, `command_actions`, `command_approvals`, and PermissionGate.
 - Let P Mode refine tasks in the current hidden `calendar_plan` draft through the existing planning refinement service. Refinement results stay in the command draft until the user writes the plan to Calendar.
 - Let P Mode query Calendar plans only through inline `plan_search_results` cards without running Runtime or creating a draft.
@@ -58,6 +64,9 @@ Forbidden in this phase:
 - Implementing model voting, dynamic model lists, WriteIntent/Undo, operation logs, or direct memory-to-plan writes in Phase 4.9B.1.
 - Generating a formal Phase 6 strategy, execution blueprint, critique pass, or Calendar-ready plan from deterministic templates when the model is unavailable.
 - Using domain templates, fixed domain question banks, static resource catalogs, or local fallback plans to make Phase 7 planning decisions.
+- Mapping a literal city, skill, date, duration, or constraint to semantic intent locally, or routing a city-only goal to `unknown`/travel fallback instead of asking its purpose.
+- Allowing a non-empty `consistencyWarnings` result to start formal planning or silently accepting its incompatible purpose.
+- Showing raw Agent/handoff/artifact/model-routing/fallback details in default P Mode without the persisted Advanced Debug Mode setting.
 - Converting `MODEL_UNAVAILABLE` into an ordinary clarification or a local plan. Only retry/model-settings guidance is allowed until a model-backed stage succeeds.
 - Letting LangGraph own business decisions, hidden reasoning, or durable product state. It coordinates nodes; Planix contracts and SQLite remain the source of truth.
 - Allowing a strategy to bypass user approval, an execution blueprint to bypass user approval, or a critic failure to bypass the Calendar gate.
@@ -72,6 +81,8 @@ Forbidden in this phase:
 - Agent flow state: `apps/web/src/store/agentFlowStore.ts`.
 - Command Agent UI: `apps/web/src/pages/CommandPage.tsx` and `apps/web/src/components/command`.
 - Command Agent state: `apps/web/src/stores/commandAgentStore.ts`.
+- Phase 7.1 goal understanding: `backend/app/services/goal_understanding.py` and `GoalUnderstandingResult` in `backend/app/schemas.py`.
+- Phase 7.1 P Mode overview/debug disclosure: `apps/web/src/components/command/PlanningOverviewCard.tsx`, `AgentThread.tsx`, Settings, and the persisted `planix_advanced_agent_trace` preference.
 - Desktop shell: Tauri v2 in `apps/desktop`.
 - Backend: FastAPI in `backend/app`.
 - Database: SQLite with FTS5/BM25 for local RAG.
@@ -162,7 +173,7 @@ There is no compatibility fallback for old names or old environment variables.
 - P Workspace is an internal draft/audit concept, not a foreground layout. Phase 4.4 may write hidden `calendar_plan` drafts and Calendar write actions only.
 - The right-side P conversation drawer is allowed for thread history and deletion only. It must not become a fixed workspace preview or persistent draft panel.
 - Command mode is a single `auto | chat | workbench` value. Do not represent it with separate boolean flags.
-- Auto mode is the P default. Active Cognitive OS sessions and clear goal-shaped planning requests preempt generic `CommandDecision`; other commands still use the LLM-first router. Auto planning enters Cognitive OS and must not run legacy Runtime or create a hidden draft. Forced `chat` mode does not execute commands, and manual `workbench` mode still forces legacy Runtime planning.
+- Auto mode is the P default. For new routing input, `GoalUnderstandingResult` runs before generic `CommandDecision`: `clear_goal` enters Cognitive OS, `ambiguous_goal` asks its `nextQuestion`, `normal_chat` stays conversational, and `command` continues to the LLM-first command router. Active Planning Session follow-ups keep their existing continuation path. Auto planning must not run legacy Runtime or create a hidden draft. Forced `chat` mode does not execute commands, and manual `workbench` mode still forces legacy Runtime planning.
 - Workbench planning should include current-thread context in the backend Runtime input so follow-up phrases like "帮我做个规划" can inherit the current topic. Do not include messages from other threads.
 - After a valid Workbench draft is created, legacy P Mode replay may show the summary and full plan inline; Cognitive OS shows its user-facing artifacts instead.
 - Chat mode is a safety lock: it must not run Dashboard Runtime, create drafts, write Calendar data, or execute any instruction.
@@ -181,6 +192,8 @@ There is no compatibility fallback for old names or old environment variables.
 - Command table startup migrations must preserve old local SQLite data and add `command_actions.draft_id`, `command_actions.error_message`, and `command_approvals.decision` without destructive rebuilds.
 - P Mode Runtime execution cards should be grouped as one collapsible inline execution chain after output completes. The collapsed row should use a lightweight center arrow toggle, not a heavy gray trace panel. Do not reintroduce a fixed Trace panel in P Mode.
 - P Mode execution chain groups should blend into the page background instead of using a gray block.
+- Cognitive P Mode planning cards should aggregate into one default overview. Map internal session states to Understand Goal, Confirm Direction, Design Plan, Optimize Plan, Waiting Confirmation, Write Calendar, or Review & Learn; do not expose internal status identifiers in that overview.
+- The default planning-process disclosure is one collapsed five-step list: understand the goal, analyze user background, find relevant information, design the solution, and generate the execution plan. Technical cards and standalone model-routing diagnostics render only when Advanced Debug Mode is enabled.
 - Calendar month view should load all plans for the visible month so dates with plans are highlighted before the user clicks them.
 - Calendar full-plan clearing should prefer `DELETE /api/plans/all`; if an older backend returns 404, the frontend may fall back to deleting known plans one by one and must keep any failed deletions visible.
 - Settings model input is free text. Built-in recommendations may be provider-specific for DeepSeek, Kimi, Zhipu GLM, OpenAI, custom, and mock; do not restore legacy marketing model display names.
@@ -232,7 +245,7 @@ There is no compatibility fallback for old names or old environment variables.
 - Rust/Tauri streaming bridge must stay a thin pass-through; do not put Runtime state or business logic in Rust.
 - Settings maintenance endpoints under `/api/settings/*` may clear AI memory/cache only. They must not delete formal `plans`, Calendar data, Notes/materials, documents, or AI settings.
 - Phase 4.8 command endpoints expose `POST /api/command/chat`, `POST /api/command/approve`, `GET /api/command/threads`, `GET /api/command/thread/{thread_id}`, and `DELETE /api/command/thread/{thread_id}`. They store `command_threads`, `command_messages`, hidden `command_drafts`, Calendar and Notes write/patch `command_actions`, and `command_approvals`.
-- Phase 4.8 command streams and replay messages may include `command_decision`, `model_usage`, `clarify_question`, `memory_search_results`, `memory_write_preview`, and `memory_write_result` in addition to the existing Runtime, draft, Calendar write, plan search, and Calendar patch cards. Legacy `note_*` cards remain replay-compatible.
+- Phase 4.8 command streams and replay messages may include `command_decision`, `model_usage`, `clarify_question`, `memory_search_results`, `memory_write_preview`, and `memory_write_result` in addition to the existing Runtime, draft, Calendar write, plan search, and Calendar patch cards. Phase 7.1 additively streams and replays `goal_understanding` before route-specific planning or command events. Legacy `note_*` cards remain replay-compatible.
 - Phase 4.8.1 row action buttons are UI affordances only: they must send fixed natural-language messages such as `修改第 1 个计划` back through `/api/command/chat` and must not directly call Calendar or Notes APIs.
 - `refine_current_plan` is a command intent handled through `/api/command/chat`. It updates the current `command_drafts.payload_json.refinements`, emits inline refinement result cards, and does not write Calendar unless the user separately commands a Calendar write.
 - `query_plan` and `patch_calendar_plan` are command intents handled through `/api/command/chat`. They emit `plan_search_results`, `plan_patch_preview`, and `plan_patch_result` cards, and replay history must tolerate those card kinds.
@@ -266,6 +279,8 @@ Backend:
 python -m compileall backend
 .\.venv\Scripts\python.exe -m pytest backend\tests
 ```
+
+Phase 7.1 acceptance specifically verifies Beijing and Urumqi purpose clarification, same-thread follow-up into planning, skiing/project consistency blocking, literal-only extraction without travel meaning, `goal_understanding` stream/replay, one default planning overview with friendly stages and five collapsed steps, and Advanced Debug Mode-only technical disclosure.
 
 Demo reliability:
 

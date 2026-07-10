@@ -4,6 +4,7 @@ const DATA_KEY = 'planix_data_v2';
 const LEGACY_DATA_KEY = 'planix_data';
 const LANG_KEY = 'planix_lang';
 const PREFERENCE_KEY = 'planix_preferences';
+const ADVANCED_AGENT_TRACE_KEY = 'planix_advanced_agent_trace';
 
 export function loadData(): AppData {
   try {
@@ -62,4 +63,22 @@ export function loadPreferences(): string {
 
 export function savePreferences(value: string): void {
   localStorage.setItem(PREFERENCE_KEY, value);
+}
+
+export function loadAdvancedAgentTrace(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(ADVANCED_AGENT_TRACE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function saveAdvancedAgentTrace(value: boolean): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(ADVANCED_AGENT_TRACE_KEY, String(value));
+    }
+  } catch {
+    // UI preferences should never prevent P Mode from loading.
+  }
 }

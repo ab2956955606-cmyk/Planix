@@ -572,6 +572,7 @@ export type AutoModelStrategy =
   | 'knowledge_reasoning'
   | 'balanced';
 export type ModelRoutingTaskType =
+  | 'goal_understanding'
   | 'command_decision'
   | 'plan_generation'
   | 'task_refinement'

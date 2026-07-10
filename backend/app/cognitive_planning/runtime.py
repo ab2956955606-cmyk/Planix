@@ -123,10 +123,29 @@ class CognitiveOSRuntime(Phase6Runtime):
         previous = state.get("goal_model")
         domain = previous.domain if previous else ""
         user_model_memories = self.user_model.relevant(domain)
+        pre_extracted_facts = extract_obvious_facts(state.get("user_input", ""))
+        request_context = state.get("request_context", {})
+        prior_understanding = request_context.get("goalUnderstanding") if isinstance(request_context, dict) else None
+        if isinstance(prior_understanding, dict):
+            allowed = {
+                "intentState",
+                "understoodIntent",
+                "possibleDomains",
+                "knownFacts",
+                "uncertainties",
+                "consistencyWarnings",
+                "nextQuestion",
+                "confidence",
+            }
+            pre_extracted_facts["goalUnderstanding"] = {
+                key: prior_understanding[key]
+                for key in allowed
+                if key in prior_understanding
+            }
         payload = GoalModelingInput(
             conversationHistory=state.get("conversation_history", []),
             previousGoalModel=previous,
-            preExtractedFacts=extract_obvious_facts(state.get("user_input", "")),
+            preExtractedFacts=pre_extracted_facts,
             relevantMemoryHints=[
                 MemoryHint(
                     sourceId=item.id,

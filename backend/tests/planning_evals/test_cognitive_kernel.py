@@ -1677,7 +1677,37 @@ def test_phase7_canonical_critic_rules_enforce_execution_invariants(isolated_db)
         validate_execution_blueprint(duplicate)
 
 
-def test_phase7_p_mode_stream_is_user_facing_workspace_not_agent_log(client, monkeypatch):
+def test_phase7_goal_understanding_handoff_preserves_current_user_role_and_typed_context(isolated_db):
+    model = StubCognitiveModel()
+    runtime = CognitiveOSRuntime(model_client=model)
+    runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="phase7-understanding-handoff",
+            userInput="旅游",
+            context={
+                "goalUnderstanding": {
+                    "intentState": "clear_goal",
+                    "understoodIntent": "用户想去北京旅游。",
+                    "possibleDomains": ["travel"],
+                    "knownFacts": {"location": "北京", "purpose": "旅游"},
+                    "uncertainties": [],
+                    "consistencyWarnings": [],
+                    "confidence": 0.9,
+                }
+            },
+        )
+    )
+
+    goal_payload = next(payload for task_type, payload in model.calls if task_type == "planning_goal_model")
+    assert goal_payload["conversationHistory"] == [{"role": "user", "content": "旅游"}]
+    assert goal_payload["preExtractedFacts"]["goalUnderstanding"]["knownFacts"] == {
+        "location": "北京",
+        "purpose": "旅游",
+    }
+
+
+def test_phase7_p_mode_stream_keeps_user_artifacts_and_advanced_trace_data(client, monkeypatch):
     model = StubCognitiveModel()
 
     def complete_contract(_self, **kwargs):
@@ -1704,8 +1734,8 @@ def test_phase7_p_mode_stream_is_user_facing_workspace_not_agent_log(client, mon
         "planning_session_status",
     }.issubset(event_types)
     assert "command_decision" not in event_types
-    assert "agent_decision" not in event_types
-    assert "agent_message" not in event_types
+    assert "agent_decision" in event_types
+    assert "agent_message" in event_types
     assert "runtime_started" not in event_types
     assert "draft_created" not in event_types
     assert "user_need_contract" not in event_types
@@ -1713,7 +1743,7 @@ def test_phase7_p_mode_stream_is_user_facing_workspace_not_agent_log(client, mon
     assert "resource_brief" not in event_types
 
 
-def test_phase7_p_mode_model_unavailable_has_no_fake_plan_or_technical_trace(client, monkeypatch):
+def test_phase7_p_mode_model_unavailable_has_no_fake_plan_and_keeps_debug_diagnostics(client, monkeypatch):
     def unavailable(_self, *, stage: str, **_kwargs):
         raise PlanningModelUnavailable(
             stage,
@@ -1735,8 +1765,6 @@ def test_phase7_p_mode_model_unavailable_has_no_fake_plan_or_technical_trace(cli
     assert any(item.get("type") == "planning_session_status" and item.get("status") == "MODEL_UNAVAILABLE" for item in events)
     forbidden = {
         "command_decision",
-        "agent_decision",
-        "agent_message",
         "strategy_portfolio_ready",
         "execution_blueprint_ready",
         "runtime_started",
@@ -1744,3 +1772,5 @@ def test_phase7_p_mode_model_unavailable_has_no_fake_plan_or_technical_trace(cli
         "calendar_plan_preview",
     }
     assert not forbidden.intersection({item.get("type") for item in events})
+    assert any(item.get("type") == "agent_decision" for item in events)
+    assert any(item.get("type") == "agent_message" for item in events)

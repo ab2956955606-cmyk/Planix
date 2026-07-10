@@ -3026,6 +3026,139 @@ select:focus {
   background: rgba(127, 29, 29, 0.12);
 }
 
+.planning-overview-card {
+  gap: 18px;
+  border-color: rgba(45, 212, 191, 0.3);
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(13, 22, 38, 0.78));
+}
+
+.planning-overview-stage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.planning-overview-stage span,
+.planning-overview-card section h3 {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.planning-overview-stage strong {
+  color: #a7f3d0;
+  font-size: 15px;
+}
+
+.planning-overview-card section {
+  display: grid;
+  gap: 8px;
+}
+
+.planning-overview-card section h3,
+.planning-overview-card section p,
+.planning-overview-card section ul {
+  margin: 0;
+}
+
+.planning-overview-card section ul {
+  display: grid;
+  gap: 5px;
+  padding-left: 20px;
+  color: #dbeafe;
+}
+
+.planning-overview-goal {
+  color: #f8fafc;
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.planning-consistency-warning {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(251, 191, 36, 0.38);
+  border-radius: 8px;
+  background: rgba(120, 53, 15, 0.2);
+  color: #fde68a;
+}
+
+.planning-next-action {
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(79, 70, 229, 0.14);
+}
+
+.planning-process-summary {
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  padding-top: 12px;
+}
+
+.planning-process-summary summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  color: #e2e8f0;
+}
+
+.planning-process-summary summary span {
+  color: #a7f3d0;
+  font-size: 12px;
+}
+
+.planning-process-summary ol {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding-left: 24px;
+  color: #cbd5e1;
+}
+
+.planning-overview-history > .command-collapsible-body > .planning-overview-card {
+  margin: 0;
+}
+
+.advanced-debug-settings {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.advanced-debug-settings > p {
+  margin: 0;
+  color: #94a3b8;
+  line-height: 1.6;
+}
+
+.advanced-debug-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.advanced-debug-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: #6d5ef6;
+}
+
+.advanced-debug-error {
+  display: block;
+  margin-top: 6px;
+  color: #fca5a5;
+  overflow-wrap: anywhere;
+}
+
 .deep-planning-card-item > .command-collapsible-body > .command-inline-card {
   margin: 0;
 }

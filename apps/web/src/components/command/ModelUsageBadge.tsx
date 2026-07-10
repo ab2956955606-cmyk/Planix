@@ -39,6 +39,8 @@ function usageItems(value: unknown): ModelUsage[] {
 
 function taskLabel(taskType: string | undefined, t: (key: string) => string): string {
   switch (taskType) {
+    case 'goal_understanding':
+      return t('command.usageTaskGoalUnderstanding');
     case 'command_decision':
       return t('command.usageTaskDecision');
     case 'plan_generation':

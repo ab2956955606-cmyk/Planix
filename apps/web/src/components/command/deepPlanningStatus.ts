@@ -12,6 +12,15 @@ export type PlanningStatus =
   | 'learning_from_feedback'
   | 'MODEL_UNAVAILABLE';
 
+export type PlanningStage =
+  | 'understand_goal'
+  | 'confirm_direction'
+  | 'design_plan'
+  | 'optimize_plan'
+  | 'waiting_confirmation'
+  | 'write_calendar'
+  | 'review_learning';
+
 export const ACTIVE_PLANNING_STATUSES = new Set<PlanningStatus>([
   'needs_goal_clarification',
   'waiting_design_approval',
@@ -89,4 +98,30 @@ export function deriveDeepPlanningStatus(messages: CommandThreadMessage[]): Plan
   }
   const latest = explicit ?? execution ?? design ?? started;
   return latest && ACTIVE_PLANNING_STATUSES.has(latest) ? latest : undefined;
+}
+
+export function planningStageFromStatus(status: string | undefined, messages: CommandThreadMessage[] = []): PlanningStage {
+  const kinds = new Set(messages.map((message) => message.kind));
+  if (status === 'MODEL_UNAVAILABLE') {
+    if (kinds.has('execution_blueprint_ready') || kinds.has('execution_plan_draft') || kinds.has('critique_report_ready')) return 'optimize_plan';
+    if (kinds.has('strategy_portfolio_ready') || kinds.has('plan_design_proposal')) return 'design_plan';
+    if (kinds.has('evidence_pack_ready') || kinds.has('resource_brief') || kinds.has('reality_assessment_ready')) return 'design_plan';
+    return 'understand_goal';
+  }
+  if (status === 'waiting_design_approval') return 'confirm_direction';
+  if (status === 'design_revision' || status === 'execution_revision') return 'optimize_plan';
+  if (status === 'waiting_execution_approval') return 'waiting_confirmation';
+  if (status === 'ready_to_write_calendar' || status === 'waiting_calendar_write_approval' || status === 'written_to_calendar') return 'write_calendar';
+  if (status === 'learning_from_feedback') return 'review_learning';
+  if (status === 'needs_goal_clarification') return 'understand_goal';
+
+  if (kinds.has('planning_learning_updated') || kinds.has('learning_update')) return 'review_learning';
+  if (kinds.has('execution_blueprint_ready') || kinds.has('execution_plan_draft') || kinds.has('critique_report_ready')) return 'waiting_confirmation';
+  if (kinds.has('strategy_portfolio_ready') || kinds.has('plan_design_proposal')) return 'confirm_direction';
+  if (kinds.has('evidence_pack_ready') || kinds.has('resource_brief')) return 'design_plan';
+  return 'understand_goal';
+}
+
+export function planningStageTranslationKey(stage: PlanningStage): string {
+  return `command.planningStage${stage.split('_').map((part) => part[0].toUpperCase() + part.slice(1)).join('')}`;
 }

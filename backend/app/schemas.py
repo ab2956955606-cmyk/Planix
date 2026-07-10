@@ -67,8 +67,9 @@ PlanningAgentDecisionType = Literal[
 PlanningAgentMessageType = Literal["handoff", "revision_request", "block", "approval", "context_request"]
 
 
-ModelUsageMode = Literal["llm", "local_fallback"]
+ModelUsageMode = Literal["llm", "local_fallback", "model_unavailable"]
 ModelUsageTaskType = Literal[
+    "goal_understanding",
     "command_decision",
     "plan_generation",
     "task_refinement",
@@ -89,6 +90,7 @@ ModelUsageTaskType = Literal[
     "planning_learning",
 ]
 ModelRoutingTaskType = Literal[
+    "goal_understanding",
     "command_decision",
     "plan_generation",
     "task_refinement",
@@ -1519,6 +1521,7 @@ CommandActionTarget = Literal["calendar", "memory", "notes", "materials", "goals
 CommandActionOperation = Literal["read", "create", "update", "delete", "navigate", "run", "create_or_update_plans"]
 CommandActionRisk = Literal["read", "write", "delete", "dangerous"]
 CommandActionStatus = Literal["proposed", "waiting_approval", "running", "success", "failed", "rejected"]
+GoalUnderstandingIntentState = Literal["clear_goal", "ambiguous_goal", "normal_chat", "command"]
 CommandDecisionIntent = Literal[
     "create_plan",
     "save_plan_to_calendar",
@@ -1564,6 +1567,7 @@ CommandOutputKind = Literal[
     "calendar_plan_preview",
     "approval_request",
     "calendar_write_result",
+    "goal_understanding",
     "command_decision",
     "plan_search_results",
     "memory_search_results",
@@ -1589,6 +1593,24 @@ CommandOutputKind = Literal[
     "execution_result",
     "error",
 ]
+
+
+class GoalUnderstandingUncertainty(BaseModel):
+    field: str = Field(min_length=1)
+    impact: str = Field(min_length=1)
+
+
+class GoalUnderstandingResult(BaseModel):
+    intent_state: GoalUnderstandingIntentState = Field(alias="intentState")
+    understood_intent: str = Field(min_length=1, alias="understoodIntent")
+    possible_domains: list[str] = Field(default_factory=list, alias="possibleDomains")
+    known_facts: dict[str, Any] = Field(default_factory=dict, alias="knownFacts")
+    uncertainties: list[GoalUnderstandingUncertainty] = Field(default_factory=list)
+    consistency_warnings: list[str] = Field(default_factory=list, alias="consistencyWarnings")
+    next_question: str | None = Field(default=None, alias="nextQuestion")
+    confidence: float = Field(default=0, ge=0, le=1)
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CommandDecisionDateRange(BaseModel):

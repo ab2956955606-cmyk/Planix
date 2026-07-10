@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ...services.cognitive_planning.agents.goal_modeling_agent import extract_obvious_facts
-from ..contracts import GoalModelingInput, GoalUnderstandingArtifact
+from ..contracts import GoalModelingInput, GoalQuestion, GoalUnderstandingArtifact
 from .base import AgentResult, CognitiveModelClient
 
 
@@ -16,9 +16,31 @@ would materially change the strategy, which one to three questions have the high
 whether asking more would improve the plan enough to justify interrupting the user. Preserve exact hard
 constraints and important user wording. Fill possibleIntents, currentKnowledge, and uncertainties with concise
 user-visible statements. Every question must explain why it matters and what decision its answer changes.
+When preExtractedFacts.goalUnderstanding is present, treat it as the typed pre-routing projection: reconcile its
+known facts and resolved intent with the current user turn, but do not misattribute prior questions or hypotheses as
+new user claims and do not blindly copy it when the conversation contradicts it.
+Check whether a purpose, deliverable, or success signal is semantically compatible with the apparent activity and
+the rest of the user's facts. Never normalize, silently reinterpret, or accept/store an incompatible purpose. Put
+each mismatch in consistencyWarnings, stop before evidence, and ask the user to resolve the inconsistency. Do not
+inject software projects, portfolios, README work, or any other domain's success pattern into an unrelated goal.
 Stop asking when the goal is sufficiently reliable for a separate Reality Agent to assess it. Return only the
 requested JSON. Do not reveal hidden chain-of-thought.
 """.strip()
+
+
+def _consistency_question(payload: GoalModelingInput) -> GoalQuestion:
+    text = " ".join(turn.content for turn in payload.conversation_history if turn.role == "user")
+    if any("\u4e00" <= char <= "\u9fff" for char in text):
+        return GoalQuestion(
+            question="我注意到目标中的部分信息可能不一致。你最终希望实现的具体结果是什么？",
+            whyThisQuestionMatters="先解决这处不一致，才能选择与真实目标匹配的规划策略。",
+            expectedDecisionImpact="答案会改变目标解释、成功标准和规划方向。",
+        )
+    return GoalQuestion(
+        question="Some parts of the goal may be inconsistent. What specific result do you ultimately want?",
+        whyThisQuestionMatters="Resolving the mismatch is necessary before choosing a strategy that fits the real goal.",
+        expectedDecisionImpact="The answer changes the goal interpretation, success criteria, and planning direction.",
+    )
 
 
 class GoalIntelligenceAgent:
@@ -41,7 +63,11 @@ class GoalIntelligenceAgent:
         goal = result.artifact
         questions = goal.questions[:3]
         blocking = [item for item in goal.decision_relevant_unknowns if item.priority == "blocking"]
-        if blocking and goal.can_proceed_to_evidence:
+        if goal.consistency_warnings:
+            if not questions:
+                questions = [_consistency_question(payload)]
+            goal = goal.model_copy(update={"can_proceed_to_evidence": False, "questions": questions})
+        elif blocking and goal.can_proceed_to_evidence:
             goal = goal.model_copy(update={"can_proceed_to_evidence": False, "questions": questions})
         elif len(goal.questions) > 3:
             goal = goal.model_copy(update={"questions": questions})

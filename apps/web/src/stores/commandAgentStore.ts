@@ -11,6 +11,7 @@ import {
   type CommandChatEvent
 } from '../lib/api';
 import type { CommandMessage, CommandMode, CommandPermission, CommandThreadSummary } from '../types';
+import { loadAdvancedAgentTrace, saveAdvancedAgentTrace } from '../lib/storage';
 import { todayISO } from '../utils/date';
 
 export interface CommandThreadMessage {
@@ -18,7 +19,7 @@ export interface CommandThreadMessage {
   role: 'user' | 'assistant' | 'card';
   content: string;
   createdAt: number;
-  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'command_decision' | 'plan_search_results' | 'memory_search_results' | 'note_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'memory_write_preview' | 'memory_write_result' | 'note_write_preview' | 'note_write_result' | 'planning_session_started' | 'user_need_contract' | 'memory_insight_brief' | 'resource_brief' | 'plan_design_proposal' | 'execution_plan_draft' | 'learning_update' | 'agent_decision' | 'agent_message' | 'planning_session_status' | 'goal_model_updated' | 'reality_assessment_ready' | 'evidence_pack_ready' | 'strategy_portfolio_ready' | 'execution_blueprint_ready' | 'critique_report_ready' | 'planning_learning_updated' | 'model_usage' | 'clarify_question' | 'execution_result';
+  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'command_decision' | 'plan_search_results' | 'memory_search_results' | 'note_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'memory_write_preview' | 'memory_write_result' | 'note_write_preview' | 'note_write_result' | 'planning_session_started' | 'user_need_contract' | 'memory_insight_brief' | 'resource_brief' | 'plan_design_proposal' | 'execution_plan_draft' | 'learning_update' | 'agent_decision' | 'agent_message' | 'planning_session_status' | 'goal_understanding' | 'goal_model_updated' | 'reality_assessment_ready' | 'evidence_pack_ready' | 'strategy_portfolio_ready' | 'execution_blueprint_ready' | 'critique_report_ready' | 'planning_learning_updated' | 'model_usage' | 'clarify_question' | 'execution_result';
   status?: 'running' | 'success' | 'error';
   title?: string;
   draftId?: string;
@@ -33,6 +34,7 @@ type CommandAgentState = {
   threads: CommandThreadSummary[];
   permission: CommandPermission;
   mode: CommandMode;
+  advancedAgentTrace: boolean;
   sending: boolean;
   drawerOpen: boolean;
   loadingThreads: boolean;
@@ -45,6 +47,7 @@ let state: CommandAgentState = {
   threads: [],
   permission: 'low',
   mode: 'auto',
+  advancedAgentTrace: loadAdvancedAgentTrace(),
   sending: false,
   drawerOpen: false,
   loadingThreads: false
@@ -131,6 +134,7 @@ const CARD_KINDS = new Set([
   'agent_decision',
   'agent_message',
   'planning_session_status',
+  'goal_understanding',
   'goal_model_updated',
   'reality_assessment_ready',
   'evidence_pack_ready',
@@ -162,6 +166,11 @@ function toThreadMessage(message: CommandMessage): CommandThreadMessage {
 
 function setPermission(permission: CommandPermission) {
   updateState((current) => ({ ...current, permission }));
+}
+
+function setAdvancedAgentTrace(advancedAgentTrace: boolean) {
+  saveAdvancedAgentTrace(advancedAgentTrace);
+  updateState((current) => ({ ...current, advancedAgentTrace }));
 }
 
 function toggleChatMode() {
@@ -485,6 +494,16 @@ function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
       payload: { ...event }
     });
   }
+  if (event.type === 'goal_understanding') {
+    addMessage({
+      role: 'card',
+      kind: 'goal_understanding',
+      status: event.consistencyWarnings?.length ? 'error' : 'success',
+      title: t('command.goalUnderstanding'),
+      content: event.nextQuestion || String(event.understoodIntent || t('command.goalUnderstanding')),
+      payload: { ...event }
+    });
+  }
   if (event.type === 'user_need_contract') {
     const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
     addMessage({
@@ -714,6 +733,7 @@ function createStreamHandler(t: (key: string) => string) {
         event.type === 'agent_decision' ||
         event.type === 'agent_message' ||
         event.type === 'planning_session_status' ||
+        event.type === 'goal_understanding' ||
         event.type === 'goal_model_updated' ||
         event.type === 'reality_assessment_ready' ||
         event.type === 'evidence_pack_ready' ||
@@ -803,6 +823,7 @@ export function useCommandAgent() {
 
 export const commandAgentActions = {
   setPermission,
+  setAdvancedAgentTrace,
   toggleChatMode,
   toggleWorkbench,
   setDrawerOpen,

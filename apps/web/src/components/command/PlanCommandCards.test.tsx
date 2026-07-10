@@ -26,7 +26,7 @@ import {
   UserNeedContractCard
 } from './DeepPlanningCards';
 import { DeepPlanningActionBar } from './DeepPlanningActionBar';
-import { deriveDeepPlanningStatus } from './deepPlanningStatus';
+import { deriveDeepPlanningStatus, planningStageFromStatus } from './deepPlanningStatus';
 import { MemorySearchResultsCard } from './MemorySearchResultsCard';
 import { MemoryWritePreviewCard } from './MemoryWritePreviewCard';
 import { MemoryWriteResultCard } from './MemoryWriteResultCard';
@@ -172,6 +172,46 @@ const labels: Record<string, string> = {
   'command.planningSessionStatus': 'Planning status',
   'command.latestPlanningStep': 'Latest planning step',
   'command.planningProcessCollapsed': 'Planning process · collapsed',
+  'command.planningProcess': 'Planning process',
+  'command.planningStepsCompleted': '{count} steps completed',
+  'command.planningStepUnderstandGoal': 'Understand the goal',
+  'command.planningStepAnalyzeBackground': 'Analyze user context',
+  'command.planningStepFindInformation': 'Find relevant information',
+  'command.planningStepDesignSolution': 'Design the approach',
+  'command.planningStepGenerateExecution': 'Generate the execution plan',
+  'command.currentStage': 'Current Stage',
+  'command.currentUnderstanding': 'Current Understanding',
+  'command.importantDecisions': 'Important Decisions',
+  'command.nextAction': 'Next Action',
+  'command.goalUnderstanding': 'Goal understanding',
+  'command.knownFacts': 'Known facts',
+  'command.uncertainties': 'Needs confirmation',
+  'command.consistencyWarning': 'Goal consistency warning',
+  'command.planningPossibleDirections': 'Possible directions',
+  'command.planningFactLocation': 'Location',
+  'command.planningFactSkill': 'Target skill',
+  'command.planningFactPurpose': 'Purpose',
+  'command.planningDirectionTravel': 'Travel',
+  'command.planningDirectionCareer': 'Work or career',
+  'command.planningDirectionRelocation': 'Relocation',
+  'command.planningDirectionOther': 'Other',
+  'command.planningUnderstandingPending': 'Understanding your goal',
+  'command.noImportantDecisions': 'No important decisions yet.',
+  'command.planningStageUnderstandGoal': 'Understand Goal',
+  'command.planningStageConfirmDirection': 'Confirm Direction',
+  'command.planningStageDesignPlan': 'Design Plan',
+  'command.planningStageOptimizePlan': 'Optimize Plan',
+  'command.planningStageWaitingConfirmation': 'Await Confirmation',
+  'command.planningStageWriteCalendar': 'Write to Calendar',
+  'command.planningStageReviewLearning': 'Review and Learn',
+  'command.planningNextUnderstandGoal': 'Add the missing detail.',
+  'command.planningNextConfirmDirection': 'Confirm the direction.',
+  'command.planningNextDesignPlan': 'Wait for the design.',
+  'command.planningNextOptimizePlan': 'Review the revision.',
+  'command.planningNextWaitingConfirmation': 'Confirm the execution plan.',
+  'command.planningNextWriteCalendar': 'Write the plan to Calendar.',
+  'command.planningNextReviewLearning': 'Review the feedback.',
+  'command.source': 'Source',
   'command.hiddenDraftCollapsed': 'Hidden draft · collapsed',
   'command.planningCardMemorySummary': 'Memory hits',
   'command.resources': 'resources',
@@ -311,6 +351,16 @@ function collectButtons(node: ReactNode): ReactElement[] {
 }
 
 describe('Plan command cards', () => {
+  it('maps model-unavailable to the latest completed planning stage', () => {
+    expect(planningStageFromStatus('MODEL_UNAVAILABLE', [])).toBe('understand_goal');
+    expect(planningStageFromStatus('MODEL_UNAVAILABLE', [{
+      id: 'strategy', role: 'card', kind: 'strategy_portfolio_ready', content: '', createdAt: 1
+    }])).toBe('design_plan');
+    expect(planningStageFromStatus('MODEL_UNAVAILABLE', [{
+      id: 'execution', role: 'card', kind: 'execution_blueprint_ready', content: '', createdAt: 1
+    }])).toBe('optimize_plan');
+  });
+
   it('renders cognitive planning artifacts as user-readable cards', () => {
     const goalHtml = renderToStaticMarkup(<GoalModelCard data={{
       goalStatement: '安全掌握基础游泳能力',
@@ -787,9 +837,13 @@ describe('Plan command cards', () => {
     );
 
     expect(html).toContain('Planning process · collapsed');
-    expect(html).toContain('Latest planning step');
+    expect(html).toContain('Current Stage');
+    expect(html).toContain('Confirm Direction');
+    expect(html).toContain('Planning process');
+    expect(html).toContain('4 steps completed');
     expect(html).toContain('New strategy');
     expect(html).not.toContain('Old strategy');
+    expect(html).not.toContain('waiting_design_approval');
   });
 
   it('hides technical agent trace cards from the cognitive planning workspace', () => {
@@ -841,6 +895,79 @@ describe('Plan command cards', () => {
     expect(html).toContain('Evidence route');
     expect(html).not.toContain('Agent decision');
     expect(html).not.toContain('technical trace detail hidden until expanded');
+
+    const advancedHtml = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} advancedAgentTrace t={t} />
+    );
+    expect(advancedHtml).toContain('Context &amp; Evidence Agent');
+    expect(advancedHtml).toContain('technical trace detail hidden until expanded');
+    expect(advancedHtml).toContain('waiting_design_approval');
+  });
+
+  it('aggregates goal understanding, consistency warnings, and the next question without debug details', () => {
+    const messages = [{
+      id: 'goal-understanding',
+      role: 'card' as const,
+      kind: 'goal_understanding' as const,
+      content: '',
+      createdAt: 1,
+      payload: {
+        sessionId: 'goal-session',
+        intentState: 'ambiguous_goal',
+        understoodIntent: 'Go to Beijing',
+        possibleDomains: ['travel', 'career', 'relocation'],
+        knownFacts: { location: 'Beijing' },
+        uncertainties: [{ field: 'purpose', impact: 'Changes the planning strategy' }],
+        consistencyWarnings: ['The stated purpose does not match the skiing goal.'],
+        nextQuestion: 'What is the main purpose of going to Beijing?',
+        confidence: 0.72,
+        source: 'llm',
+        modelUsage: { provider: 'deepseek', model: 'deepseek-chat', taskType: 'goal_understanding' }
+      }
+    }];
+    const html = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
+    );
+    expect(html).toContain('Current Stage');
+    expect(html).toContain('Understand Goal');
+    expect(html).toContain('Go to Beijing');
+    expect(html).toContain('Location: Beijing');
+    expect(html).toContain('Purpose — Changes the planning strategy');
+    expect(html).not.toContain('purpose — Changes the planning strategy');
+    expect(html).toContain('Goal consistency warning');
+    expect(html).toContain('The stated purpose does not match the skiing goal.');
+    expect(html).toContain('What is the main purpose of going to Beijing?');
+    expect(html).toContain('1 steps completed');
+    expect(html).not.toContain('ambiguous_goal');
+    expect(html).not.toContain('deepseek-chat');
+
+    const advancedHtml = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} advancedAgentTrace t={t} />
+    );
+    expect(advancedHtml).toContain('ambiguous_goal');
+    expect(advancedHtml).toContain('deepseek-chat');
+  });
+
+  it('hides standalone decision and model-routing diagnostics unless advanced trace is enabled', () => {
+    const messages = [
+      { id: 'understanding', role: 'card' as const, kind: 'goal_understanding' as const, content: '', createdAt: 0, payload: { intentState: 'command', understoodIntent: 'Operational calendar query', source: 'llm' } },
+      { id: 'decision', role: 'card' as const, kind: 'command_decision' as const, content: '', createdAt: 1, payload: { intent: 'query_plan', source: 'local_fallback' } },
+      { id: 'usage', role: 'card' as const, kind: 'model_usage' as const, content: '', createdAt: 2, payload: { usage: { provider: 'deepseek', model: 'deepseek-chat', attempts: [{ provider: 'kimi', status: 'error', errorType: 'timeout' }] }, feature: 'goal_understanding', source: 'model_unavailable', error: 'Goal understanding model unavailable' } }
+    ];
+    const defaultHtml = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
+    );
+    expect(defaultHtml).not.toContain('deepseek-chat');
+    expect(defaultHtml).not.toContain('Local fallback rule');
+    expect(defaultHtml).not.toContain('Operational calendar query');
+
+    const advancedHtml = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} advancedAgentTrace t={t} />
+    );
+    expect(advancedHtml).toContain('deepseek-chat');
+    expect(advancedHtml).toContain('Local fallback rule');
+    expect(advancedHtml).toContain('Operational calendar query');
+    expect(advancedHtml).toContain('Goal understanding model unavailable');
   });
 
   it('renders an honest model-unavailable state without a fake plan', () => {

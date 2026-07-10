@@ -6,6 +6,8 @@ Planix is an AI application portfolio project. The portfolio-facing documentatio
 
 The current focus is **Phase 7: Cognitive Planning OS** for P Mode. With `PLANIX_COGNITIVE_MODE=true`, planning requests use typed, model-backed Goal Intelligence, Reality, Evidence, Strategy, Execution, Critic, and feedback-learning stages. LangGraph coordinates transitions but does not make planning decisions. Planix persists canonical artifacts and evidence-backed User Model Memory in SQLite, derives legacy Planning Session snapshots for compatibility, and keeps Calendar behind explicit strategy/execution gates, deterministic guards, independent critique, action preview, and PermissionGate. A required model failure produces exact status `MODEL_UNAVAILABLE`; it must never silently become a template plan. Dashboard Runtime, Goals, Workbench legacy Runtime, and old replay events remain compatible.
 
+**Phase 7.1 Goal Understanding + Cognitive UX is complete within that Phase 7 boundary.** It adds model-backed pre-routing goal understanding, ambiguity and consistency gates, a replayable user-facing planning overview, and an opt-in persisted Advanced Debug Mode without migrating Dashboard Runtime, Goals, manual Workbench, or legacy Planning Session compatibility paths.
+
 The project is fully named Planix across frontend, backend, desktop, sidecar, installer, database path, environment variables, and documentation.
 
 ## Documentation Maintenance
@@ -24,6 +26,8 @@ The portfolio-facing documentation version is `v3.0.0`. Do not confuse this with
 - `apps/web/src/pages/CommandPage.tsx`: minimal P Mode route
 - `apps/web/src/components/command`: command composer, quick action bar, permission popover, workbench toggle, and inline thread/card rendering
 - `apps/web/src/stores/commandAgentStore.ts`: P Mode frontend state for `auto | chat | workbench`, permission selection, thread history drawer, command streaming, runtime mini cards, decision/usage cards, draft cards, approval cards, note cards, and Calendar write/patch result cards
+- `apps/web/src/components/command/PlanningOverviewCard.tsx`: Phase 7.1 user-facing stage/understanding/decision/next-action aggregation and collapsed five-step process
+- `apps/web/src/lib/storage.ts`: persisted Advanced Debug Mode preference (`planix_advanced_agent_trace`), default off
 - `apps/web/src/components/agent/flow`: Agent Flow Trace observability UI
 - `apps/web/src/store/agentFlowStore.ts`: Runtime event to Trace state mapping
 - `apps/web/src/i18n`: `zh-CN` / `en-US` text system
@@ -31,6 +35,7 @@ The portfolio-facing documentation version is `v3.0.0`. Do not confuse this with
 - `backend/app`: FastAPI backend
 - `backend/app/routers/command.py`: Phase 4.8/4.8.1 command chat, approval, thread list, thread replay, and thread deletion endpoints
 - `backend/app/services/command_agent.py`: command threads/messages, active Planning Session continuation, command routing, cognitive and legacy planning event adapters, Calendar/memory actions, approval handling, LLM chat, and replay-safe event persistence
+- `backend/app/services/goal_understanding.py`: Phase 7.1 model-backed `GoalUnderstandingResult`, literal fact extraction, ambiguity handling, and consistency gating before command routing
 - `backend/app/services/command_decision.py`: strict-JSON `CommandDecisionService`, fallback decision handling, and model usage payload helpers
 - `backend/app/services/model_provider.py`: internal AI SDK layer with `ModelRouter`, provider adapters, URL normalization, usage parsing, standard error types, token caps, and local fallback semantics
 - `backend/app/services/llm.py`: compatibility facade that preserves existing `LlmClient.complete()` / `stream_tokens()` behavior
@@ -61,6 +66,18 @@ The portfolio-facing documentation version is `v3.0.0`. Do not confuse this with
 - Strategy approval is persisted as `planning_sessions.approved_strategy_id`; request date/research context is persisted separately and passed to Context & Evidence.
 - Shadow comparison is explicit QA tooling only. `CognitivePlanningShadowRunner` isolates old/new thread IDs and persists safe metrics in `planning_shadow_runs`; normal P Mode must not double-call models.
 - Cognitive stage token limits include `PLANIX_REALITY_MAX_TOKENS` alongside the existing `PLANIX_*_MAX_TOKENS` variables documented in `.env.example`.
+
+## Phase 7.1 Goal Understanding and P Mode UX
+
+- For new default-`auto` routing input, a model-backed `GoalUnderstandingResult` runs before generic `CommandDecision`. Its only intent states are `clear_goal`, `ambiguous_goal`, `normal_chat`, and `command`: clear goals enter Cognitive OS, ambiguous goals ask `nextQuestion`, normal chat remains conversational, and operational commands continue through the existing command router. Active Planning Session follow-ups retain their existing continuation path.
+- A destination alone never supplies purpose. `我要去北京` and `我要去乌鲁木齐` preserve the literal city, return `ambiguous_goal`, and ask why the user is going; they must not become `unknown`, an inferred travel goal, or a local travel template.
+- Non-empty `consistencyWarnings` force `ambiguous_goal` and block formal planning. A statement such as `我要学滑雪 / 零基础 2小时 做项目` must ask the user to resolve the mismatch and must not persist project, portfolio, or README semantics as the skiing purpose.
+- `extract_obvious_goal_facts` may copy only explicit locations, dates, durations, time expressions, skills, and constraints. It must not infer a domain or purpose. Semantic local fallback is disabled for the `goal_understanding` route; unavailable or invalid model output must not fabricate an intent state or clarification question.
+- Surfaced understanding results stream as the additive `goal_understanding` NDJSON event, persist as `command_messages.kind="goal_understanding"`, and replay through the existing command-thread endpoint before later planning cards.
+- Default P Mode renders one overview headed Current Stage, Current Understanding, Important Decisions, and Next Action. `planningStageFromStatus` maps internal states to Understand Goal, Confirm Direction, Design Plan, Optimize Plan, Waiting Confirmation, Write Calendar, or Review & Learn; internal status identifiers stay out of the default overview.
+- The default overview contains one collapsed Planning Process with exactly five steps: understand the goal, analyze user background, find relevant information, design the solution, and generate the execution plan.
+- Raw Agent names, handoffs, artifacts, model usage, route attempts, and fallback details render only when the persisted Advanced Debug Mode setting is enabled. The default remains off, and the disclosure must not become separate foreground trace/workspace panels.
+- Targeted acceptance covers Beijing and Urumqi purpose clarification, same-thread purpose follow-up into planning, skiing/project consistency blocking, literal-only extraction, `goal_understanding` stream/replay, one default overview with friendly stages and five collapsed steps, and Advanced Debug Mode-only diagnostics.
 
 ## Runtime Shape
 
@@ -254,7 +271,7 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Medium-relevance history can inform the memory summary, but should not enter material search unless it shares clear goal-domain keywords.
 - Rust `stream_agent_runtime` must remain a thin pass-through bridge.
 - If true LLM streaming is unavailable, do not split a completed LLM response into fake token chunks; use Runtime step events plus final output or local structured fallback.
-- `/api/command/chat` streams Phase 4.8 command NDJSON events (`thread`, `command_decision`, `model_usage`, `clarify_question`, `assistant_delta`, `runtime_started`, `runtime_event`, `draft_created`, `summary`, `plan_detail`, `refinement_started`, `refined_tasks_result`, `calendar_plan_preview`, `approval_required`, `calendar_write_result`, `plan_search_results`, `memory_search_results`, `memory_write_preview`, `memory_write_result`, `plan_patch_preview`, `plan_patch_result`, `execution_result`, `done`, `error`) for P Mode. Legacy `note_*` events remain replay-compatible.
+- `/api/command/chat` retains the Phase 4.8 NDJSON protocol and additively streams Phase 7.1 `goal_understanding` (`thread`, `goal_understanding`, `command_decision`, `model_usage`, `clarify_question`, `assistant_delta`, `runtime_started`, `runtime_event`, `draft_created`, `summary`, `plan_detail`, `refinement_started`, `refined_tasks_result`, `calendar_plan_preview`, `approval_required`, `calendar_write_result`, `plan_search_results`, `memory_search_results`, `memory_write_preview`, `memory_write_result`, `plan_patch_preview`, `plan_patch_result`, `execution_result`, `done`, `error`). Legacy `note_*` and older Planning Session events remain replay-compatible.
 - `/api/command/approve` approves or rejects pending Calendar write actions. `/api/command/threads` lists command thread summaries, `/api/command/thread/{thread_id}` replays saved messages and may return the current hidden draft, and `DELETE /api/command/thread/{thread_id}` deletes command-thread data without deleting Calendar plans.
 - Phase 4.8 stores `command_threads`, `command_messages`, hidden `command_drafts`, Calendar and Memory write/patch `command_actions`, and `command_approvals`. Do not register `/api/command/drafts` or use `command_outputs` until a later phase explicitly enables them.
 - Phase 4.9B.1 is an acceptance and observability pass for task-level routing. Do not add model voting, dynamic model-list fetching, WriteIntent/Undo, operation logs, or direct memory-to-plan writes in this phase.
@@ -292,6 +309,8 @@ npm.cmd run build
 python -m compileall backend
 .\.venv\Scripts\python.exe -m pytest backend\tests
 ```
+
+Phase 7.1 targeted verification should include the Beijing/Urumqi ambiguity cases, destination follow-up context, skiing/project `consistencyWarnings`, literal-only extraction and disabled semantic fallback, `goal_understanding` stream/replay, default overview/stage/process rendering, and persisted Advanced Debug Mode disclosure.
 
 ```powershell
 .\scripts\verify-demo.ps1

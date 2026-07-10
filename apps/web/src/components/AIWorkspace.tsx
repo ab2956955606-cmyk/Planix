@@ -117,6 +117,7 @@ type RoutedProvider = Exclude<AiProvider, 'mock'>;
 const routableProviders: RoutedProvider[] = ['deepseek', 'kimi', 'zhipu_glm', 'openai', 'custom'];
 const defaultAutoProviderOrder: RoutedProvider[] = ['zhipu_glm', 'deepseek', 'kimi', 'openai', 'custom'];
 const routingTaskTypes: ModelRoutingTaskType[] = [
+  'goal_understanding',
   'command_decision',
   'plan_generation',
   'task_refinement',
@@ -134,6 +135,7 @@ const routingTaskTypes: ModelRoutingTaskType[] = [
   'planning_learning'
 ];
 const defaultTaskStrategies: Record<ModelRoutingTaskType, AutoModelStrategy> = {
+  goal_understanding: 'knowledge_reasoning',
   command_decision: 'fast_low_cost',
   plan_generation: 'structured_stable',
   task_refinement: 'fast_low_cost',
@@ -189,6 +191,7 @@ function autoStrategyLabel(strategy: AutoModelStrategy, t: (key: string) => stri
 
 function routingTaskLabel(taskType: ModelRoutingTaskType, t: (key: string) => string): string {
   const labels: Record<ModelRoutingTaskType, string> = {
+    goal_understanding: t('legacy.routingTaskGoalUnderstanding'),
     command_decision: t('legacy.routingTaskCommandDecision'),
     plan_generation: t('legacy.routingTaskPlanGeneration'),
     task_refinement: t('legacy.routingTaskRefinement'),
@@ -212,6 +215,7 @@ function routingTaskLabel(taskType: ModelRoutingTaskType, t: (key: string) => st
 
 function routingTaskDescription(taskType: ModelRoutingTaskType, t: (key: string) => string): string {
   const descriptions: Record<ModelRoutingTaskType, string> = {
+    goal_understanding: t('legacy.routingTaskGoalUnderstandingDesc'),
     command_decision: t('legacy.routingTaskCommandDecisionDesc'),
     plan_generation: t('legacy.routingTaskPlanGenerationDesc'),
     task_refinement: t('legacy.routingTaskRefinementDesc'),
@@ -278,7 +282,7 @@ function recommendedRoutingRules(): AiModelRoutingRule[] {
     taskType,
     primaryProvider: 'auto',
     fallbackProviders: ['deepseek'],
-    localFallbackEnabled: !taskType.startsWith('planning_')
+    localFallbackEnabled: taskType !== 'goal_understanding' && !taskType.startsWith('planning_')
   }));
 }
 
@@ -1986,7 +1990,7 @@ function ModelSettings(props: {
             <span>{t('legacy.routingLocalFallback')}</span>
           </div>
           {routingRules.map((rule) => {
-            const cognitiveTask = rule.taskType.startsWith('planning_');
+            const cognitiveTask = rule.taskType === 'goal_understanding' || rule.taskType.startsWith('planning_');
             return (
             <div className="routing-row" role="row" key={rule.taskType}>
               <span className="routing-task-copy">
@@ -2033,8 +2037,8 @@ function ModelSettings(props: {
                     localFallbackEnabled: event.target.checked
                   }))}
                 />
-                <span>{cognitiveTask
-                  ? t('legacy.cognitiveNoLocalFallback')
+                  <span>{cognitiveTask
+                  ? rule.taskType === 'goal_understanding' ? t('legacy.goalUnderstandingNoLocalFallback') : t('legacy.cognitiveNoLocalFallback')
                   : rule.localFallbackEnabled ? t('legacy.enabled') : t('legacy.disabled')}</span>
               </label>
             </div>

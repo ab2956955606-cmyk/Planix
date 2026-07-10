@@ -129,7 +129,22 @@ export type CommandChatEvent =
   | { type: 'execution_blueprint_ready'; sessionId: string; data: unknown }
   | { type: 'critique_report_ready'; sessionId: string; data: unknown }
   | { type: 'planning_learning_updated'; sessionId: string; data: unknown }
-  | { type: 'model_usage'; usage: unknown }
+  | {
+      type: 'goal_understanding';
+      sessionId?: string;
+      intentState?: string;
+      understoodIntent?: unknown;
+      possibleDomains?: unknown[];
+      knownFacts?: unknown;
+      uncertainties?: unknown[];
+      consistencyWarnings?: unknown[];
+      nextQuestion?: string;
+      confidence?: number;
+      source?: string;
+      error?: unknown;
+      modelUsage?: unknown;
+    }
+  | { type: 'model_usage'; usage: unknown; feature?: string; source?: string; error?: string }
   | { type: 'clarify_question'; question: string; decision?: unknown }
   | { type: 'execution_result'; actionId?: string; status: 'success' | 'failed' | 'rejected'; text: string }
   | { type: 'done'; threadId: string }

@@ -675,6 +675,35 @@ def test_model_router_returns_error_with_local_fallback_allowed_when_all_fail(mo
     assert [attempt.status for attempt in error.attempts] == ["error", "error"]
 
 
+def test_model_router_primary_only_failure_is_not_reported_as_fallback(monkeypatch):
+    def fake_rule(task_type, active_provider):
+        return ModelRoutingRuleConfig(task_type, "kimi", (), False)
+
+    def fake_settings(provider, active_settings=None):
+        return _settings(
+            provider=provider,
+            base_url=provider_default_base_url(provider),
+            model=provider_default_model(provider),
+            api_key=f"{provider}-key",
+        )
+
+    def fake_complete(self, request):
+        return (None, ModelCallError("nope", "timeout", provider=self.settings.provider, model=self.settings.model))
+
+    monkeypatch.setattr(model_provider, "get_model_routing_rule", fake_rule)
+    monkeypatch.setattr(model_provider, "get_effective_ai_settings_for_provider", fake_settings)
+    monkeypatch.setattr(model_provider.OpenAICompatibleProvider, "complete", fake_complete)
+
+    result, error = ModelRouter(
+        _settings(provider="kimi", base_url="https://api.moonshot.cn/v1", model="kimi-k2.7-code")
+    ).complete(_request(task_type="goal_understanding"))
+
+    assert result is None
+    assert error is not None
+    assert error.fallback_used is False
+    assert [(attempt.provider, attempt.status) for attempt in error.attempts] == [("kimi", "error")]
+
+
 def test_model_router_returns_final_error_when_local_fallback_disabled(monkeypatch):
     def fake_rule(task_type, active_provider):
         return ModelRoutingRuleConfig(task_type, "kimi", ("deepseek",), False)

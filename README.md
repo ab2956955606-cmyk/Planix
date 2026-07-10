@@ -36,6 +36,16 @@ Goal Intelligence
 
 `PLANIX_COGNITIVE_MODE=true` 启用新内核。旧 Planning Session 字段、历史事件和手动 Workbench Runtime 继续兼容，但它们不再是默认 P Mode 规划来源。P Mode 只显示用户能理解的目标、现实评估、证据、策略、执行与审查结果；Agent 决策表和内部消息仍保存在后端供审计，不作为主界面日志展示。
 
+### Phase 7.1 / Goal Understanding + Cognitive UX
+
+Phase 7.1 is a completed refinement inside the existing Phase 7 boundary. In default `auto` mode, a model-backed `GoalUnderstandingResult` runs before `CommandDecision` and returns one of four intent states: `clear_goal`, `ambiguous_goal`, `normal_chat`, or `command`. Clear goals enter Cognitive OS, ambiguous goals pause for one high-value clarification, normal chat stays conversational, and operational commands continue to the existing command router.
+
+Local extraction is literal only: it may preserve explicit locations, dates, durations, skills, and constraints, but it never assigns domain meaning. Semantic local fallback is disabled for the `goal_understanding` model route. A destination alone therefore does not imply travel: “我要去北京” and “我要去乌鲁木齐” retain the city, ask the user’s purpose, and do not become `unknown` or a local travel template. Non-empty `consistencyWarnings` also block planning; for example, “学滑雪 + 做项目” is surfaced as an incompatible purpose to clarify rather than being accepted as a project, portfolio, or README goal.
+
+Default P Mode now presents one user-facing overview with **Current Stage**, **Current Understanding**, **Important Decisions**, and **Next Action**. Internal statuses map to friendly stages—Understand Goal, Confirm Direction, Design Plan, Optimize Plan, Waiting Confirmation, Write Calendar, and Review & Learn—and one collapsed planning process summarizes five steps: understand the goal, analyze the user background, find relevant information, design the solution, and generate the execution plan. Raw Agent names, handoffs, artifacts, model usage, routing, and fallback diagnostics appear only after the persisted **Advanced Debug Mode** setting is enabled; it is off by default.
+
+The additive `goal_understanding` NDJSON event is saved with the command thread and restored on replay. Phase 7.1 verification covers Beijing and Urumqi purpose clarification, a same-thread destination follow-up, the skiing/project consistency block, stream/replay preservation, the default single-overview UI, friendly stage labels, the collapsed five-step process, and Advanced Debug Mode disclosure.
+
 ## Demo / 项目演示
 
 Planix 的核心演示路径是：在 P Mode 输入一个真实目标，例如“我想准备 AI 应用实习”或“9 月去新疆 14 天”，系统先展示对目标的理解与最值得确认的问题，再经过现实评估和证据综合给出策略。用户确认策略后才生成执行蓝图，独立 Critic 通过且用户再次确认后，才允许进入 Calendar 预览与 PermissionGate。手动 Workbench 仍可演示旧 Runtime 执行链，但它不是默认规划入口。
@@ -226,7 +236,7 @@ NDJSON Stream → Agent Flow Trace UI
 
 ### P Mode / Command Agent
 
-P Mode 默认停留在 `auto` 状态。普通查询、记忆和 Calendar 命令仍通过 `CommandDecision` 路由；规划请求进入 Cognitive Planning Session。启用 `PLANIX_COGNITIVE_MODE=true` 后，P Mode 依次形成目标理解、现实评估、证据包、策略方案、执行蓝图和独立审查。手动 `workbench` 继续保留旧 Runtime / hidden draft，仅用于兼容和调试。
+P Mode 默认停留在 `auto` 状态。Phase 7.1 先运行模型支持的 `GoalUnderstandingResult`，再让普通查询、记忆和 Calendar 操作进入 `CommandDecision`；清晰规划请求直接进入 Cognitive Planning Session，模糊目标则先追问。启用 `PLANIX_COGNITIVE_MODE=true` 后，P Mode 依次形成目标理解、现实评估、证据包、策略方案、执行蓝图和独立审查。手动 `workbench` 继续保留旧 Runtime / hidden draft，仅用于兼容和调试。
 
 Phase 4.8 keeps the existing `#/command` surface and streams command cards through `/api/command/chat` and `/api/command/approve`. Phase 4.8.2 adds a unified Memory Store and Memory Agent: Calendar plans represent formal executable plans, while memories represent long-term context that Planix can reference. P Mode now separates `query_plan` from `query_memory`; viewing plans searches Calendar only, while memory search reads the `memories` table and groups personal records, knowledge materials, planning archives, preference constraints, and review feedback.
 
@@ -398,6 +408,7 @@ Demo readiness check:
 - Phase 5 Human-in-the-loop Planning Sessions, agent artifacts/messages, active-session continuation, approval gates, and LangGraph orchestration facade.
 - Phase 6 Cognitive Planning Kernel: typed goal/evidence/strategy/execution/critique/learning artifacts, model-backed cognitive stages, bounded critic repair, deterministic Calendar guards, replayable cognitive cards, and tentative cross-session planning hypotheses.
 - Phase 7 Cognitive Planning OS: independent Goal/Reality/Evidence/Strategy/Execution/Critic judgment, evidence-backed User Model Memory, exact `MODEL_UNAVAILABLE`, and a user-facing P Mode planning workspace without template decisions or technical Agent logs.
+- Phase 7.1 Goal Understanding + Cognitive UX: pre-routing `GoalUnderstandingResult`, ambiguity and consistency gates, replayable `goal_understanding`, one friendly planning overview, and persisted Advanced Debug Mode for technical trace details.
 - Calendar-ready proposal 预览与确认写入。
 - Tauri 桌面端原型。
 - FastAPI sidecar 打包链路。

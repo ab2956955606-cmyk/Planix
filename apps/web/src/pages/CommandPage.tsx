@@ -28,6 +28,7 @@ export function CommandPage({ t }: CommandPageProps) {
         sending={command.sending}
         onApprove={(actionId, decision) => commandAgentActions.approveAction(actionId, decision, t)}
         onSend={(value) => commandAgentActions.sendCommand(value, t)}
+        advancedAgentTrace={command.advancedAgentTrace}
         t={t}
       />
       <CommandComposer

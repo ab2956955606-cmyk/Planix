@@ -85,6 +85,7 @@ class UserGoalModel(CognitiveContract):
     possible_intents: list[str] = Field(default_factory=list)
     current_knowledge: list[str] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
+    consistency_warnings: list[str] = Field(default_factory=list)
     user_language: list[str] = Field(default_factory=list)
     hard_constraints: list[Constraint] = Field(default_factory=list)
     soft_preferences: list[Preference] = Field(default_factory=list)
@@ -102,9 +103,9 @@ class UserGoalModel(CognitiveContract):
     @model_validator(mode="after")
     def blocked_goal_requires_a_user_question(self) -> "UserGoalModel":
         blocking_unknowns = [item for item in self.decision_relevant_unknowns if item.priority == "blocking"]
-        if blocking_unknowns and self.can_proceed_to_evidence:
+        if blocking_unknowns and self.can_proceed_to_evidence and not self.consistency_warnings:
             raise ValueError("blocking decision-relevant unknowns must stop evidence planning")
-        if not self.can_proceed_to_evidence and not self.questions:
+        if not self.can_proceed_to_evidence and not self.questions and not self.consistency_warnings:
             raise ValueError("a blocked goal model must ask at least one decision-relevant question")
         return self
 

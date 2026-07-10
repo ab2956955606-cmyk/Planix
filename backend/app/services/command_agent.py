@@ -20,6 +20,7 @@ from ..schemas import (
     CommandPermission,
     CommandThreadSummaryOut,
     CreatePlanningSessionRequest,
+    GoalUnderstandingResult,
     MemoryCreate,
     ModelUsage,
     MonthNotePut,
@@ -33,6 +34,7 @@ from ..schemas import (
 )
 from .command_decision import CommandDecisionResult, CommandDecisionService, local_fallback_usage, usage_from_llm_result
 from .cognitive_planning.compatibility import cognitive_events
+from .goal_understanding import GoalUnderstandingOutcome, GoalUnderstandingService
 from .langgraph_planning import get_deep_planning_orchestrator
 from .llm import LlmClient
 from .memory_agent import MemoryAgentService, detect_query_kinds
@@ -46,6 +48,7 @@ from .runtime import RuntimeOrchestrator
 
 CommandIntent = Literal[
     "normal_chat",
+    "goal_understanding_unavailable",
     "planning_request",
     "regenerate_draft",
     "modify_current_draft",
@@ -317,6 +320,12 @@ def _fallback_reply(message: str) -> str:
     if _looks_english(message):
         return "The model is temporarily unavailable. I can still discuss the request, but I will not execute actions or write data."
     return "模型暂时不可用。我可以先用本地回复继续讨论，但不会执行操作或写入数据。"
+
+
+def _goal_understanding_unavailable_reply(message: str) -> str:
+    if _looks_english(message):
+        return "I could not understand your goal reliably, so I did not start planning. Please retry or rephrase your request."
+    return "我暂时无法可靠理解你的目标，因此没有启动规划。请稍后重试，或换一种方式描述你的目标。"
 
 
 def _stream_failure_message(payload: CommandChatRequest, intent: CommandIntent | None = None) -> str:
@@ -1347,6 +1356,30 @@ class CommandAgentService:
     def _planning_agent_event(self, name: str, status: str, summary: str) -> str:
         return _ndjson({"type": "runtime_event", "name": name, "status": status, "summary": summary})
 
+    def _stream_goal_understanding(
+        self,
+        thread_id: str,
+        outcome: GoalUnderstandingOutcome,
+    ) -> Iterator[str]:
+        understanding = outcome.result
+        if not understanding:
+            return
+        event = understanding.model_dump(by_alias=True, exclude_none=True)
+        event["source"] = outcome.source
+        if outcome.error:
+            event["error"] = outcome.error
+        usage = _usage_payload(outcome.usage)
+        if usage and outcome.source == "llm":
+            event["modelUsage"] = usage
+        content = understanding.next_question or understanding.understood_intent or understanding.intent_state
+        self._add_planning_session_card(
+            thread_id,
+            "goal_understanding",
+            content,
+            event,
+        )
+        yield _ndjson({"type": "goal_understanding", **event})
+
     def _stream_planning_session_snapshot(
         self,
         thread_id: str,
@@ -1368,25 +1401,24 @@ class CommandAgentService:
             session.cognitive_metadata
             and session.cognitive_metadata.engine_version == "cognitive-os-v1"
         )
-        if not cognitive_os:
-            for decision in session.decisions:
-                data = decision.model_dump(by_alias=True, exclude_none=True)
-                yield self._planning_event(
-                    thread_id,
-                    "agent_decision",
-                    session.session_id,
-                    data=data,
-                    content=decision.user_visible_summary or decision.reason or decision.decision,
-                )
-            for message in session.messages:
-                data = message.model_dump(by_alias=True)
-                yield self._planning_event(
-                    thread_id,
-                    "agent_message",
-                    session.session_id,
-                    data=data,
-                    content=message.reason or message.message_type,
-                )
+        for decision in session.decisions:
+            data = decision.model_dump(by_alias=True, exclude_none=True)
+            yield self._planning_event(
+                thread_id,
+                "agent_decision",
+                session.session_id,
+                data=data,
+                content=decision.user_visible_summary or decision.reason or decision.decision,
+            )
+        for message in session.messages:
+            data = message.model_dump(by_alias=True)
+            yield self._planning_event(
+                thread_id,
+                "agent_message",
+                session.session_id,
+                data=data,
+                content=message.reason or message.message_type,
+            )
         for event_type, data in cognitive_events(session):
             summary_keys = {
                 "goal_model_updated": "goalStatement",
@@ -1419,14 +1451,26 @@ class CommandAgentService:
             yield self._planning_event(thread_id, "learning_update", session.session_id, data=data, content=session.learning_patch.insight)
         yield self._planning_event(thread_id, "planning_session_status", session.session_id, status=session.status, content=session.status)
 
-    def _stream_deep_planning_start(self, thread_id: str, payload: CommandChatRequest) -> Iterator[str]:
+    def _stream_deep_planning_start(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+        *,
+        goal_understanding: GoalUnderstandingResult | None = None,
+    ) -> Iterator[str]:
         service = get_deep_planning_orchestrator()
+        request_context = dict(payload.context) if isinstance(payload.context, dict) else {}
+        if goal_understanding:
+            request_context["goalUnderstanding"] = goal_understanding.model_dump(
+                by_alias=True,
+                exclude_none=True,
+            )
         session = service.create_session(
             CreatePlanningSessionRequest(
                 entryPoint="p_mode",
                 threadId=thread_id,
                 userInput=payload.message,
-                context=payload.context if isinstance(payload.context, dict) else {},
+                context=request_context,
             )
         )
         agents = [("User Advocate Agent", "Protected the user goal and checked whether planning can start.")]
@@ -1616,6 +1660,34 @@ class CommandAgentService:
                 lines.append(f"{role}: {content}")
         return "\n".join(lines)
 
+    def _latest_goal_understanding_context(self, thread_id: str) -> dict[str, Any] | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT payload_json
+                FROM command_messages
+                WHERE thread_id = ? AND role = 'card' AND kind = 'goal_understanding'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (thread_id,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = _json_object(row["payload_json"])
+        allowed = {
+            "intentState",
+            "understoodIntent",
+            "possibleDomains",
+            "knownFacts",
+            "uncertainties",
+            "consistencyWarnings",
+            "nextQuestion",
+            "confidence",
+        }
+        result = {key: payload[key] for key in allowed if key in payload}
+        return result or None
+
     def _draft_decision_summary(self, draft: CommandDraftOut | None) -> dict[str, Any] | None:
         if not draft:
             return None
@@ -1677,18 +1749,53 @@ class CommandAgentService:
             for row in rows
         ]
 
-    def _resolve_auto_decision(self, thread_id: str, payload: CommandChatRequest) -> tuple[CommandIntent, CommandDecision, str, ModelUsage | None, str]:
+    def _resolve_auto_decision(
+        self,
+        thread_id: str,
+        payload: CommandChatRequest,
+    ) -> tuple[
+        CommandIntent,
+        CommandDecision | None,
+        str,
+        ModelUsage | None,
+        str,
+        GoalUnderstandingOutcome | None,
+    ]:
         base_iso = _context_date(payload)
         current_draft = self._get_current_draft(thread_id)
+        thread_context = self._thread_context_summary(thread_id)
         pre_intent = resolve_command_intent(
             payload.message,
             detect_command_intent(payload.message),
             has_current_draft=current_draft is not None,
         )
+        goal_outcome = GoalUnderstandingService().understand(
+            payload.message,
+            thread_context=thread_context,
+            prior_understanding=self._latest_goal_understanding_context(thread_id),
+        )
+        understanding = goal_outcome.result
+        if not understanding:
+            return (
+                "goal_understanding_unavailable",
+                None,
+                goal_outcome.source,
+                goal_outcome.usage,
+                goal_outcome.error,
+                goal_outcome,
+            )
+        if understanding:
+            if understanding.intent_state == "ambiguous_goal":
+                return "clarify", None, "", None, "", goal_outcome
+            if understanding.intent_state == "clear_goal":
+                return "planning_request", None, "", None, "", goal_outcome
+            if understanding.intent_state == "normal_chat":
+                return "normal_chat", None, "", None, "", goal_outcome
+
         decision_result: CommandDecisionResult = CommandDecisionService().decide(
             payload.message,
             task_type=_decision_routing_task_type(pre_intent),
-            thread_context=self._thread_context_summary(thread_id),
+            thread_context=thread_context,
             current_draft=self._draft_decision_summary(current_draft),
             last_search_results=self._last_plan_search_results(thread_id),
             context_date=base_iso,
@@ -1697,13 +1804,14 @@ class CommandAgentService:
         )
         if decision_result.decision:
             resolved_intent = _decision_to_intent(decision_result.decision)
-            if pre_intent == "planning_request" and resolved_intent != "planning_request":
+            if resolved_intent == "planning_request":
                 return (
-                    "planning_request",
-                    _fallback_decision("planning_request", payload.message),
-                    "local_guardrail",
+                    "normal_chat",
+                    decision_result.decision,
+                    "goal_understanding_conflict",
                     decision_result.usage,
                     decision_result.error,
+                    goal_outcome,
                 )
             return (
                 resolved_intent,
@@ -1711,6 +1819,7 @@ class CommandAgentService:
                 decision_result.source,
                 decision_result.usage,
                 decision_result.error,
+                goal_outcome,
             )
 
         intent = resolve_command_intent(
@@ -1718,12 +1827,15 @@ class CommandAgentService:
             detect_command_intent(payload.message),
             has_current_draft=current_draft is not None,
         )
+        if intent == "planning_request":
+            intent = "normal_chat"
         return (
             intent,
             _fallback_decision(intent, payload.message),
             "local_fallback",
             decision_result.usage,
             decision_result.error,
+            goal_outcome,
         )
 
     def stream_chat(self, payload: CommandChatRequest) -> Iterator[str]:
@@ -1733,6 +1845,7 @@ class CommandAgentService:
         decision_source = ""
         decision_error = ""
         model_usage: ModelUsage | None = None
+        goal_understanding: GoalUnderstandingOutcome | None = None
         try:
             thread_id = self.ensure_thread(payload.thread_id, title=payload.message)
             if payload.mode == "workbench":
@@ -1755,7 +1868,14 @@ class CommandAgentService:
                         intent="planning_request",
                     )
                     return
-                intent, decision, decision_source, model_usage, decision_error = self._resolve_auto_decision(thread_id, payload)
+                (
+                    intent,
+                    decision,
+                    decision_source,
+                    model_usage,
+                    decision_error,
+                    goal_understanding,
+                ) = self._resolve_auto_decision(thread_id, payload)
             else:
                 intent = resolve_command_intent(
                     payload.message,
@@ -1770,6 +1890,7 @@ class CommandAgentService:
                 decision_source=decision_source,
                 decision_error=decision_error,
                 model_usage=model_usage,
+                goal_understanding=goal_understanding,
             )
         except AssertionError:
             raise
@@ -1790,9 +1911,24 @@ class CommandAgentService:
         decision_source: str = "",
         decision_error: str = "",
         model_usage: ModelUsage | None = None,
+        goal_understanding: GoalUnderstandingOutcome | None = None,
     ) -> Iterator[str]:
         user_message = self.add_message(thread_id, "user", payload.message)
         yield _ndjson({"type": "thread", "threadId": thread_id})
+
+        if goal_understanding and goal_understanding.result:
+            yield from self._stream_goal_understanding(thread_id, goal_understanding)
+        elif goal_understanding:
+            goal_usage = _usage_payload(goal_understanding.usage)
+            if goal_usage:
+                diagnostic = {
+                    "usage": goal_usage,
+                    "feature": "goal_understanding",
+                    "source": goal_understanding.source,
+                    "error": goal_understanding.error,
+                }
+                self.add_message(thread_id, "card", "", kind="model_usage", payload=diagnostic)
+                yield _ndjson({"type": "model_usage", **diagnostic})
 
         from ..cognitive_planning import use_cognitive_os
 
@@ -1836,12 +1972,30 @@ class CommandAgentService:
             return
 
         if payload.mode == "auto" and intent == "planning_request":
-            yield from self._stream_deep_planning_start(thread_id, payload)
+            yield from self._stream_deep_planning_start(
+                thread_id,
+                payload,
+                goal_understanding=(
+                    goal_understanding.result
+                    if goal_understanding
+                    and goal_understanding.result
+                    and goal_understanding.result.intent_state == "clear_goal"
+                    else None
+                ),
+            )
+            yield _ndjson({"type": "done", "threadId": thread_id})
+            return
+
+        if payload.mode == "auto" and intent == "goal_understanding_unavailable":
+            reply = _goal_understanding_unavailable_reply(payload.message)
+            self.add_message(thread_id, "assistant", reply)
+            yield _ndjson({"type": "assistant_delta", "text": reply})
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
         if payload.mode == "auto" and intent == "clarify":
-            yield from self._stream_clarify(thread_id, decision)
+            if not goal_understanding:
+                yield from self._stream_clarify(thread_id, decision)
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 

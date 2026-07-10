@@ -1,4 +1,5 @@
 import { AIWorkspace } from '../components/AIWorkspace';
+import { commandAgentActions, useCommandAgent } from '../stores/commandAgentStore';
 import type { AppliedPlan, AppData, GoalPlanResponse, Language, Plan, RefinedTask } from '../types';
 
 interface SettingsPageProps {
@@ -15,9 +16,25 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage(props: SettingsPageProps) {
+  const command = useCommandAgent();
   return (
     <section className="page-stack">
       <AIWorkspace {...props} section="settings" />
+      <section className="surface advanced-debug-settings" aria-labelledby="advanced-debug-title">
+        <div className="settings-title">
+          <span id="advanced-debug-title">{props.t('legacy.advancedDebugMode')}</span>
+          <strong>{command.advancedAgentTrace ? props.t('legacy.enabled') : props.t('legacy.disabled')}</strong>
+        </div>
+        <p>{props.t('legacy.advancedDebugHint')}</p>
+        <label className="advanced-debug-toggle">
+          <input
+            type="checkbox"
+            checked={command.advancedAgentTrace}
+            onChange={(event) => commandAgentActions.setAdvancedAgentTrace(event.target.checked)}
+          />
+          <span>{props.t('legacy.showAgentTrace')}</span>
+        </label>
+      </section>
     </section>
   );
 }

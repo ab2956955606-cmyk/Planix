@@ -33,6 +33,7 @@ export function GoalModelCard({ data, t }: Props) {
   const assumptions = items(raw.assumptions);
   const unknowns = items(raw.decisionRelevantUnknowns);
   const questions = items(raw.questions);
+  const consistencyWarnings = strings(raw.consistencyWarnings);
   const success = record(raw.successModel);
   const feasibility = record(raw.feasibilityJudgment);
   return (
@@ -49,6 +50,7 @@ export function GoalModelCard({ data, t }: Props) {
       {knownFacts.length ? <section><strong>{label(t, 'command.cognitiveUsedFacts', '本次使用的信息')}</strong><ul>{knownFacts.map((item, index) => <li key={index}>{value(item.statement)}<small>{value(item.sourceText)}</small></li>)}</ul></section> : null}
       {constraints.length ? <section><strong>{label(t, 'command.hardConstraints', '硬约束')}</strong><ul>{constraints.map((item, index) => <li key={index}>{value(item.statement)}</li>)}</ul></section> : null}
       {assumptions.length ? <section><strong>{label(t, 'command.cognitiveAssumptions', '当前假设')}</strong><ul>{assumptions.map((item, index) => <li key={index}>{value(item.statement)}{item.needsUserConfirmation ? ` · ${label(t, 'command.cognitiveNeedsConfirmation', '需要确认')}` : ''}</li>)}</ul></section> : null}
+      {consistencyWarnings.length ? <section className="planning-consistency-warning"><strong>{label(t, 'command.consistencyWarning', '目标一致性提醒')}</strong><ul>{consistencyWarnings.map((item) => <li key={item}>{item}</li>)}</ul></section> : null}
       {unknowns.length ? <section><strong>{label(t, 'command.cognitiveUnknowns', '仍不确定的信息')}</strong><ul>{unknowns.map((item, index) => <li key={index}><b>{value(item.description)}</b><small>{value(item.whyItChangesThePlan)}</small></li>)}</ul></section> : null}
       {questions.length ? <section><strong>{label(t, 'command.clarificationQuestions', '需要确认的问题')}</strong><ol>{questions.map((item, index) => <li key={index}>{value(item.question)}<small>{value(item.whyThisQuestionMatters)}</small></li>)}</ol></section> : null}
     </div>

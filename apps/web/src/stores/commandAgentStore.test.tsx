@@ -38,7 +38,20 @@ function renderMessageKinds(): string {
   return renderToStaticMarkup(<MessageKindsProbe />);
 }
 
+function AdvancedTraceProbe(): ReactElement {
+  const command = useCommandAgent();
+  return <span>{String(command.advancedAgentTrace)}</span>;
+}
+
 describe('commandAgentStore workbench mode', () => {
+  it('keeps advanced agent trace off by default and toggles it independently', () => {
+    commandAgentActions.setAdvancedAgentTrace(false);
+    expect(renderToStaticMarkup(<AdvancedTraceProbe />)).toContain('false');
+    commandAgentActions.setAdvancedAgentTrace(true);
+    expect(renderToStaticMarkup(<AdvancedTraceProbe />)).toContain('true');
+    commandAgentActions.setAdvancedAgentTrace(false);
+  });
+
   it('defaults to auto and only sends workbench after manual toggle', async () => {
     apiMocks.runCommandChat.mockResolvedValue(undefined);
     apiMocks.listCommandThreads.mockResolvedValue([]);
@@ -95,6 +108,19 @@ describe('commandAgentStore workbench mode', () => {
     apiMocks.runCommandChat.mockImplementationOnce(async (_payload, handlers) => {
       handlers.onEvent({ type: 'planning_session_started', sessionId: 'session-1', status: 'waiting_design_approval' });
       handlers.onEvent({
+        type: 'goal_understanding',
+        sessionId: 'session-1',
+        intentState: 'clear_goal',
+        understoodIntent: 'Learn Python',
+        possibleDomains: ['learning'],
+        knownFacts: { subject: 'Python' },
+        uncertainties: [],
+        consistencyWarnings: [],
+        nextQuestion: '',
+        confidence: 0.9,
+        source: 'llm'
+      });
+      handlers.onEvent({
         type: 'user_need_contract',
         sessionId: 'session-1',
         data: { interpretedGoal: 'Python plan', canMoveToDesign: true }
@@ -134,6 +160,7 @@ describe('commandAgentStore workbench mode', () => {
 
     const html = renderMessageKinds();
     expect(html).toContain('planning_session_started');
+    expect(html).toContain('goal_understanding');
     expect(html).toContain('user_need_contract');
     expect(html).toContain('memory_insight_brief');
     expect(html).toContain('resource_brief');

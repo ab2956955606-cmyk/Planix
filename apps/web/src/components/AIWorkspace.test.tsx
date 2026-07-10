@@ -60,6 +60,7 @@ const labels: Record<string, string> = {
   'legacy.routingNoFallback': 'No fallback',
   'legacy.routingLocalFallback': 'Local fallback',
   'legacy.cognitiveNoLocalFallback': 'No local fallback for deep planning',
+  'legacy.goalUnderstandingNoLocalFallback': 'No local semantic fallback for goal understanding',
   'legacy.routingMissingKey': 'Missing key',
   'legacy.saveRouting': 'Save routing',
   'legacy.savingRouting': 'Saving routing',
@@ -67,6 +68,7 @@ const labels: Record<string, string> = {
   'legacy.enabled': 'Enabled',
   'legacy.disabled': 'Disabled',
   'legacy.routingTaskCommandDecision': 'Intent',
+  'legacy.routingTaskGoalUnderstanding': 'Goal understanding',
   'legacy.routingTaskPlanGeneration': 'Plan generation',
   'legacy.routingTaskRefinement': 'Task refinement',
   'legacy.routingTaskCalendarPatch': 'Calendar patch',
@@ -83,6 +85,7 @@ const labels: Record<string, string> = {
   'legacy.routingTaskPlanningCritique': 'Cognitive critique',
   'legacy.routingTaskPlanningLearning': 'Cognitive learning',
   'legacy.routingTaskCommandDecisionDesc': 'Understands user intent',
+  'legacy.routingTaskGoalUnderstandingDesc': 'Understands ambiguity and consistency before routing',
   'legacy.routingTaskPlanGenerationDesc': 'Generates structuredPlan',
   'legacy.routingTaskRefinementDesc': 'Breaks tasks down',
   'legacy.routingTaskCalendarPatchDesc': 'Extracts calendar edits',
@@ -121,6 +124,9 @@ describe('AIWorkspace settings', () => {
     expect(html).toContain('DeepSeek API Key');
     expect(html).toContain('Model Routing');
     expect(html).toContain('Auto selection policy');
+    expect(html).toContain('Goal understanding');
+    expect(html).toContain('Understands ambiguity and consistency before routing');
+    expect(html).toContain('No local semantic fallback for goal understanding');
     expect(html).toContain('Auto select');
     expect(html).toContain('Plan generation');
     expect(html).toContain('Memory query');
