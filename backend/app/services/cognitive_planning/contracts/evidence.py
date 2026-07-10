@@ -33,6 +33,7 @@ class ResearchPolicy(CognitiveContract):
 class EvidenceInput(CognitiveContract):
     goal_model: UserGoalModel
     memory_query_context: str
+    user_model_memories: list[dict] = Field(default_factory=list)
     existing_materials: list[MemoryDocument] = Field(default_factory=list)
     calendar_constraints: list[CalendarConstraint] = Field(default_factory=list)
     resource_candidates: list[dict] = Field(default_factory=list)

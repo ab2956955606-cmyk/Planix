@@ -4,19 +4,45 @@
 
 ![Planix Dashboard](assets/readme/planix-dashboard-cn.png)
 
-**Planix is an AI planning workspace with AI Agent, RAG, Agent Runtime, `structuredPlan`, P Mode, Tauri, and FastAPI sidecar packaging.**
+**Planix is a user-centered Cognitive Planning OS with an AI-first planning workspace, durable user memory, independent critique, safe Calendar execution, Tauri, and FastAPI sidecar packaging.**
 
-Planix 是一个面向学习、求职和长期目标管理的桌面 AI 规划工作台。它可以把用户的宽泛目标转化为结构化、可审查、可细化、可写入日历的任务计划，并结合本地资料库检索、Agent Runtime 执行链、P Mode 命令式对话和 Tauri 桌面打包，形成一个完整的 AI 应用工程项目。
+Planix 是一个面向真实目标的桌面 AI 规划工作台。P Mode 先理解用户真正想改变什么，再评估现实条件、整理证据、与用户共创策略、设计执行方案，并由独立 Critic 审查后才允许进入 Calendar。长期事实、习惯、偏好、约束和失败模式会以带证据与置信度的 User Model Memory 保存，而不是被固化为一次对话中的模板答案。
 
-它不是普通的 prompt demo。Planix 的重点是把模型输出接入真实应用流程：先通过 RAG 检索本地上下文，再生成 `structuredPlan`，通过 NDJSON streaming 展示 Agent Runtime 过程，最后由用户确认后安全写入 Calendar。
+它不是普通的 prompt demo。Planix 的重点是让模型判断、结构化契约、用户确认、独立审查和正式写入形成可验证闭环。模型不可用或结构化输出不合格时，P Mode 明确进入 `MODEL_UNAVAILABLE`，只保留已经理解的事实，不会用本地模板伪装成 AI 计划。
+
+## Phase 7 / Cognitive Planning OS
+
+P Mode 默认使用 `backend/app/cognitive_planning` 下的 Cognitive OS 内核。LangGraph 只负责状态流转，六个独立角色负责真正判断：
+
+```text
+Goal Intelligence
+  -> Reality
+  -> Evidence
+  -> Strategy
+  -> user strategy approval
+  -> Execution
+  -> Critic
+  -> bounded repair (maximum two rounds)
+  -> user execution approval
+  -> Calendar preview / PermissionGate
+```
+
+- **Goal Intelligence** 理解目标、已知事实和真正影响决策的未知项，不使用领域问卷或固定问题库。
+- **Reality** 独立检查时间、预算、环境、安全、前置条件和可行性。
+- **Evidence** 综合 Memory、Calendar、本地资料和明确获批的外部来源；静态资源目录不再决定计划。
+- **Strategy** 给出可比较、可解释的方向，等待用户确认后才进入执行设计。
+- **Execution** 把已确认策略转换为有依赖、资源用法、完成证据和降级动作的任务。
+- **Critic** 独立否决领域错误、资源虚构、工作量失真或无法执行的方案，并把修复请求交回责任 Agent。
+
+`PLANIX_COGNITIVE_MODE=true` 启用新内核。旧 Planning Session 字段、历史事件和手动 Workbench Runtime 继续兼容，但它们不再是默认 P Mode 规划来源。P Mode 只显示用户能理解的目标、现实评估、证据、策略、执行与审查结果；Agent 决策表和内部消息仍保存在后端供审计，不作为主界面日志展示。
 
 ## Demo / 项目演示
 
-Planix 的核心演示路径是：输入一个宽泛目标，例如“帮我规划本周 AI 应用实习准备”，系统会检索本地资料库，生成结构化计划，展示 Agent Runtime 执行链，并允许用户继续细化任务或确认写入日历。页面顶部的视频和截图展示的是 Planix 的真实界面与工作流。
+Planix 的核心演示路径是：在 P Mode 输入一个真实目标，例如“我想准备 AI 应用实习”或“9 月去新疆 14 天”，系统先展示对目标的理解与最值得确认的问题，再经过现实评估和证据综合给出策略。用户确认策略后才生成执行蓝图，独立 Critic 通过且用户再次确认后，才允许进入 Calendar 预览与 PermissionGate。手动 Workbench 仍可演示旧 Runtime 执行链，但它不是默认规划入口。
 
 ## Demo Reliability / 稳定演示验收
 
-Planix does not simply trust LLM output. It validates plan horizon, task density, date coverage, weak task titles, source relevance, and fallback usage before showing or writing proposals.
+Planix does not simply trust LLM output. Legacy Goals/Dashboard flows still validate plan horizon, task density, date coverage, weak task titles, source relevance, and fallback usage before showing proposals. Cognitive OS uses its own Goal/Reality/Evidence contracts, independent Critic, and Calendar gates and never uses local content fallback.
 
 当前 demo 重点锁定三条高风险路径：
 
@@ -39,23 +65,24 @@ Planix 是一个桌面端 AI planning workspace，目标是帮助用户把模糊
 
 ## Planix 工作流程
 
-### 普通目标规划流程
+### P Mode 认知规划流程
 
-用户输入一个目标后，Planix 会先进入前端的 Command / P Mode 或 Goals 页面，再由 FastAPI 的 planning / runtime API 接收请求。后端会检索本地资料库，把相关资料作为上下文交给 LLM 或本地 fallback 规划器，生成 `structuredPlan`。前端拿到结构化计划后展示摘要、完整计划和可执行任务，用户可以继续细化、修改或确认。
+用户输入目标后，P Mode 通过 FastAPI Planning Session 进入 Cognitive OS。每个认知阶段都使用模型和严格契约生成独立 artifact；规则只负责校验和 Gate，不生成规划内容。用户可以补充信息、比较并确认策略、审查执行蓝图，最后明确触发日历写入。
 
 ```text
 用户目标
-  → Command / P Mode 或 Goals
-  → FastAPI planning / runtime API
-  → RAG 检索本地资料
-  → LLM / local fallback 生成 structuredPlan
-  → 前端展示计划
-  → 用户细化 / 修改 / 确认
+  → P Mode Planning Session
+  → Goal Intelligence / Reality
+  → Evidence / Strategy
+  → 用户确认策略
+  → Execution / Critic
+  → 用户确认执行方案
+  → Calendar preview / PermissionGate
 ```
 
-### Runtime 执行流程
+### Legacy Workbench / Dashboard Runtime
 
-当用户运行智能体时，后端 RuntimeOrchestrator 会按固定链路组织工具调用。它先读取偏好和历史记忆，再读取今日计划，然后检索本地资料，必要时补充模型知识，最后生成任务提案。整个过程通过 NDJSON streaming 返回给前端，并渲染为 Agent Flow Trace 或 P Mode 执行链。
+Dashboard 或用户手动开启 Workbench 时，旧 RuntimeOrchestrator 仍可按固定链路组织工具调用并通过 NDJSON streaming 返回 Trace。该流程用于兼容和调试，不会替代 P Mode Cognitive OS，也不能在模型失败时为新内核生成本地模板计划。
 
 ```text
 用户运行智能体
@@ -71,11 +98,12 @@ Planix 是一个桌面端 AI planning workspace，目标是帮助用户把模糊
 
 ### P Mode 写入日历流程
 
-P Mode 不会让 Runtime 自动写入 Calendar。用户说“写进日历”“写入计划”“保存计划”，或在线程已有计划草稿时说“保存”“确认写入”后，Planix 会读取当前隐藏计划草稿，生成 Calendar WriteIntent，经过 PermissionGate 判断权限。如果需要确认，P 页面显示 ApprovalCard；如果允许自动执行，则通过 plans API 写入 Calendar，并在对话里显示创建、更新和失败结果。
+P Mode 不会自动写入 Calendar。Cognitive OS 必须先获得策略确认、执行确认和可写的 Critic 结论；用户随后明确说“写入日历”，Planix 才把当前 execution blueprint 投影成 Calendar WriteIntent，并继续经过 action preview、PermissionGate 和 ApprovalCard。旧 Workbench hidden draft 仍走原有兼容写入链路。
 
 ```text
 用户说“写进日历”
-  → 读取当前 hidden draft
+  → 校验当前 Planning Session 与 Critic 结论
+  → 投影 execution blueprint
   → 生成 Calendar WriteIntent
   → PermissionGate 判断
   → ApprovalCard 或自动执行
@@ -111,10 +139,10 @@ Tauri window 启动
 
 ## 核心亮点
 
-- **结构化目标规划**：模型输出不是一段自由文本，而是可校验、可预览、可写入下游流程的 `structuredPlan`。
-- **Grounded RAG 本地资料检索**：规划前先检索用户本地资料库，让计划有上下文依据，而不是纯模型发挥。
-- **Agent Runtime 可观测执行链**：通过 NDJSON streaming 展示 memory lookup、material search、task proposal、summary 等关键步骤。
-- **P Mode 命令式工作流**：提供类似 Codex / Cursor 的命令式对话入口，用于生成、展开、细化、修改和确认计划草稿。
+- **AI-first 认知规划**：模型分别负责目标理解、现实评估、证据、策略、执行和批判，结构化契约让每一步可验证。
+- **证据与 User Model Memory**：规划使用本地资料、Calendar 现实和带证据的长期用户模型，并明确展示证据缺口。
+- **独立 Critic 与有限修复**：Critic 可否决不可执行方案并发出定向修复，循环最多两次。
+- **P Mode 共创工作流**：用户在策略和执行两个关键 Gate 做决定，而不是只在最后点击确认。
 - **安全 Calendar 写入**：Runtime 不自动写入正式数据；计划写入 Calendar 前需要预览、权限判断或用户确认。
 - **桌面端工程闭环**：使用 Tauri 桌面壳 + FastAPI sidecar + SQLite 本地数据，让项目从 Web demo 走向可安装桌面应用。
 
@@ -160,9 +188,9 @@ NDJSON Stream → Agent Flow Trace UI
 核心分层：
 
 - **Frontend Shell**：负责 Dashboard、Calendar、Notes、Goals、Materials、Settings、P Mode 和 Inspector。
-- **Planning Service**：负责目标规划、`structuredPlan` 生成、Plan Quality Gate、fallback 处理和结果派生。
+- **Cognitive Planning OS**：负责模型驱动的目标、现实、证据、策略、执行、Critic 和 User Model Memory；规则只做校验与 Gate。
 - **RAG Layer**：基于 SQLite / FTS5 检索用户本地资料。
-- **Agent Runtime**：负责 memory lookup、tool routing、task proposal 和 runtime event streaming。
+- **Agent Runtime**：保留 Dashboard / Workbench 的 memory lookup、tool routing、task proposal 和 runtime event streaming 兼容能力。
 - **Persistence Layer**：使用 SQLite 保存计划、笔记、资料、设置、Runtime 记录和 Command thread。
 - **Desktop Packaging**：使用 Tauri 桌面壳和 FastAPI sidecar 打包为 Windows 桌面应用。
 
@@ -198,7 +226,7 @@ NDJSON Stream → Agent Flow Trace UI
 
 ### P Mode / Command Agent
 
-P Mode 默认停留在 `auto` 状态。普通查询、记忆和 Calendar 命令仍通过 `CommandDecision` 路由；规划请求则进入 Planning Session。启用 `PLANIX_USE_COGNITIVE_PLANNING=true` 后，P Mode 使用 Phase 6 Cognitive Planning Kernel，依次形成目标模型、证据包、策略组合、执行蓝图和独立批判报告。手动 `workbench` 继续保留旧 Runtime / hidden draft，仅用于兼容和调试。
+P Mode 默认停留在 `auto` 状态。普通查询、记忆和 Calendar 命令仍通过 `CommandDecision` 路由；规划请求进入 Cognitive Planning Session。启用 `PLANIX_COGNITIVE_MODE=true` 后，P Mode 依次形成目标理解、现实评估、证据包、策略方案、执行蓝图和独立审查。手动 `workbench` 继续保留旧 Runtime / hidden draft，仅用于兼容和调试。
 
 Phase 4.8 keeps the existing `#/command` surface and streams command cards through `/api/command/chat` and `/api/command/approve`. Phase 4.8.2 adds a unified Memory Store and Memory Agent: Calendar plans represent formal executable plans, while memories represent long-term context that Planix can reference. P Mode now separates `query_plan` from `query_memory`; viewing plans searches Calendar only, while memory search reads the `memories` table and groups personal records, knowledge materials, planning archives, preference constraints, and review feedback.
 
@@ -212,14 +240,15 @@ Phase 4.9A.1 lets Settings store API Keys per provider. The active provider rema
 
 Phase 4.9B.1 verifies and polishes task-level model routing. Settings can route intent decisions, plan generation, task refinement, calendar patch extraction, memory query/write, model knowledge, and chat to different primary/fallback providers. Runtime and P Mode model-usage cards show the final provider/model, token usage, latency, fallbackUsed, and safe route attempts such as missing-key skips, provider errors, fallback success, or local fallback.
 
-### Phase 6 Cognitive Planning Kernel
+### Phase 7 Cognitive Planning Kernel
 
-Phase 6 replaces template-shaped deep planning with an AI-first, evidence-driven planning kernel behind a rollout flag. LangGraph coordinates stage transitions, while separate model calls own the cognitive work:
+Phase 7 makes the AI-first kernel the default P Mode planning path. LangGraph coordinates stage transitions, while separate model calls own the cognitive work:
 
 ```text
-Goal Modeling
-  -> Context & Evidence
-  -> Strategy Portfolio
+Goal Intelligence
+  -> Reality Assessment
+  -> Evidence Synthesis
+  -> Strategy Proposal
   -> user strategy approval
   -> Execution Narrative + Blueprint
   -> Independent Critic
@@ -230,15 +259,17 @@ Goal Modeling
 
 ```mermaid
 flowchart TD
-  U["User conversation"] --> G["Goal Modeling Agent"]
+  U["User conversation"] --> G["Goal Intelligence Agent"]
   G -->|"high-value unknowns"| Q["Wait for goal answer"]
   Q --> G
-  G --> E["Context & Evidence Agent"]
+  G --> RY["Reality Agent"]
+  RY -->|"decision-relevant unknown"| Q
+  RY --> E["Evidence Agent"]
   E -->|"insufficient evidence"| Q
-  E --> S["Strategy Architect Agent"]
+  E --> S["Strategy Agent"]
   S --> SG["User strategy gate"]
-  SG --> X["Execution Designer Agent"]
-  X --> C["Independent Critic & Learning Agent"]
+  SG --> X["Execution Agent"]
+  X --> C["Independent Critic Agent"]
   C -->|"repair, maximum two rounds"| R["Responsible cognitive agent"]
   R --> C
   C --> EG["User execution gate"]
@@ -246,19 +277,19 @@ flowchart TD
   F["User feedback"] --> C
 ```
 
-The kernel persists typed artifacts, safe decisions, evidence gaps, critique reports, repair history, conversation context, and tentative planning hypotheses. Deterministic guards validate IDs, dependencies, dates, deliverables, evidence, resources, fallback steps, and forbidden template leakage. Static catalogs are retrieval candidates only; they cannot directly become a formal plan.
+The kernel persists typed artifacts, safe decisions, evidence gaps, critique reports, repair history, conversation context, and evidence-backed User Model Memory. Deterministic guards validate IDs, dependencies, dates, deliverables, evidence, resources, fallback steps, and Calendar eligibility; they never invent planning content. Phase 7 does not use domain templates, fixed question banks, or a static resource catalog to make planning decisions.
 
-Formal planning is model-backed only. If the configured model is unavailable, returns invalid JSON, or cannot satisfy the typed contract, Planix preserves the session facts and asks the user to retry or fix model settings. It does not silently present a local template as an AI-created formal plan. Calendar remains blocked until the strategy and execution gates are explicitly approved and the independent critic marks the blueprint writable.
+Formal planning is model-backed only. If the configured model is unavailable, returns invalid JSON, or cannot satisfy the typed contract, Planix enters the exact `MODEL_UNAVAILABLE` state, preserves understood facts, and asks the user to retry or fix model settings. It does not silently present a local template as an AI-created formal plan. Calendar remains blocked until the strategy and execution gates are explicitly approved and the independent critic marks the blueprint writable.
 
-The new P Mode cards are replayable and user-facing: Goal Model, Evidence Pack, Strategy Portfolio, Execution Blueprint, Critique Report, and Planning Learning Update. Existing Planning Session cards and old Runtime/draft history remain compatible during rollout.
+The P Mode workspace is replayable and user-facing: Goal Understanding, Reality Assessment, Evidence, Strategy, Execution, Critic Review, and Learning Update. Raw Agent decisions, messages, confidence plumbing, and runtime status are retained for audit but hidden from the primary planning workspace. Existing Planning Session cards and old Runtime/draft history remain replay-compatible.
 
-`deep_planning.py` is now the compatibility facade; the frozen template implementation lives in `legacy_deep_planning.py` as `legacy-template-v1`. The cognitive runtime never falls back to it. `CognitivePlanningShadowRunner` provides an explicit QA-only comparison path using isolated shadow thread IDs and stores safe comparisons in `planning_shadow_runs`; normal P Mode never performs duplicate shadow model calls.
+`backend/app/cognitive_planning` is the canonical Phase 7 implementation. `deep_planning.py` and the Phase 6 service tree remain compatibility facades; the frozen template implementation lives in `legacy_deep_planning.py` as `legacy-template-v1`. Cognitive OS never falls back to it.
 
-The six cognitive `planning_*` model routes always disable local content fallback, even if an older saved routing row enabled it. Settings shows this safety rule explicitly. Agent decisions and both user approval gates persist the input/output artifact IDs they acted on, so replay can audit the exact strategy, execution blueprint, and critique versions behind a Calendar write.
+The cognitive `planning_*` model routes always disable local content fallback, even if an older saved routing row enabled it. Settings shows this safety rule explicitly. Agent decisions and both user approval gates persist the input/output artifact IDs they acted on, so replay can audit the exact strategy, execution blueprint, and critique versions behind a Calendar write.
 
-Stage token budgets can be tuned independently with `PLANIX_GOAL_MODEL_MAX_TOKENS`, `PLANIX_EVIDENCE_MAX_TOKENS`, `PLANIX_STRATEGY_MAX_TOKENS`, `PLANIX_EXECUTION_MAX_TOKENS`, `PLANIX_CRITIQUE_MAX_TOKENS`, and `PLANIX_LEARNING_MAX_TOKENS`.
+Stage token budgets can be tuned independently with `PLANIX_GOAL_MODEL_MAX_TOKENS`, `PLANIX_REALITY_MAX_TOKENS`, `PLANIX_EVIDENCE_MAX_TOKENS`, `PLANIX_STRATEGY_MAX_TOKENS`, `PLANIX_EXECUTION_MAX_TOKENS`, `PLANIX_CRITIQUE_MAX_TOKENS`, and `PLANIX_LEARNING_MAX_TOKENS`.
 
-See [`docs/planning-template-inventory.md`](docs/planning-template-inventory.md) for the frozen legacy surface and [`docs/cognitive-planning-acceptance.md`](docs/cognitive-planning-acceptance.md) for the requirement-to-evidence map.
+See [`docs/planning-template-inventory.md`](docs/planning-template-inventory.md) for the frozen legacy surface, [`docs/cognitive-planning-acceptance.md`](docs/cognitive-planning-acceptance.md) for Phase 6 compatibility evidence, and [`docs/cognitive-os-acceptance.md`](docs/cognitive-os-acceptance.md) for the Phase 7 requirement map.
 
 - 提供命令式 AI 对话入口。
 - 支持 Auto Agent Mode、强制 Chat 模式、强制 Workbench 模式。
@@ -366,6 +397,7 @@ Demo readiness check:
 - Phase 4.9B.1 task-level model routing acceptance and observability: canonical `memory_query` / `memory_write`, fallback attempts, and clearer Settings routing hints.
 - Phase 5 Human-in-the-loop Planning Sessions, agent artifacts/messages, active-session continuation, approval gates, and LangGraph orchestration facade.
 - Phase 6 Cognitive Planning Kernel: typed goal/evidence/strategy/execution/critique/learning artifacts, model-backed cognitive stages, bounded critic repair, deterministic Calendar guards, replayable cognitive cards, and tentative cross-session planning hypotheses.
+- Phase 7 Cognitive Planning OS: independent Goal/Reality/Evidence/Strategy/Execution/Critic judgment, evidence-backed User Model Memory, exact `MODEL_UNAVAILABLE`, and a user-facing P Mode planning workspace without template decisions or technical Agent logs.
 - Calendar-ready proposal 预览与确认写入。
 - Tauri 桌面端原型。
 - FastAPI sidecar 打包链路。
@@ -377,7 +409,6 @@ Demo readiness check:
 - README 作品集化与真实截图补充。
 - 更清晰的动作审批 UX。
 - P Mode 细化任务体验优化。
-- Phase 6 rollout evaluation using the opt-in shadow comparator before making the cognitive kernel the default.
 
 ### 下一步
 

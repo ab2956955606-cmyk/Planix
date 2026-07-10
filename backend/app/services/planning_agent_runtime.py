@@ -25,11 +25,21 @@ ARTIFACT_OWNER: dict[str, str] = {
     "execution_plan_draft": "Execution Planner Agent",
     "learning_patch": "Feedback Evolution Agent",
     "user_goal_model": "Goal Modeling Agent",
+    "reality_assessment": "Reality Agent",
     "evidence_pack": "Context & Evidence Agent",
     "strategy_portfolio": "Strategy Architect Agent",
     "execution_blueprint": "Execution Designer Agent",
     "critique_report": "Independent Critic & Learning Agent",
     "planning_learning_update": "Independent Critic & Learning Agent",
+}
+
+ARTIFACT_OWNER_ALIASES: dict[str, set[str]] = {
+    "user_goal_model": {"Goal Modeling Agent", "Goal Intelligence Agent"},
+    "evidence_pack": {"Context & Evidence Agent", "Evidence Agent"},
+    "strategy_portfolio": {"Strategy Architect Agent", "Strategy Agent"},
+    "execution_blueprint": {"Execution Designer Agent", "Execution Agent"},
+    "critique_report": {"Independent Critic & Learning Agent", "Critic Agent"},
+    "planning_learning_update": {"Independent Critic & Learning Agent", "Critic Agent"},
 }
 
 
@@ -74,7 +84,8 @@ class PlanningAgentRuntime:
         status: str = "draft",
     ) -> PlanningArtifact:
         expected_owner = ARTIFACT_OWNER.get(artifact_type)
-        if expected_owner and expected_owner != owner_agent:
+        allowed_owners = ARTIFACT_OWNER_ALIASES.get(artifact_type, {expected_owner} if expected_owner else set())
+        if expected_owner and owner_agent not in allowed_owners:
             raise ValueError(f"{owner_agent} cannot modify {artifact_type}; owner is {expected_owner}")
         now = _now()
         artifact_id = str(uuid4())

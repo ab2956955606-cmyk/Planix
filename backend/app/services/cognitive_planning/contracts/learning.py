@@ -28,6 +28,14 @@ class CurrentPlanPatch(CognitiveContract):
 
 
 class UserModelHypothesisDraft(CognitiveContract):
+    category: Literal[
+        "fact",
+        "habit",
+        "preference",
+        "constraint",
+        "failure_pattern",
+        "planning_hypothesis",
+    ] = "planning_hypothesis"
     rule: str
     domain_scope: list[str] = Field(default_factory=list)
     evidence: str

@@ -25,6 +25,7 @@ CognitivePlanningStatus = Literal[
     "written_to_calendar",
     "learning_from_feedback",
     "blocked_model_unavailable",
+    "MODEL_UNAVAILABLE",
 ]
 
 
@@ -37,7 +38,7 @@ class SafePlanningError(CognitiveContract):
 
 
 class CognitivePlanningMetadata(CognitiveContract):
-    engine_version: Literal["cognitive-v2"] = "cognitive-v2"
+    engine_version: Literal["cognitive-v2", "cognitive-os-v1"] = "cognitive-v2"
     planning_mode: PlanningMode
     current_stage: str
     agent_confidence: float | None = Field(default=None, ge=0, le=1)
@@ -65,6 +66,7 @@ class CognitivePlanningState(TypedDict, total=False):
     request_context: dict[str, Any]
     goal_model: UserGoalModel
     evidence_pack: EvidencePack
+    reality_assessment: Any
     strategy_portfolio: StrategyPortfolio
     approved_strategy_id: str
     execution_blueprint: ExecutionBlueprint

@@ -17,6 +17,7 @@ ContractT = TypeVar("ContractT", bound=BaseModel)
 
 TOKEN_ENV_BY_TASK = {
     "planning_goal_model": ("PLANIX_GOAL_MODEL_MAX_TOKENS", 1800),
+    "planning_reality": ("PLANIX_REALITY_MAX_TOKENS", 1800),
     "planning_evidence": ("PLANIX_EVIDENCE_MAX_TOKENS", 2200),
     "planning_strategy": ("PLANIX_STRATEGY_MAX_TOKENS", 2400),
     "planning_execution": ("PLANIX_EXECUTION_MAX_TOKENS", 4000),

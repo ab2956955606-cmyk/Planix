@@ -123,6 +123,7 @@ export type CommandChatEvent =
   | { type: 'agent_message'; sessionId: string; data: unknown }
   | { type: 'planning_session_status'; sessionId: string; status: string }
   | { type: 'goal_model_updated'; sessionId: string; data: unknown }
+  | { type: 'reality_assessment_ready'; sessionId: string; data: unknown }
   | { type: 'evidence_pack_ready'; sessionId: string; data: unknown }
   | { type: 'strategy_portfolio_ready'; sessionId: string; data: unknown }
   | { type: 'execution_blueprint_ready'; sessionId: string; data: unknown }

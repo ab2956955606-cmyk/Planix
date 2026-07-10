@@ -9,6 +9,7 @@ from ..contracts import (
     ExecutionBlueprint,
     PlanCritiqueReport,
     PlanningLearningUpdate,
+    RealityAssessment,
     StrategyPortfolio,
     UserGoalModel,
 )
@@ -30,6 +31,7 @@ class SessionApiAdapter:
     def from_row(self, row) -> PlanningSessionResponse:
         goal_raw = json_object(row["goal_model_json"])
         evidence_raw = json_object(row["evidence_pack_json"])
+        reality_raw = json_object(row["reality_assessment_json"]) if "reality_assessment_json" in row.keys() else {}
         strategy_raw = json_object(row["strategy_portfolio_json"])
         execution_raw = json_object(row["execution_blueprint_json"])
         critique_raw = json_object(row["critique_report_json"])
@@ -38,6 +40,7 @@ class SessionApiAdapter:
 
         goal = UserGoalModel.model_validate(goal_raw) if goal_raw else None
         evidence = EvidencePack.model_validate(evidence_raw) if evidence_raw else None
+        reality = RealityAssessment.model_validate(reality_raw) if reality_raw else None
         strategy = StrategyPortfolio.model_validate(strategy_raw) if strategy_raw else None
         execution = ExecutionBlueprint.model_validate(execution_raw) if execution_raw else None
         critique = PlanCritiqueReport.model_validate(critique_raw) if critique_raw else None
@@ -89,6 +92,7 @@ class SessionApiAdapter:
             learningPatch=patch,
             cognitiveMetadata=metadata,
             goalModel=goal_raw or None,
+            realityAssessment=reality.model_dump(by_alias=True) if reality else None,
             evidencePack=evidence_raw or None,
             strategyPortfolio=strategy_raw or None,
             executionBlueprint=execution_raw or None,

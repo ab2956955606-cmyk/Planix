@@ -39,20 +39,51 @@ export function GoalModelCard({ data, t }: Props) {
     <div className="command-inline-card wide cognitive-goal-card">
       <div className="command-card-heading">
         <strong>{label(t, 'command.cognitiveGoalModel', 'Planix 对目标的理解')}</strong>
-        <span>{Math.round(Number(raw.confidence || 0) * 100)}%</span>
       </div>
       <h3>{value(raw.goalStatement, label(t, 'command.untitledPlan', '未命名目标'))}</h3>
       <p>{value(raw.desiredChange)}</p>
       <dl className="command-result-meta">
-        <div><dt>{label(t, 'command.cognitiveDomain', '领域')}</dt><dd>{value(raw.domain)}{value(raw.subdomain) ? ` / ${value(raw.subdomain)}` : ''}</dd></div>
-        <div><dt>{label(t, 'command.cognitiveSuccess', '成功标准')}</dt><dd>{value(success.definition)}</dd></div>
-        <div><dt>{label(t, 'command.cognitiveFeasibility', '可行性判断')}</dt><dd>{value(feasibility.summary)}</dd></div>
+        <div><dt>{label(t, 'command.cognitiveSuccess', '我理解的成功')}</dt><dd>{value(success.definition)}</dd></div>
+        {value(feasibility.summary) && value(feasibility.summary) !== 'Deferred to Reality Agent' ? <div><dt>{label(t, 'command.cognitiveFeasibility', '初步判断')}</dt><dd>{value(feasibility.summary)}</dd></div> : null}
       </dl>
       {knownFacts.length ? <section><strong>{label(t, 'command.cognitiveUsedFacts', '本次使用的信息')}</strong><ul>{knownFacts.map((item, index) => <li key={index}>{value(item.statement)}<small>{value(item.sourceText)}</small></li>)}</ul></section> : null}
       {constraints.length ? <section><strong>{label(t, 'command.hardConstraints', '硬约束')}</strong><ul>{constraints.map((item, index) => <li key={index}>{value(item.statement)}</li>)}</ul></section> : null}
       {assumptions.length ? <section><strong>{label(t, 'command.cognitiveAssumptions', '当前假设')}</strong><ul>{assumptions.map((item, index) => <li key={index}>{value(item.statement)}{item.needsUserConfirmation ? ` · ${label(t, 'command.cognitiveNeedsConfirmation', '需要确认')}` : ''}</li>)}</ul></section> : null}
       {unknowns.length ? <section><strong>{label(t, 'command.cognitiveUnknowns', '仍不确定的信息')}</strong><ul>{unknowns.map((item, index) => <li key={index}><b>{value(item.description)}</b><small>{value(item.whyItChangesThePlan)}</small></li>)}</ul></section> : null}
       {questions.length ? <section><strong>{label(t, 'command.clarificationQuestions', '需要确认的问题')}</strong><ol>{questions.map((item, index) => <li key={index}>{value(item.question)}<small>{value(item.whyThisQuestionMatters)}</small></li>)}</ol></section> : null}
+    </div>
+  );
+}
+
+export function RealityAssessmentCard({ data, t }: Props) {
+  const raw = record(data);
+  const risks = items(raw.hiddenRisks);
+  const questions = items(raw.importantQuestions);
+  return (
+    <div className="command-inline-card wide cognitive-reality-card">
+      <div className="command-card-heading">
+        <strong>{label(t, 'command.cognitiveReality', '现实判断')}</strong>
+      </div>
+      <h3>{value(raw.goalRestatement)}</h3>
+      <p>{value(raw.feasibilitySummary)}</p>
+      <dl className="command-result-meta">
+        <div><dt>{label(t, 'command.cognitiveRealityTime', '时间是否现实')}</dt><dd>{value(raw.timeAssessment)}</dd></div>
+        <div><dt>{label(t, 'command.cognitiveRealityResources', '资源是否足够')}</dt><dd>{value(raw.resourceAssessment)}</dd></div>
+      </dl>
+      {risks.length ? <section><strong>{label(t, 'command.cognitiveRealityRisks', '需要正视的风险')}</strong><ul>{risks.map((item, index) => <li key={index}><b>{value(item.risk)}</b><small>{value(item.consequence)} · {value(item.mitigation)}</small></li>)}</ul></section> : null}
+      {strings(raw.recommendedAdjustments).length ? <section><strong>{label(t, 'command.cognitiveRealityAdjustments', '建议调整')}</strong><ul>{strings(raw.recommendedAdjustments).map((item) => <li key={item}>{item}</li>)}</ul></section> : null}
+      {questions.length ? <section><strong>{label(t, 'command.clarificationQuestions', '下一步最值得确认')}</strong><ol>{questions.map((item, index) => <li key={index}>{value(item.question)}<small>{value(item.whyThisQuestionMatters)}</small></li>)}</ol></section> : null}
+    </div>
+  );
+}
+
+export function ModelUnavailableCard({ t }: { t: Translator }) {
+  return (
+    <div className="command-inline-card wide cognitive-model-unavailable">
+      <div className="command-card-heading">
+        <strong>{label(t, 'command.cognitiveModelUnavailable', '当前无法进行深度规划')}</strong>
+      </div>
+      <p>{label(t, 'command.cognitiveModelUnavailableHint', '你的目标信息已经保留。Planix 不会使用模板冒充 AI 方案。')}</p>
     </div>
   );
 }
@@ -69,12 +100,11 @@ export function EvidencePackCard({ data, t }: Props) {
     <div className="command-inline-card wide cognitive-evidence-card">
       <div className="command-card-heading">
         <strong>{label(t, 'command.cognitiveEvidence', '证据和上下文')}</strong>
-        <span>{Math.round(Number(raw.confidence || 0) * 100)}%</span>
       </div>
       <p>{value(raw.synthesis, label(t, 'command.cognitiveNoEvidence', '尚无足够证据摘要。'))}</p>
       {userEvidence.length ? <section><strong>{label(t, 'command.cognitiveUserEvidence', '用户与历史证据')}</strong><ul>{userEvidence.map((item, index) => <li key={index}>{value(item.statement)}<small>{value(item.whyRelevant)}</small></li>)}</ul></section> : null}
       {rules.length ? <section><strong>{label(t, 'command.cognitiveAppliedRules', '本次应用的用户规则')}</strong><ul>{rules.map((item, index) => <li key={index}>{value(item.rule)}<small>{strings(item.evidence).join(' / ')}</small></li>)}</ul></section> : null}
-      {domainEvidence.length ? <section><strong>{label(t, 'command.cognitiveDomainEvidence', '领域证据')}</strong><ul>{domainEvidence.map((item, index) => <li key={index}>{value(item.claim)}<small>{value(item.relevance)}{value(item.sourceRef) ? ` · ${value(item.sourceRef)}` : ''}</small></li>)}</ul></section> : null}
+      {domainEvidence.length ? <section><strong>{label(t, 'command.cognitiveDomainEvidence', '影响本次规划的证据')}</strong><ul>{domainEvidence.map((item, index) => <li key={index}>{value(item.claim)}<small>{value(item.sourceType)} · {Math.round(Number(item.credibility || 0) * 100)}% · {value(item.relevance)}{value(item.sourceRef) ? ` · ${value(item.sourceRef)}` : ''}</small></li>)}</ul></section> : null}
       {candidates.length ? <section><strong>{label(t, 'command.cognitiveResourceEvidence', '可用资源证据')}</strong><ul>{candidates.slice(0, 8).map((item, index) => <li key={index}><b>{value(item.title)}</b><small>{value(item.howItHelps)} · {value(item.userFit)}</small></li>)}</ul></section> : null}
       {strings(calendar.conflicts).length || strings(calendar.loadWarnings).length ? <section><strong>{label(t, 'command.cognitiveCalendarReality', '日历现实约束')}</strong><ul>{[...strings(calendar.conflicts), ...strings(calendar.loadWarnings)].map((item) => <li key={item}>{item}</li>)}</ul></section> : null}
       {gaps.length ? <section><strong>{label(t, 'command.cognitiveEvidenceGaps', '证据缺口')}</strong><ul>{gaps.map((item, index) => <li key={index}>{value(item.description)}<small>{value(item.consequence)} · {value(item.proposedResolution)}</small></li>)}</ul></section> : null}
@@ -159,19 +189,17 @@ export function CritiqueReportCard({ data, t }: Props) {
   const findings = items(raw.issues);
   const repairs = items(raw.repairRequests);
   const strengths = strings(raw.strengths);
-  const dimensions = record(raw.dimensions);
   const writable = Boolean(raw.calendarWritable);
   return (
     <div className={`command-inline-card wide cognitive-critique-card ${writable ? 'passed' : 'blocked'}`}>
       <div className="command-card-heading">
         <strong>{label(t, 'command.cognitiveCritique', '独立质量审查')}</strong>
-        <span>{value(raw.status)} · {String(raw.score || 0)}</span>
+        <span>{writable ? label(t, 'command.cognitiveCalendarAllowed', '可继续') : label(t, 'command.cognitiveCalendarBlocked', '需要调整')}</span>
       </div>
       <p>{value(raw.simulationSummary)}</p>
       <strong>{writable ? label(t, 'command.cognitiveCalendarAllowed', '可进入日历确认') : label(t, 'command.cognitiveCalendarBlocked', '暂不可写入日历')}</strong>
       {strengths.length ? <section><strong>{label(t, 'command.cognitiveStrengths', '通过理由')}</strong><ul>{strengths.map((item) => <li key={item}>{item}</li>)}</ul></section> : null}
-      {Object.keys(dimensions).length ? <section><strong>{label(t, 'command.cognitiveDimensions', '审查维度')}</strong><div className="command-result-grid">{Object.entries(dimensions).map(([key, score]) => <small key={key}>{key}: {String(score)}</small>)}</div></section> : null}
-      {findings.length ? <ul>{findings.map((item, index) => <li key={index}><b>{value(item.responsibleAgent)} · {value(item.severity)}</b><p>{value(item.description)}</p><small>{value(item.evidence)}</small></li>)}</ul> : null}
+      {findings.length ? <ul>{findings.map((item, index) => <li key={index}><p>{value(item.description)}</p><small>{value(item.evidence)}</small></li>)}</ul> : null}
       {repairs.length ? <section><strong>{label(t, 'command.executionQualityRepair', '修复建议')}</strong><ul>{repairs.map((item, index) => <li key={index}>{value(item.instruction)}</li>)}</ul></section> : null}
       {strings(raw.remainingRisks).length ? <small>{label(t, 'command.cognitiveRemainingRisks', '剩余风险')}: {strings(raw.remainingRisks).join(' / ')}</small> : null}
     </div>

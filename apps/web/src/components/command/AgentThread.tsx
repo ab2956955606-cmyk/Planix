@@ -11,7 +11,9 @@ import {
   EvidencePackCard,
   ExecutionBlueprintCard,
   GoalModelCard,
+  ModelUnavailableCard,
   PlanningLearningUpdateCard,
+  RealityAssessmentCard,
   StrategyPortfolioCard
 } from './CognitivePlanningCards';
 import {
@@ -64,11 +66,29 @@ const planningCardKinds = new Set<CommandThreadMessage['kind']>([
   'agent_message',
   'planning_session_status',
   'goal_model_updated',
+  'reality_assessment_ready',
   'evidence_pack_ready',
   'strategy_portfolio_ready',
   'execution_blueprint_ready',
   'critique_report_ready',
   'planning_learning_updated'
+]);
+
+const cognitiveWorkspaceKinds = new Set<CommandThreadMessage['kind']>([
+  'goal_model_updated',
+  'reality_assessment_ready',
+  'evidence_pack_ready',
+  'strategy_portfolio_ready',
+  'execution_blueprint_ready',
+  'critique_report_ready',
+  'planning_learning_updated'
+]);
+
+const technicalPlanningKinds = new Set<CommandThreadMessage['kind']>([
+  'planning_session_started',
+  'planning_session_status',
+  'agent_decision',
+  'agent_message'
 ]);
 
 type RenderItem =
@@ -200,6 +220,7 @@ function recordOf(value: unknown): Record<string, unknown> {
 
 function planningKindLabel(kind: CommandThreadMessage['kind'], t: (key: string) => string): string {
   if (kind === 'goal_model_updated') return t('command.cognitiveGoalModel');
+  if (kind === 'reality_assessment_ready') return t('command.cognitiveReality');
   if (kind === 'evidence_pack_ready') return t('command.cognitiveEvidence');
   if (kind === 'strategy_portfolio_ready') return t('command.cognitiveStrategyPortfolio');
   if (kind === 'execution_blueprint_ready') return t('command.cognitiveExecutionBlueprint');
@@ -220,6 +241,7 @@ function planningCardSummary(message: CommandThreadMessage, t: (key: string) => 
   const payload = payloadOf(message);
   const data = recordOf(payload.data);
   if (message.kind === 'goal_model_updated') return String(data.goalStatement || message.content || '');
+  if (message.kind === 'reality_assessment_ready') return String(data.feasibilitySummary || message.content || '');
   if (message.kind === 'evidence_pack_ready') return String(data.synthesis || message.content || '');
   if (message.kind === 'strategy_portfolio_ready') return String(data.recommendationReason || message.content || '');
   if (message.kind === 'execution_blueprint_ready') {
@@ -356,6 +378,7 @@ function PlanningCardContent({
 }) {
   const payload = payloadOf(message);
   if (message.kind === 'goal_model_updated') return <GoalModelCard data={payload.data} t={t} />;
+  if (message.kind === 'reality_assessment_ready') return <RealityAssessmentCard data={payload.data} t={t} />;
   if (message.kind === 'evidence_pack_ready') return <EvidencePackCard data={payload.data} t={t} />;
   if (message.kind === 'strategy_portfolio_ready') return <StrategyPortfolioCard data={payload.data} t={t} />;
   if (message.kind === 'execution_blueprint_ready') return <ExecutionBlueprintCard data={payload.data} t={t} />;
@@ -404,8 +427,47 @@ function DeepPlanningCardGroup({
 }) {
   const labels = Array.from(new Set(messages.map((message) => planningKindLabel(message.kind, t)))).slice(0, 5);
   const status = latestPlanningStatus(messages);
+  const isCognitiveWorkspace = status === 'MODEL_UNAVAILABLE' || messages.some((message) => cognitiveWorkspaceKinds.has(message.kind));
+  const visibleMessages = messages.filter((message) => (
+    isCognitiveWorkspace ? cognitiveWorkspaceKinds.has(message.kind) : !technicalPlanningKinds.has(message.kind)
+  ));
+  const workspaceTitle = status === 'MODEL_UNAVAILABLE'
+    ? t('command.cognitiveModelUnavailable')
+    : status === 'waiting_design_approval' || status === 'design_revision'
+      ? t('command.cognitiveWorkspaceStrategy')
+      : status === 'waiting_execution_approval' || status === 'execution_revision' || status === 'learning_from_feedback'
+        ? t('command.cognitiveWorkspaceExecution')
+        : status === 'ready_to_write_calendar' || status === 'waiting_calendar_write_approval' || status === 'written_to_calendar'
+          ? t('command.cognitiveWorkspaceReady')
+          : t('command.cognitiveWorkspaceUnderstanding');
   const title = isLatest ? t('command.latestPlanningStep') : t('command.planningProcessCollapsed');
   const summary = [status, labels.join(' / ')].filter(Boolean).join(' · ');
+
+  if (isCognitiveWorkspace) {
+    return (
+      <CollapsiblePanel
+        title={workspaceTitle}
+        summary={isLatest ? undefined : t('command.planningProcessCollapsed')}
+        defaultExpanded={isLatest}
+        t={t}
+        className={`deep-planning-group cognitive-workspace ${isLatest ? 'latest' : 'historical'}`}
+      >
+        <div className="deep-planning-card-list cognitive-workspace-list">
+          {status === 'MODEL_UNAVAILABLE' ? <ModelUnavailableCard t={t} /> : null}
+          {visibleMessages.map((message) => (
+            <PlanningCardContent
+              key={message.id}
+              message={message}
+              onSend={onSend}
+              t={t}
+              planningStatus={status}
+              actionsEnabled={isLatest}
+            />
+          ))}
+        </div>
+      </CollapsiblePanel>
+    );
+  }
 
   return (
     <CollapsiblePanel
@@ -416,7 +478,7 @@ function DeepPlanningCardGroup({
       className={`deep-planning-group ${isLatest ? 'latest' : 'historical'}`}
     >
       <div className="deep-planning-card-list">
-        {messages.map((message) => (
+        {visibleMessages.map((message) => (
           <CollapsiblePanel
             key={message.id}
             title={planningKindLabel(message.kind, t)}

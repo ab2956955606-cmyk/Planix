@@ -25,18 +25,28 @@ class CritiqueIssue(CognitiveContract):
     evidence: str
     responsible_agent: Literal[
         "goal_modeling",
+        "goal_intelligence",
+        "reality",
         "context_evidence",
+        "evidence",
         "strategy_architect",
+        "strategy",
         "execution_designer",
+        "execution",
     ]
 
 
 class CriticRepairRequest(CognitiveContract):
     target_agent: Literal[
         "goal_modeling",
+        "goal_intelligence",
+        "reality",
         "context_evidence",
+        "evidence",
         "strategy_architect",
+        "strategy",
         "execution_designer",
+        "execution",
     ]
     instruction: str
     expected_change: str

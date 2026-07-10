@@ -32,6 +32,12 @@ PlanningAgentName = Literal[
     "Strategy Architect Agent",
     "Execution Designer Agent",
     "Independent Critic & Learning Agent",
+    "Goal Intelligence Agent",
+    "Reality Agent",
+    "Evidence Agent",
+    "Strategy Agent",
+    "Execution Agent",
+    "Critic Agent",
 ]
 PlanningArtifactType = Literal[
     "user_need_contract",
@@ -41,6 +47,7 @@ PlanningArtifactType = Literal[
     "execution_plan_draft",
     "learning_patch",
     "user_goal_model",
+    "reality_assessment",
     "evidence_pack",
     "strategy_portfolio",
     "execution_blueprint",
@@ -74,6 +81,7 @@ ModelUsageTaskType = Literal[
     "model_knowledge",
     "settings_test",
     "planning_goal_model",
+    "planning_reality",
     "planning_evidence",
     "planning_strategy",
     "planning_execution",
@@ -92,6 +100,7 @@ ModelRoutingTaskType = Literal[
     "chat",
     "model_knowledge",
     "planning_goal_model",
+    "planning_reality",
     "planning_evidence",
     "planning_strategy",
     "planning_execution",
@@ -353,6 +362,7 @@ PlanningSessionStatus = Literal[
     "waiting_calendar_write_approval",
     "written_to_calendar",
     "learning_from_feedback",
+    "MODEL_UNAVAILABLE",
 ]
 
 
@@ -1399,7 +1409,7 @@ PlanningMode = Literal["model_backed", "degraded_read_only", "blocked_model_unav
 
 
 class CognitivePlanningMetadata(BaseModel):
-    engine_version: Literal["cognitive-v2"] = Field(default="cognitive-v2", alias="engineVersion")
+    engine_version: Literal["cognitive-v2", "cognitive-os-v1"] = Field(default="cognitive-v2", alias="engineVersion")
     planning_mode: PlanningMode = Field(alias="planningMode")
     current_stage: str = Field(alias="currentStage")
     agent_confidence: float | None = Field(default=None, alias="agentConfidence", ge=0, le=1)
@@ -1425,6 +1435,7 @@ class PlanningSessionResponse(BaseModel):
     learning_patch: LearningPatch | None = Field(default=None, alias="learningPatch")
     cognitive_metadata: CognitivePlanningMetadata | None = Field(default=None, alias="cognitiveMetadata")
     goal_model: dict[str, Any] | None = Field(default=None, alias="goalModel")
+    reality_assessment: dict[str, Any] | None = Field(default=None, alias="realityAssessment")
     evidence_pack: dict[str, Any] | None = Field(default=None, alias="evidencePack")
     strategy_portfolio: dict[str, Any] | None = Field(default=None, alias="strategyPortfolio")
     execution_blueprint: dict[str, Any] | None = Field(default=None, alias="executionBlueprint")

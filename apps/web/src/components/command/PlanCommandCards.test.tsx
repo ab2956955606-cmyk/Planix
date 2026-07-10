@@ -9,7 +9,9 @@ import {
   EvidencePackCard,
   ExecutionBlueprintCard,
   GoalModelCard,
+  ModelUnavailableCard,
   PlanningLearningUpdateCard,
+  RealityAssessmentCard,
   StrategyPortfolioCard
 } from './CognitivePlanningCards';
 import {
@@ -272,6 +274,13 @@ const labels: Record<string, string> = {
 };
 
 const labelOverrides: Record<string, string> = {
+  'command.cognitiveReality': 'Reality check',
+  'command.cognitiveWorkspaceUnderstanding': 'AI is understanding your goal',
+  'command.cognitiveWorkspaceStrategy': 'Planning strategy',
+  'command.cognitiveWorkspaceExecution': 'Execution plan',
+  'command.cognitiveWorkspaceReady': 'Execution plan confirmed',
+  'command.cognitiveModelUnavailable': 'Deep planning unavailable',
+  'command.cognitiveModelUnavailableHint': 'The current deep planning model is unavailable; no template plan was generated.',
   'command.quickWriteCalendarMessage': '写入日历',
   'command.quickViewPlansMessage': '查看我的计划',
   'command.quickModifyPlanMessage': '修改我的计划',
@@ -326,6 +335,15 @@ describe('Plan command cards', () => {
       gaps: [{ description: '泳池开放时间未知', consequence: '无法精确排期', proposedResolution: 'ask_user' }],
       calendarReality: { conflicts: [], loadWarnings: [] }
     }} t={t} />);
+    const realityHtml = renderToStaticMarkup(<RealityAssessmentCard data={{
+      goalRestatement: '三个月安全连续游 200 米',
+      feasibilitySummary: '在有监督训练环境下可行。',
+      timeAssessment: '每天一小时足够建立稳定练习节奏。',
+      resourceAssessment: '需要稳定泳池和现场安全支持。',
+      hiddenRisks: [{ risk: '水上安全', consequence: '无人监督可能受伤', mitigation: '仅在有救生员时入水' }],
+      recommendedAdjustments: ['先验证训练环境'],
+      importantQuestions: []
+    }} t={t} />);
     const strategyHtml = renderToStaticMarkup(<StrategyPortfolioCard data={{
       recommendedStrategyId: 'safe-route',
       recommendationReason: '先建立安全基础，再增加距离。',
@@ -353,13 +371,15 @@ describe('Plan command cards', () => {
     expect(evidenceHtml).toContain('决定安全边界');
     expect(evidenceHtml).toContain('local:safety-note');
     expect(evidenceHtml).toContain('不安排无人监督的水中练习');
+    expect(realityHtml).toContain('水上安全');
+    expect(realityHtml).toContain('先验证训练环境');
     expect(strategyHtml).toContain('教练带领的安全路线');
     expect(strategyHtml).toContain('安全连续游 200 米');
     expect(executionHtml).toContain('与教练完成浅水区漂浮评估');
     expect(executionHtml).toContain('现场指导');
     expect(critiqueHtml).toContain('可进入日历确认');
     expect(critiqueHtml).toContain('安全边界和停止条件明确');
-    expect(critiqueHtml).toContain('userFit');
+    expect(critiqueHtml).not.toContain('userFit');
     expect(learningHtml).toContain('替换为教练示范');
   });
   it('renders the P Mode empty state with concrete examples', () => {
@@ -772,7 +792,7 @@ describe('Plan command cards', () => {
     expect(html).not.toContain('Old strategy');
   });
 
-  it('keeps technical agent trace cards collapsed inside the latest cognitive group', () => {
+  it('hides technical agent trace cards from the cognitive planning workspace', () => {
     const messages = [
       {
         id: 'decision-1',
@@ -818,9 +838,29 @@ describe('Plan command cards', () => {
     const html = renderToStaticMarkup(
       <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
     );
-    expect(html).toContain('Agent decision');
     expect(html).toContain('Evidence route');
+    expect(html).not.toContain('Agent decision');
     expect(html).not.toContain('technical trace detail hidden until expanded');
+  });
+
+  it('renders an honest model-unavailable state without a fake plan', () => {
+    const cardHtml = renderToStaticMarkup(<ModelUnavailableCard t={t} />);
+    const threadHtml = renderToStaticMarkup(
+      <AgentThread
+        messages={[{
+          id: 'unavailable', role: 'card', kind: 'planning_session_status', content: 'MODEL_UNAVAILABLE', createdAt: 1,
+          payload: { sessionId: 's-unavailable', status: 'MODEL_UNAVAILABLE' }
+        }]}
+        sending={false}
+        onApprove={() => undefined}
+        onSend={() => undefined}
+        t={t}
+      />
+    );
+    expect(cardHtml).toContain('current deep planning');
+    expect(threadHtml).toContain('Deep planning unavailable');
+    expect(threadHtml).not.toContain('MODEL_UNAVAILABLE');
+    expect(threadHtml).not.toContain('Execution blueprint');
   });
 
   it('sends fixed natural language messages from deep planning, more, and row actions', () => {

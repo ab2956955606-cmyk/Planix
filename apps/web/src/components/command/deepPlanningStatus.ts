@@ -9,7 +9,8 @@ export type PlanningStatus =
   | 'ready_to_write_calendar'
   | 'waiting_calendar_write_approval'
   | 'written_to_calendar'
-  | 'learning_from_feedback';
+  | 'learning_from_feedback'
+  | 'MODEL_UNAVAILABLE';
 
 export const ACTIVE_PLANNING_STATUSES = new Set<PlanningStatus>([
   'needs_goal_clarification',
@@ -19,7 +20,8 @@ export const ACTIVE_PLANNING_STATUSES = new Set<PlanningStatus>([
   'execution_revision',
   'ready_to_write_calendar',
   'waiting_calendar_write_approval',
-  'learning_from_feedback'
+  'learning_from_feedback',
+  'MODEL_UNAVAILABLE'
 ]);
 
 function payloadOf(message: CommandThreadMessage): Record<string, unknown> {

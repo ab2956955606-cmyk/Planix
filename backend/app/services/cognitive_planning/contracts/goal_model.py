@@ -82,6 +82,9 @@ class UserGoalModel(CognitiveContract):
     desired_change: str
     domain: str
     subdomain: str | None = None
+    possible_intents: list[str] = Field(default_factory=list)
+    current_knowledge: list[str] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
     user_language: list[str] = Field(default_factory=list)
     hard_constraints: list[Constraint] = Field(default_factory=list)
     soft_preferences: list[Preference] = Field(default_factory=list)
@@ -89,7 +92,9 @@ class UserGoalModel(CognitiveContract):
     decision_relevant_unknowns: list[DecisionRelevantUnknown] = Field(default_factory=list)
     assumptions: list[GoalAssumption] = Field(default_factory=list)
     success_model: GoalSuccessModel
-    feasibility_judgment: FeasibilityJudgment
+    feasibility_judgment: FeasibilityJudgment = Field(
+        default_factory=lambda: FeasibilityJudgment(summary="Deferred to Reality Agent")
+    )
     questions: list[GoalQuestion] = Field(default_factory=list, max_length=3)
     confidence: float = Field(ge=0, le=1)
     can_proceed_to_evidence: bool

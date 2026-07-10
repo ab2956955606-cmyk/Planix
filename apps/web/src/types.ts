@@ -583,6 +583,7 @@ export type ModelRoutingTaskType =
   | 'chat'
   | 'model_knowledge'
   | 'planning_goal_model'
+  | 'planning_reality'
   | 'planning_evidence'
   | 'planning_strategy'
   | 'planning_execution'

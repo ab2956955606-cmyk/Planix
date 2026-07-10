@@ -4,7 +4,7 @@
 
 Planix is an AI application portfolio project. The portfolio-facing documentation version is `v3.0.0`, and it presents a RIVA-style AI OS Shell on the frontend connected to a real backend Runtime stream while keeping planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
 
-The current focus is **Phase 6: Cognitive Planning Kernel** for P Mode. With `PLANIX_USE_COGNITIVE_PLANNING=true`, planning requests use typed, model-backed stages for goal modeling, evidence synthesis, strategy design, execution design, independent critique, and feedback learning. LangGraph coordinates transitions but does not make planning decisions. Planix persists the artifacts in SQLite, derives legacy Planning Session snapshots for compatibility, and keeps Calendar behind explicit strategy/execution gates, deterministic guards, independent critique, action preview, and PermissionGate. Model failure blocks formal cognitive planning instead of silently producing a template plan. Dashboard Runtime, Goals, Workbench legacy Runtime, and old replay events remain compatible during rollout.
+The current focus is **Phase 7: Cognitive Planning OS** for P Mode. With `PLANIX_COGNITIVE_MODE=true`, planning requests use typed, model-backed Goal Intelligence, Reality, Evidence, Strategy, Execution, Critic, and feedback-learning stages. LangGraph coordinates transitions but does not make planning decisions. Planix persists canonical artifacts and evidence-backed User Model Memory in SQLite, derives legacy Planning Session snapshots for compatibility, and keeps Calendar behind explicit strategy/execution gates, deterministic guards, independent critique, action preview, and PermissionGate. A required model failure produces exact status `MODEL_UNAVAILABLE`; it must never silently become a template plan. Dashboard Runtime, Goals, Workbench legacy Runtime, and old replay events remain compatible.
 
 The project is fully named Planix across frontend, backend, desktop, sidecar, installer, database path, environment variables, and documentation.
 
@@ -37,28 +37,30 @@ The portfolio-facing documentation version is `v3.0.0`. Do not confuse this with
 - SQLite: plans, memories, month notes, planning goals, daily reviews, AI settings, local RAG compatibility records, FTS5 indexes, AI run logs, agent runs, agent events
 - AI settings persistence: `ai_settings` stores the singular active provider and shared knobs; `ai_provider_configs` stores provider-specific base URL, model, and API Key state.
 - AI client: internal ModelProvider layer for mock, DeepSeek, Kimi, Zhipu GLM, OpenAI, and custom OpenAI-compatible providers with local structured fallback
-- Planning: Phase 6 cognitive contracts/runtime under `backend/app/services/cognitive_planning`; legacy `StructuredGoalPlan` helpers and quality gates remain compatibility paths
+- Planning: Phase 7 Cognitive OS under `backend/app/cognitive_planning`; Phase 6 services and legacy `StructuredGoalPlan` helpers remain compatibility paths
 - Runtime: `/api/runtime/run` streams NDJSON events from Planner, Memory, Tool Router, Stream Engine, and Runtime Orchestrator
 - Maintenance: `/api/settings/ai-memory-cache/*` and related Settings maintenance endpoints clear AI memory/cache without touching formal user data
 - RAG: SQLite FTS5/BM25, not Chroma/FAISS
 - Sidecar: FastAPI packaged with PyInstaller as `planix-api.exe`
 
-## Phase 6 Cognitive Planning Rules
+## Phase 7 Cognitive Planning Rules
 
-- Cognitive artifacts are `UserGoalModel`, `EvidencePack`, `StrategyPortfolio`, `ExecutionNarrative`, `ExecutionBlueprint`, `PlanCritiqueReport`, and `PlanningLearningUpdate`.
+- Canonical artifacts are `GoalUnderstandingArtifact`, `RealityAssessment`, `EvidencePack`, `StrategyProposal`, `ExecutionPlanArtifact`, `CriticReport`, and `PlanningLearningUpdate`.
 - Each cognitive stage uses an explicit model task type and strict JSON contract. Do not merge all cognition into one prompt or expose hidden chain-of-thought.
-- Model unavailability, invalid JSON, or contract failure blocks the formal flow. Do not use a template/local fallback to claim a model-backed strategy or execution plan exists.
+- Model unavailability, invalid JSON, or contract failure sets `MODEL_UNAVAILABLE` and blocks the formal flow. Preserve understood facts only; do not use a template/local fallback to claim a model-backed strategy or execution plan exists.
+- Do not use domain templates, fixed domain question banks, static resource catalogs, or deterministic local fallback content to decide a formal plan. Rules may validate structure and safety but never invent content.
 - Strategy creation requires a sufficiently grounded goal and evidence pack. Execution creation requires explicit strategy approval. Calendar preparation requires explicit execution approval and a writable critic report.
 - The critic can request bounded repairs and veto Calendar. Repair loops are capped at two rounds.
 - Deterministic guards validate identifiers, dependencies, dates, resources, deliverables, evidence links, fallback steps, and forbidden template leakage; they do not invent planning content.
-- Static catalogs and local retrieval provide evidence candidates only. Evidence gaps must remain visible.
-- Cross-session learning is hypothesis-based: one observation is tentative, repeated support increases confidence, and contradiction reduces confidence.
+- Evidence may come from User Model Memory, Calendar, local material search, model knowledge, and explicitly approved web providers. Every claim must retain source, credibility, relevance, and limitations; evidence gaps remain visible.
+- Cross-session User Model Memory includes facts, habits, preferences, constraints, failure patterns, and hypotheses. One observation is tentative, repeated support increases confidence, contradiction reduces confidence, and stale memories may expire.
+- P Mode renders a clean planning workspace rather than an Agent log. Internal decisions/messages remain persisted for audit but are hidden from the primary cards.
 - New cognitive events/cards remain additive. Existing Planning Session and old Runtime/draft replay must continue to render.
-- `PLANIX_USE_COGNITIVE_PLANNING` defaults to `false` during rollout. Do not migrate Dashboard Runtime or Goals through this flag.
+- `PLANIX_COGNITIVE_MODE` defaults to `true` for P Mode. Do not migrate Dashboard Runtime or Goals through this flag.
 - `backend/app/services/deep_planning.py` is a compatibility facade. Legacy template content is frozen in `legacy_deep_planning.py` as `legacy-template-v1` and must never be used as a cognitive failure fallback.
 - Strategy approval is persisted as `planning_sessions.approved_strategy_id`; request date/research context is persisted separately and passed to Context & Evidence.
 - Shadow comparison is explicit QA tooling only. `CognitivePlanningShadowRunner` isolates old/new thread IDs and persists safe metrics in `planning_shadow_runs`; normal P Mode must not double-call models.
-- Cognitive stage token limits come from the six `PLANIX_*_MAX_TOKENS` environment variables documented in `.env.example`.
+- Cognitive stage token limits include `PLANIX_REALITY_MAX_TOKENS` alongside the existing `PLANIX_*_MAX_TOKENS` variables documented in `.env.example`.
 
 ## Runtime Shape
 
@@ -202,9 +204,9 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Keep the P page visually loose: empty state content should sit slightly above center, the thread should have breathing room, and no fixed workspace or draft panel should be introduced.
 - P Mode may expose a hidden right-side conversation drawer for new chat, history, and deleting command threads. The drawer must remain a conversation manager, not a workspace preview or persistent draft panel.
 - P Workspace is an internal draft/audit concept, not a page layout. Phase 4.4 may write hidden `calendar_plan` drafts and permission-gated Calendar write actions only.
-- Command mode is a single `auto | chat | workbench` value. Default `auto` runs the LLM-first `CommandDecisionService` before routing: normal chat stays conversational, while `create_plan` may run backend Runtime and create a hidden `calendar_plan` draft. Forced `chat` mode is discussion-only, and manual `workbench` still forces Runtime planning.
+- Command mode is a single `auto | chat | workbench` value. In default `auto`, an active Cognitive OS session or clear goal-shaped request is handled before generic `CommandDecision`; other commands still use the LLM-first router. Auto `create_plan` enters Cognitive OS and creates no hidden draft. Forced `chat` is discussion-only, while manual `workbench` forces legacy Runtime planning.
 - Chat and Runtime planning may use recent text messages from the current command thread as context. New chats must start clean and must not inherit context from previous threads.
-- After a valid Runtime planning draft is created, show both the compact summary and the full plan as inline cards by default.
+- After a valid Workbench Runtime draft is created, legacy replay may show its compact summary and full plan. Cognitive OS instead shows Goal, Reality, Evidence, Strategy, Execution, and Critic artifacts.
 - P Mode Runtime execution events should render as one collapsible inline execution chain after completion. The thread should use a lightweight center arrow toggle for collapse/expand, may show execution details on click, and must not introduce a fixed Trace or Workspace panel.
 - P Mode execution chain groups should blend into the page background instead of using a gray block.
 - P Mode task refinement commands such as `细化任务`, `细化计划`, or `refine all tasks` refine the current hidden `calendar_plan` draft. Store results in `command_drafts.payload_json.refinements` and render them inline; do not write Calendar from refinement alone.
@@ -218,9 +220,9 @@ Do not use or restore old names, and do not add compatibility fallbacks for old 
 - Calendar patch updates may change only title/content, date, time, and estimated duration. They must preserve `done`, `result/completion`, `source`, and `sourceKey`; deletes and rejected updates must leave the database unchanged.
 - Patch targeting may use the latest `plan_search_results` card for ordinal references such as "first" or "第一个"; ambiguous multi-candidate matches should return a selection/search card and no action.
 - Forced chat mode is discussion-only and must not run Dashboard Runtime, create drafts, write Calendar data, or execute any instruction.
-- Forced workbench mode remains the manual planning entry, but `auto` may also run backend Runtime when the LLM decision is `create_plan`.
+- Forced workbench mode remains the manual legacy Runtime entry; auto planning uses Cognitive OS and must not run backend Runtime for `create_plan`.
 - Command permission state is `low | medium | high`; low confirms writes/deletes, medium confirms deletes/dangerous actions, and high confirms dangerous actions only.
-- P Mode Calendar writes must start from the current hidden `calendar_plan` draft, use `command-draft:` source keys, never overwrite manual plans, and never overwrite `completion/result/done`.
+- Cognitive P Mode Calendar writes start from an approved Planning Session and use `planning-session:` source keys. Legacy Workbench writes may start from a hidden `calendar_plan` draft and use `command-draft:` keys. Neither path may overwrite manual plans or `completion/result/done`.
 - In a command thread with a current `calendar_plan` draft, phrases like `写入计划`, `保存计划`, `保存`, and `确认写入` should route to Calendar writing through PermissionGate instead of starting a new Runtime planning run.
 - P Mode Calendar writes should include matching refined task payloads from the draft in `plans.refined_task_json`, while preserving `completion/result/done`.
 - P Mode Calendar write failures from `/api/command/chat` or `/api/command/approve` should use the Calendar-specific write error. They must not be reported as draft-save failures.

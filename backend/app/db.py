@@ -93,6 +93,7 @@ def init_db(conn: sqlite3.Connection) -> None:
           latest_learning_patch_json TEXT NOT NULL DEFAULT '{}',
           cognitive_metadata_json TEXT NOT NULL DEFAULT '{}',
           goal_model_json TEXT NOT NULL DEFAULT '{}',
+          reality_assessment_json TEXT NOT NULL DEFAULT '{}',
           evidence_pack_json TEXT NOT NULL DEFAULT '{}',
           strategy_portfolio_json TEXT NOT NULL DEFAULT '{}',
           execution_blueprint_json TEXT NOT NULL DEFAULT '{}',
@@ -233,6 +234,26 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_user_planning_hypotheses_status
           ON user_planning_hypotheses(status, last_validated_at);
+
+        CREATE TABLE IF NOT EXISTS user_model_memories (
+          id TEXT PRIMARY KEY,
+          category TEXT NOT NULL,
+          statement TEXT NOT NULL,
+          statement_key TEXT NOT NULL UNIQUE,
+          domain_scope_json TEXT NOT NULL DEFAULT '[]',
+          evidence_json TEXT NOT NULL DEFAULT '[]',
+          contradiction_json TEXT NOT NULL DEFAULT '[]',
+          observation_count INTEGER NOT NULL DEFAULT 1,
+          confidence REAL NOT NULL DEFAULT 0.5,
+          status TEXT NOT NULL DEFAULT 'tentative',
+          source TEXT NOT NULL DEFAULT 'ai_inference',
+          first_observed_at TEXT NOT NULL,
+          last_validated_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_model_memories_category_status
+          ON user_model_memories(category, status, last_validated_at);
 
         CREATE TABLE IF NOT EXISTS planning_shadow_runs (
           id TEXT PRIMARY KEY,
@@ -399,6 +420,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "planning_sessions", "pending_question_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "cognitive_metadata_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "goal_model_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "reality_assessment_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "evidence_pack_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "strategy_portfolio_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "execution_blueprint_json", "TEXT NOT NULL DEFAULT '{}'")

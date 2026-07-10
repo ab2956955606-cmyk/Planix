@@ -45,6 +45,8 @@ from app.services.cognitive_planning.contracts import (
     LearningDiagnosis,
     PlanCritiqueReport,
     PlanningLearningUpdate,
+    RealityAssessment,
+    RealityRisk,
     SafePlanningError,
     StrategyOption,
     StrategyPhase,
@@ -67,6 +69,9 @@ from app.services.deep_planning import DeepPlanningService, LegacyTemplatePlanni
 from app.services.planning_agent_runtime import PlanningAgentRuntime
 from app.services.memory_store import MemoryService
 from app.services.ai_settings import get_model_routing_rule
+from app.cognitive_planning import CognitiveOSRuntime
+from app.cognitive_planning.evaluation import CognitiveCriticRuleError, validate_execution_blueprint
+from app.cognitive_planning.memory import UserModelMemoryRepository
 
 
 def _usage(task_type: str) -> dict[str, Any]:
@@ -97,6 +102,8 @@ class StubCognitiveModel:
         self.calls.append((task_type, payload))
         if contract_type is UserGoalModel:
             return AgentResult(self._goal(payload), _usage(task_type))
+        if contract_type is RealityAssessment:
+            return AgentResult(self._reality(payload), _usage(task_type))
         if contract_type is EvidencePack:
             return AgentResult(self._evidence(payload), _usage(task_type))
         if contract_type is StrategyPortfolio:
@@ -226,6 +233,26 @@ class StubCognitiveModel:
             synthesis=f"Evidence supports a {domain}-specific strategy and excludes unrelated templates.",
             confidence=0.86,
             canProceedToStrategy=True,
+        )
+
+    def _reality(self, payload: dict[str, Any]) -> RealityAssessment:
+        goal = payload["goalModel"]
+        domain = str(goal["domain"])
+        risks = {
+            "swimming": [RealityRisk(risk="水上安全与训练环境", consequence="无监督练习可能导致伤害", mitigation="仅在有救生员或教练的泳池训练", severity="blocker")],
+            "travel": [RealityRisk(risk="季节与长距离交通", consequence="路线可能受天气和车程影响", mitigation="确认实时交通并保留机动日")],
+        }.get(domain, [RealityRisk(risk="时间与目标范围", consequence="范围过大会降低完成率", mitigation="用可验收结果控制范围")])
+        return RealityAssessment(
+            goalRestatement=str(goal["goalStatement"]),
+            feasibilitySummary="目标在明确现实边界后可行。",
+            timeAssessment="投入与周期需要按可验收结果分配。",
+            resourceAssessment="优先使用可验证资源；缺失信息必须显式标记。",
+            hiddenRisks=risks,
+            recommendedAdjustments=["保留缓冲并以实际反馈调整范围。"],
+            assumptionsToValidate=[],
+            importantQuestions=[],
+            confidence=0.88,
+            canProceedToEvidence=True,
         )
 
     def _strategy(self, payload: dict[str, Any]) -> StrategyPortfolio:
@@ -1490,3 +1517,230 @@ def test_cognitive_p_mode_calendar_write_still_requires_permission_gate(client, 
     assert rows[0]["source_key"] == f"planning-session:{session_id}:t0"
     assert all(row["source_key"].startswith(f"planning-session:{session_id}:t") for row in rows)
     assert session_status == "written_to_calendar"
+
+
+class GoClarificationModel(StubCognitiveModel):
+    def _goal(self, payload: dict[str, Any]) -> UserGoalModel:
+        text = self._conversation_text(payload)
+        if "Go" not in text and "go" not in text:
+            return super()._goal(payload)
+        questions = [
+            GoalQuestion(
+                question="你希望 Go 最终帮你实现什么结果或进入哪类岗位？",
+                whyThisQuestionMatters="目标用途会改变应优先学习的工程能力和成功标准。",
+                expectedDecisionImpact="strategy and success criteria",
+            ),
+            GoalQuestion(
+                question="你已经能使用哪些编程语言或后端技术？",
+                whyThisQuestionMatters="已有技术决定哪些概念可以迁移、哪些需要从头建立。",
+                expectedDecisionImpact="scope and resources",
+            ),
+            GoalQuestion(
+                question="你能稳定投入多少时间，希望何时看到可验证结果？",
+                whyThisQuestionMatters="投入与期限决定目标范围是否现实。",
+                expectedDecisionImpact="schedule and feasibility",
+            ),
+        ]
+        return UserGoalModel(
+            goalStatement="理解用户学习 Go 的真实目标",
+            desiredChange="从模糊兴趣转成可验证、可执行的目标",
+            domain="go_learning",
+            possibleIntents=["职业能力", "项目开发", "兴趣学习"],
+            currentKnowledge=[text],
+            uncertainties=["目标用途", "已有技术", "时间与期限"],
+            knownFacts=[KnownFact(key="request", statement="用户想学习 Go", sourceText=text, confidence=1)],
+            decisionRelevantUnknowns=[
+                DecisionRelevantUnknown(
+                    key="purpose",
+                    description="学习 Go 的目标用途",
+                    whyItChangesThePlan="它决定路线、资源和验收标准。",
+                    impact="strategy",
+                    priority="blocking",
+                )
+            ],
+            successModel=GoalSuccessModel(definition="尚待用户定义可验证结果"),
+            questions=questions,
+            confidence=0.55,
+            canProceedToEvidence=False,
+        )
+
+
+def test_phase7_go_goal_asks_high_value_questions_before_any_plan(isolated_db):
+    runtime = CognitiveOSRuntime(model_client=GoClarificationModel())
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(entryPoint="p_mode", threadId="phase7-go", userInput="我要学Go")
+    )
+    assert session.status == "needs_goal_clarification"
+    assert session.reality_assessment is None
+    assert session.strategy_portfolio is None
+    assert session.execution_blueprint is None
+    question_text = json.dumps(session.goal_model["questions"], ensure_ascii=False)
+    assert "最终帮你实现什么结果" in question_text
+    assert "编程语言或后端技术" in question_text
+    assert "投入多少时间" in question_text
+    assert "30天Go计划" not in json.dumps(session.model_dump(by_alias=True), ensure_ascii=False)
+
+
+def test_phase7_swimming_discovers_reality_and_never_leaks_project_templates(isolated_db):
+    runtime = CognitiveOSRuntime(model_client=StubCognitiveModel())
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(entryPoint="p_mode", threadId="phase7-swim", userInput="我要学游泳，零基础，每天1小时")
+    )
+    assert session.status == "needs_goal_clarification"
+    assert session.strategy_portfolio is None
+    session = runtime.clarify(
+        session.session_id,
+        PlanningSessionTextRequest(text="可以稳定使用有救生员的泳池，目标三个月连续游200米"),
+    )
+    assert session.status == "waiting_design_approval"
+    assert session.reality_assessment
+    reality_text = json.dumps(session.reality_assessment, ensure_ascii=False)
+    assert "水上安全" in reality_text
+    assert "训练环境" in reality_text
+    visible = json.dumps(
+        {"goal": session.goal_model, "reality": session.reality_assessment, "strategy": session.strategy_portfolio},
+        ensure_ascii=False,
+    )
+    for forbidden in ("找实习", "README", "做项目"):
+        assert forbidden not in visible
+
+
+def test_phase7_travel_uses_model_judgment_not_static_catalog(isolated_db):
+    model = StubCognitiveModel()
+    runtime = CognitiveOSRuntime(model_client=model)
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="phase7-travel",
+            userInput="2026年9月去新疆14天，预算1万元，飞机，想去赛里木湖和喀纳斯",
+        )
+    )
+    assert session.status == "waiting_design_approval"
+    assert session.reality_assessment
+    assert session.evidence_pack
+    evidence_call = next(payload for task, payload in model.calls if task == "planning_evidence")
+    assert evidence_call["resourceCandidates"] == []
+    visible = json.dumps(session.model_dump(by_alias=True), ensure_ascii=False)
+    assert "季节" in visible
+    assert "长距离交通" in visible
+    assert "README" not in visible
+
+
+def test_phase7_model_failure_is_terminal_and_never_fakes_ai_planning(isolated_db):
+    runtime = CognitiveOSRuntime(model_client=UnavailableCognitiveModel())
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(entryPoint="p_mode", threadId="phase7-unavailable", userInput="我要学游泳")
+    )
+    assert session.status == "MODEL_UNAVAILABLE"
+    assert session.cognitive_metadata.engine_version == "cognitive-os-v1"
+    assert session.cognitive_metadata.planning_mode == "blocked_model_unavailable"
+    assert session.strategy_portfolio is None
+    assert session.execution_blueprint is None
+    with pytest.raises(HTTPException) as exc_info:
+        runtime.prepare_calendar_write(session.session_id)
+    assert exc_info.value.status_code == 409
+
+
+def test_phase7_feedback_persists_evidence_backed_user_model_memory(isolated_db):
+    model = StubCognitiveModel()
+    runtime = CognitiveOSRuntime(model_client=model)
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(entryPoint="p_mode", threadId="phase7-learning", userInput="零基础学 Python，每天3小时，30天找实习")
+    )
+    session = runtime.approve_design(session.session_id)
+    runtime.revise_execution(session.session_id, PlanningSessionTextRequest(text="资料太理论，看不懂"))
+    memories = UserModelMemoryRepository().relevant("python_career")
+    assert memories
+    assert memories[0].category == "planning_hypothesis"
+    assert memories[0].evidence
+    assert memories[0].confidence < 1
+
+
+def test_phase7_critic_repair_loop_remains_bounded_to_two_rounds(isolated_db):
+    model = StubCognitiveModel(first_critique_needs_repair=True)
+    runtime = CognitiveOSRuntime(model_client=model)
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(entryPoint="p_mode", threadId="phase7-repair", userInput="零基础学 Python，每天3小时，30天找实习")
+    )
+    session = runtime.approve_design(session.session_id)
+    assert session.status == "waiting_execution_approval"
+    assert model.critique_calls == 2
+    assert session.critique_report["status"] == "passed"
+
+
+def test_phase7_canonical_critic_rules_enforce_execution_invariants(isolated_db):
+    blueprint = StubCognitiveModel()._execution({"goalModel": {"domain": "travel"}})
+    validate_execution_blueprint(blueprint)
+
+    duplicate = blueprint.model_copy(update={"tasks": [blueprint.tasks[0], blueprint.tasks[0]]})
+    with pytest.raises(CognitiveCriticRuleError, match="task ids must be unique"):
+        validate_execution_blueprint(duplicate)
+
+
+def test_phase7_p_mode_stream_is_user_facing_workspace_not_agent_log(client, monkeypatch):
+    model = StubCognitiveModel()
+
+    def complete_contract(_self, **kwargs):
+        return model.complete_contract(**kwargs)
+
+    monkeypatch.setenv("PLANIX_COGNITIVE_MODE", "true")
+    monkeypatch.setattr(CognitiveModelClient, "complete_contract", complete_contract)
+    response = client.post(
+        "/api/command/chat",
+        json={
+            "message": "2026年9月去新疆14天，预算1万元，飞机，想去赛里木湖和喀纳斯",
+            "mode": "auto",
+            "permission": "low",
+        },
+    )
+    events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    event_types = {item.get("type") for item in events}
+    assert {
+        "planning_session_started",
+        "goal_model_updated",
+        "reality_assessment_ready",
+        "evidence_pack_ready",
+        "strategy_portfolio_ready",
+        "planning_session_status",
+    }.issubset(event_types)
+    assert "command_decision" not in event_types
+    assert "agent_decision" not in event_types
+    assert "agent_message" not in event_types
+    assert "runtime_started" not in event_types
+    assert "draft_created" not in event_types
+    assert "user_need_contract" not in event_types
+    assert "memory_insight_brief" not in event_types
+    assert "resource_brief" not in event_types
+
+
+def test_phase7_p_mode_model_unavailable_has_no_fake_plan_or_technical_trace(client, monkeypatch):
+    def unavailable(_self, *, stage: str, **_kwargs):
+        raise PlanningModelUnavailable(
+            stage,
+            SafePlanningError(
+                stage=stage,
+                errorType="auth_error",
+                message="No planning model is available.",
+                retryable=False,
+            ),
+        )
+
+    monkeypatch.setenv("PLANIX_COGNITIVE_MODE", "true")
+    monkeypatch.setattr(CognitiveModelClient, "complete_contract", unavailable)
+    response = client.post(
+        "/api/command/chat",
+        json={"message": "我要学Go", "mode": "auto", "permission": "low"},
+    )
+    events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    assert any(item.get("type") == "planning_session_status" and item.get("status") == "MODEL_UNAVAILABLE" for item in events)
+    forbidden = {
+        "command_decision",
+        "agent_decision",
+        "agent_message",
+        "strategy_portfolio_ready",
+        "execution_blueprint_ready",
+        "runtime_started",
+        "draft_created",
+        "calendar_plan_preview",
+    }
+    assert not forbidden.intersection({item.get("type") for item in events})

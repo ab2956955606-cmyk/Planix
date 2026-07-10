@@ -39,6 +39,7 @@ class CognitivePlanningPersistence:
     JSON_COLUMNS = {
         "cognitive_metadata": "cognitive_metadata_json",
         "goal_model": "goal_model_json",
+        "reality_assessment": "reality_assessment_json",
         "evidence_pack": "evidence_pack_json",
         "strategy_portfolio": "strategy_portfolio_json",
         "execution_blueprint": "execution_blueprint_json",
@@ -85,6 +86,7 @@ class CognitivePlanningPersistence:
             "ready_to_write_calendar",
             "waiting_calendar_write_approval",
             "learning_from_feedback",
+            "MODEL_UNAVAILABLE",
         )
         with get_conn() as conn:
             return conn.execute(

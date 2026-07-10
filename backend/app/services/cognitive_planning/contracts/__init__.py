@@ -41,6 +41,7 @@ from .learning import (
     UserModelHypothesisDraft,
     UserPlanningHypothesis,
 )
+from .reality import RealityAssessment, RealityAssessmentInput, RealityRisk
 from .state import (
     CognitivePlanningMetadata,
     CognitivePlanningState,

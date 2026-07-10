@@ -284,12 +284,17 @@ class CognitivePlanningRuntime:
             return state
         try:
             context = state.get("request_context", {})
-            result = self.evidence_agent.run(
-                goal,
-                context_date=str(context.get("date") or "") or None,
-                web_research_allowed=bool(context.get("webResearchAllowed", False)),
-                web_research_approved=bool(context.get("webResearchApproved", False)),
-                freshness_required=bool(context.get("freshnessRequired", False)),
+            evidence_kwargs = {
+                "context_date": str(context.get("date") or "") or None,
+                "web_research_allowed": bool(context.get("webResearchAllowed", False)),
+                "web_research_approved": bool(context.get("webResearchApproved", False)),
+                "freshness_required": bool(context.get("freshnessRequired", False)),
+            }
+            reality = state.get("reality_assessment")
+            result = (
+                self.evidence_agent.run(goal, reality, **evidence_kwargs)
+                if reality is not None
+                else self.evidence_agent.run(goal, **evidence_kwargs)
             )
         except PlanningModelUnavailable as exc:
             return self._block_model(state, agent=self.evidence_agent.name, error=exc.error)
@@ -340,7 +345,10 @@ class CognitivePlanningRuntime:
             return state
         feedback = state.get("user_input") if state.get("user_action") == "revise_strategy" else None
         try:
-            result = self.strategy_agent.run(goal, evidence, previous=state.get("strategy_portfolio"), feedback=feedback)
+            strategy_kwargs = {"previous": state.get("strategy_portfolio"), "feedback": feedback}
+            if state.get("reality_assessment") is not None:
+                strategy_kwargs["reality"] = state.get("reality_assessment")
+            result = self.strategy_agent.run(goal, evidence, **strategy_kwargs)
         except PlanningModelUnavailable as exc:
             return self._block_model(state, agent=self.strategy_agent.name, error=exc.error)
         strategy = result.artifact
@@ -393,7 +401,10 @@ class CognitivePlanningRuntime:
             return state
         repair = state.pop("repair_instructions", [])
         try:
-            result = self.execution_agent.run(goal, evidence, strategy, repair_instructions=repair)
+            execution_kwargs = {"repair_instructions": repair}
+            if state.get("reality_assessment") is not None:
+                execution_kwargs["reality"] = state.get("reality_assessment")
+            result = self.execution_agent.run(goal, evidence, strategy, **execution_kwargs)
         except PlanningModelUnavailable as exc:
             return self._block_model(state, agent=self.execution_agent.name, error=exc.error)
         execution = result.artifact
@@ -430,7 +441,10 @@ class CognitivePlanningRuntime:
         if not goal or not evidence or not strategy or not execution:
             return state
         try:
-            result = self.critic_agent.critique(goal, evidence, strategy, execution)
+            critique_kwargs = {}
+            if state.get("reality_assessment") is not None:
+                critique_kwargs["reality"] = state.get("reality_assessment")
+            result = self.critic_agent.critique(goal, evidence, strategy, execution, **critique_kwargs)
         except PlanningModelUnavailable as exc:
             return self._block_model(state, agent=self.critic_agent.name, error=exc.error)
         critique = result.artifact
@@ -545,9 +559,11 @@ class CognitivePlanningRuntime:
             state["user_input"] = instructions[0].get("instruction", "Revise the strategy.")
             state["repair_loop"] = update is None
             state["next_node"] = "strategy_architect"
-        elif target in {"evidence_pack", "context_evidence"}:
+        elif target in {"evidence_pack", "context_evidence", "evidence"}:
             state["next_node"] = "context_evidence"
-        elif target in {"user_goal_model", "goal_modeling"}:
+        elif target in {"reality_assessment", "reality"}:
+            state["next_node"] = "reality"
+        elif target in {"user_goal_model", "goal_modeling", "goal_intelligence"}:
             state["next_node"] = "goal_modeling"
         else:
             state["next_node"] = "__end__"
@@ -596,14 +612,16 @@ class CognitivePlanningRuntime:
 
     def feedback_learning_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
         try:
-            result = self.critic_agent.learn(
-                state.get("user_input", ""),
-                goal=state.get("goal_model"),
-                evidence=state.get("evidence_pack"),
-                strategy=state.get("strategy_portfolio"),
-                execution=state.get("execution_blueprint"),
-                critique=state.get("critique_report"),
-            )
+            learning_kwargs = {
+                "goal": state.get("goal_model"),
+                "evidence": state.get("evidence_pack"),
+                "strategy": state.get("strategy_portfolio"),
+                "execution": state.get("execution_blueprint"),
+                "critique": state.get("critique_report"),
+            }
+            if state.get("reality_assessment") is not None:
+                learning_kwargs["reality"] = state.get("reality_assessment")
+            result = self.critic_agent.learn(state.get("user_input", ""), **learning_kwargs)
         except PlanningModelUnavailable as exc:
             return self._block_model(state, agent=self.critic_agent.name, error=exc.error)
         update = result.artifact

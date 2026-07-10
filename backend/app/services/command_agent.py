@@ -153,11 +153,29 @@ def _looks_like_learning_plan_request(text: str) -> bool:
     return bool(re.search(r"[a-z][a-z0-9+#.-]*|[\u4e00-\u9fff]{2,}", cleaned, re.I))
 
 
+def _looks_like_goal_statement(text: str) -> bool:
+    """Route goal-shaped language to planning without encoding domain templates."""
+    cleaned = text.strip().lower()
+    if not cleaned or re.search(r"(查看|查询|搜索|删除|修改|写入|保存|记录|什么计划|有哪些计划|query|search|delete|save)", cleaned):
+        return False
+    if re.search(r"(我要|我想|打算|准备|希望|目标是|计划在|i want to|i plan to|my goal is)", cleaned, re.I):
+        return True
+    constraint_patterns = (
+        r"\d+\s*(?:天|周|个月|月|days?|weeks?|months?)",
+        r"(?:每天|每周|daily|weekly)\s*\d+(?:\.\d+)?\s*(?:小时|分钟|hours?|minutes?)",
+        r"\d+(?:\.\d+)?\s*(?:万|千)?\s*(?:元|人民币|rmb|cny)",
+        r"(?:20\d{2}[年\-/])?\d{1,2}月",
+        r"(?:截止|之前|以内|deadline|before|within)",
+    )
+    constraint_count = sum(bool(re.search(pattern, cleaned, re.I)) for pattern in constraint_patterns)
+    return constraint_count >= 2 and bool(re.search(r"[a-z][a-z0-9+#.-]*|[\u4e00-\u9fff]{2,}", cleaned, re.I))
+
+
 def detect_command_intent(message: str) -> CommandIntent:
     text = message.strip().lower()
     if not text:
         return "normal_chat"
-    if _looks_like_learning_plan_request(text):
+    if _looks_like_learning_plan_request(text) or _looks_like_goal_statement(text):
         return "planning_request"
     if re.search(r"(记住|偏好|适合|不喜欢|只能|希望以后|记一下|记录一下|保存一下|保存成笔记|保存为笔记|记录一条记忆|记录记忆|save memory|remember)", text):
         return "save_memory"
@@ -1346,27 +1364,33 @@ class CommandAgentService:
                 content=f"Planning session {session.status}",
             )
         _ = agents
-        for decision in session.decisions:
-            data = decision.model_dump(by_alias=True, exclude_none=True)
-            yield self._planning_event(
-                thread_id,
-                "agent_decision",
-                session.session_id,
-                data=data,
-                content=decision.user_visible_summary or decision.reason or decision.decision,
-            )
-        for message in session.messages:
-            data = message.model_dump(by_alias=True)
-            yield self._planning_event(
-                thread_id,
-                "agent_message",
-                session.session_id,
-                data=data,
-                content=message.reason or message.message_type,
-            )
+        cognitive_os = bool(
+            session.cognitive_metadata
+            and session.cognitive_metadata.engine_version == "cognitive-os-v1"
+        )
+        if not cognitive_os:
+            for decision in session.decisions:
+                data = decision.model_dump(by_alias=True, exclude_none=True)
+                yield self._planning_event(
+                    thread_id,
+                    "agent_decision",
+                    session.session_id,
+                    data=data,
+                    content=decision.user_visible_summary or decision.reason or decision.decision,
+                )
+            for message in session.messages:
+                data = message.model_dump(by_alias=True)
+                yield self._planning_event(
+                    thread_id,
+                    "agent_message",
+                    session.session_id,
+                    data=data,
+                    content=message.reason or message.message_type,
+                )
         for event_type, data in cognitive_events(session):
             summary_keys = {
                 "goal_model_updated": "goalStatement",
+                "reality_assessment_ready": "feasibilitySummary",
                 "evidence_pack_ready": "synthesis",
                 "strategy_portfolio_ready": "recommendationReason",
                 "execution_blueprint_ready": "resourceCoverage",
@@ -1375,22 +1399,22 @@ class CommandAgentService:
             }
             content = str(data.get(summary_keys[event_type]) or event_type)
             yield self._planning_event(thread_id, event_type, session.session_id, data=data, content=content)
-        if session.user_need_contract:
+        if session.user_need_contract and not cognitive_os:
             data = session.user_need_contract.model_dump(by_alias=True)
             yield self._planning_event(thread_id, "user_need_contract", session.session_id, data=data, content=session.user_need_contract.interpreted_goal)
-        if session.memory_insight:
+        if session.memory_insight and not cognitive_os:
             data = session.memory_insight.model_dump(by_alias=True)
             yield self._planning_event(thread_id, "memory_insight_brief", session.session_id, data=data, content="Memory Insight Agent")
-        if session.resource_brief:
+        if session.resource_brief and not cognitive_os:
             data = session.resource_brief.model_dump(by_alias=True)
             yield self._planning_event(thread_id, "resource_brief", session.session_id, data=data, content="Resource Intelligence Agent")
-        if session.design_proposal:
+        if session.design_proposal and not cognitive_os:
             data = session.design_proposal.model_dump(by_alias=True)
             yield self._planning_event(thread_id, "plan_design_proposal", session.session_id, data=data, content=session.design_proposal.strategy_name)
-        if session.execution_draft:
+        if session.execution_draft and not cognitive_os:
             data = session.execution_draft.model_dump(by_alias=True)
             yield self._planning_event(thread_id, "execution_plan_draft", session.session_id, data=data, content=session.execution_draft.schedule_summary)
-        if session.learning_patch:
+        if session.learning_patch and not cognitive_os:
             data = session.learning_patch.model_dump(by_alias=True)
             yield self._planning_event(thread_id, "learning_update", session.session_id, data=data, content=session.learning_patch.insight)
         yield self._planning_event(thread_id, "planning_session_status", session.session_id, status=session.status, content=session.status)
@@ -1429,6 +1453,8 @@ class CommandAgentService:
         if _planning_restart_text(text):
             return None
         if session.status == "needs_goal_clarification":
+            return "clarify", session
+        if session.status == "MODEL_UNAVAILABLE":
             return "clarify", session
         if session.status in {"waiting_design_approval", "design_revision"}:
             if _planning_approval_text(text):
@@ -1768,7 +1794,9 @@ class CommandAgentService:
         user_message = self.add_message(thread_id, "user", payload.message)
         yield _ndjson({"type": "thread", "threadId": thread_id})
 
-        if payload.mode == "auto" and decision:
+        from ..cognitive_planning import use_cognitive_os
+
+        if payload.mode == "auto" and decision and (intent != "planning_request" or not use_cognitive_os()):
             decision_card = _decision_payload(decision, decision_source or "local_fallback", decision_error)
             self.add_message(
                 thread_id,

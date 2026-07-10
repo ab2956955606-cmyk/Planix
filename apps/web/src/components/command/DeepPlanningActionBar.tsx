@@ -46,6 +46,11 @@ function primaryActions(status: PlanningStatus | undefined, t: Translator): Plan
       { key: 'startDeepPlanning', label: t('command.startDeepPlanning'), message: t('command.startDeepPlanningMessage'), icon: Sparkles }
     ];
   }
+  if (status === 'MODEL_UNAVAILABLE') {
+    return [
+      { key: 'retryDeepPlanning', label: t('command.retryDeepPlanning'), message: t('command.retryDeepPlanningMessage'), icon: RotateCcw }
+    ];
+  }
   if (status === 'needs_goal_clarification') {
     return [
       { key: 'supplementGoal', label: t('command.supplementGoal'), message: t('command.supplementGoalMessage'), icon: PencilLine }

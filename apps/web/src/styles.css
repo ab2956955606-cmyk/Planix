@@ -3013,6 +3013,19 @@ select:focus {
   border-color: rgba(45, 212, 191, 0.28);
 }
 
+.deep-planning-group.cognitive-workspace {
+  background: rgba(9, 14, 24, 0.52);
+}
+
+.cognitive-workspace-list > .command-inline-card {
+  margin: 0;
+}
+
+.cognitive-model-unavailable {
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(127, 29, 29, 0.12);
+}
+
 .deep-planning-card-item > .command-collapsible-body > .command-inline-card {
   margin: 0;
 }

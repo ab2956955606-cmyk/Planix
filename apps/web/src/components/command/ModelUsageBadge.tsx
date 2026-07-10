@@ -61,6 +61,8 @@ function taskLabel(taskType: string | undefined, t: (key: string) => string): st
       return t('command.usageTaskSettingsTest');
     case 'planning_goal_model':
       return t('command.usageTaskPlanningGoal');
+    case 'planning_reality':
+      return t('command.usageTaskPlanningReality');
     case 'planning_evidence':
       return t('command.usageTaskPlanningEvidence');
     case 'planning_strategy':
