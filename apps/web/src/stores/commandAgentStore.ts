@@ -18,7 +18,7 @@ export interface CommandThreadMessage {
   role: 'user' | 'assistant' | 'card';
   content: string;
   createdAt: number;
-  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'command_decision' | 'plan_search_results' | 'memory_search_results' | 'note_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'memory_write_preview' | 'memory_write_result' | 'note_write_preview' | 'note_write_result' | 'planning_session_started' | 'user_need_contract' | 'memory_insight_brief' | 'resource_brief' | 'plan_design_proposal' | 'execution_plan_draft' | 'learning_update' | 'agent_decision' | 'agent_message' | 'planning_session_status' | 'model_usage' | 'clarify_question' | 'execution_result';
+  kind?: 'error' | 'runtime' | 'summary' | 'plan_detail' | 'refined_tasks_result' | 'calendar_preview' | 'approval' | 'calendar_write_result' | 'command_decision' | 'plan_search_results' | 'memory_search_results' | 'note_search_results' | 'plan_patch_preview' | 'plan_patch_result' | 'memory_write_preview' | 'memory_write_result' | 'note_write_preview' | 'note_write_result' | 'planning_session_started' | 'user_need_contract' | 'memory_insight_brief' | 'resource_brief' | 'plan_design_proposal' | 'execution_plan_draft' | 'learning_update' | 'agent_decision' | 'agent_message' | 'planning_session_status' | 'goal_model_updated' | 'evidence_pack_ready' | 'strategy_portfolio_ready' | 'execution_blueprint_ready' | 'critique_report_ready' | 'planning_learning_updated' | 'model_usage' | 'clarify_question' | 'execution_result';
   status?: 'running' | 'success' | 'error';
   title?: string;
   draftId?: string;
@@ -131,6 +131,12 @@ const CARD_KINDS = new Set([
   'agent_decision',
   'agent_message',
   'planning_session_status',
+  'goal_model_updated',
+  'evidence_pack_ready',
+  'strategy_portfolio_ready',
+  'execution_blueprint_ready',
+  'critique_report_ready',
+  'planning_learning_updated',
   'model_usage',
   'clarify_question',
   'execution_result'
@@ -574,6 +580,40 @@ function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
       payload: { ...event }
     });
   }
+  if (
+    event.type === 'goal_model_updated' ||
+    event.type === 'evidence_pack_ready' ||
+    event.type === 'strategy_portfolio_ready' ||
+    event.type === 'execution_blueprint_ready' ||
+    event.type === 'critique_report_ready' ||
+    event.type === 'planning_learning_updated'
+  ) {
+    const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+    const titles: Record<typeof event.type, string> = {
+      goal_model_updated: t('command.cognitiveGoalModel'),
+      evidence_pack_ready: t('command.cognitiveEvidence'),
+      strategy_portfolio_ready: t('command.cognitiveStrategyPortfolio'),
+      execution_blueprint_ready: t('command.cognitiveExecutionBlueprint'),
+      critique_report_ready: t('command.cognitiveCritique'),
+      planning_learning_updated: t('command.cognitiveLearning')
+    };
+    const summary = String(
+      data.goalStatement ||
+      data.synthesis ||
+      data.recommendationReason ||
+      data.simulationSummary ||
+      data.originalFeedback ||
+      titles[event.type]
+    );
+    addMessage({
+      role: 'card',
+      kind: event.type,
+      status: event.type === 'critique_report_ready' && data.status !== 'passed' ? 'error' : 'success',
+      title: titles[event.type],
+      content: summary,
+      payload: { ...event }
+    });
+  }
   if (event.type === 'model_usage') {
     addMessage({
       role: 'card',
@@ -670,6 +710,12 @@ function createStreamHandler(t: (key: string) => string) {
         event.type === 'agent_decision' ||
         event.type === 'agent_message' ||
         event.type === 'planning_session_status' ||
+        event.type === 'goal_model_updated' ||
+        event.type === 'evidence_pack_ready' ||
+        event.type === 'strategy_portfolio_ready' ||
+        event.type === 'execution_blueprint_ready' ||
+        event.type === 'critique_report_ready' ||
+        event.type === 'planning_learning_updated' ||
         event.type === 'model_usage' ||
         event.type === 'clarify_question' ||
         event.type === 'execution_result'

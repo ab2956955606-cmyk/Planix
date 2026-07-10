@@ -21,6 +21,12 @@ ROUTABLE_TASK_TYPES = [
     "memory_write",
     "chat",
     "model_knowledge",
+    "planning_goal_model",
+    "planning_evidence",
+    "planning_strategy",
+    "planning_execution",
+    "planning_critique",
+    "planning_learning",
 ]
 LEGACY_ROUTING_TASK_ALIASES = {
     "note_query": "memory_query",
@@ -36,6 +42,12 @@ DEFAULT_TASK_STRATEGIES = {
     "memory_write": "classification",
     "chat": "balanced",
     "model_knowledge": "knowledge_reasoning",
+    "planning_goal_model": "knowledge_reasoning",
+    "planning_evidence": "context_summary",
+    "planning_strategy": "knowledge_reasoning",
+    "planning_execution": "structured_stable",
+    "planning_critique": "strict_json",
+    "planning_learning": "knowledge_reasoning",
 }
 AUTO_STRATEGY_SCORES = {
     "fast_low_cost": {"zhipu_glm": 95, "deepseek": 88, "kimi": 76, "openai": 72, "custom": 70},
@@ -307,7 +319,7 @@ def _default_routing_rule_configs(active_provider: str) -> list[ModelRoutingRule
             task_type=task_type,
             primary_provider="auto",
             fallback_providers=("deepseek",),
-            local_fallback_enabled=True,
+            local_fallback_enabled=not task_type.startswith("planning_"),
         )
         for task_type in ROUTABLE_TASK_TYPES
     ]
@@ -335,7 +347,7 @@ def _routing_row_to_config(row) -> ModelRoutingRuleConfig | None:
         task_type=task_type,
         primary_provider=primary,
         fallback_providers=tuple(fallbacks),
-        local_fallback_enabled=bool(row["local_fallback_enabled"]),
+        local_fallback_enabled=False if task_type.startswith("planning_") else bool(row["local_fallback_enabled"]),
         updated_at=row["updated_at"],
     )
 
@@ -508,7 +520,7 @@ def get_model_routing_rule(task_type: str, active_provider: str) -> ModelRouting
         task_type=task_type,
         primary_provider="auto",
         fallback_providers=("deepseek",),
-        local_fallback_enabled=True,
+        local_fallback_enabled=not task_type.startswith("planning_"),
     )
 
 
@@ -714,7 +726,7 @@ def save_model_routing_rules(payload: AiModelRoutingUpdate) -> AiSettingsOut:
                     for provider in rule.fallback_providers
                     if primary == "auto" or provider != primary
                 ]
-                local_fallback_enabled = rule.local_fallback_enabled
+                local_fallback_enabled = False if task_type.startswith("planning_") else rule.local_fallback_enabled
             else:
                 default = defaults[task_type]
                 primary = default.primary_provider

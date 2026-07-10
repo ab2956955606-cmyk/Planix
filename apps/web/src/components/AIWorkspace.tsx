@@ -124,7 +124,13 @@ const routingTaskTypes: ModelRoutingTaskType[] = [
   'memory_query',
   'memory_write',
   'model_knowledge',
-  'chat'
+  'chat',
+  'planning_goal_model',
+  'planning_evidence',
+  'planning_strategy',
+  'planning_execution',
+  'planning_critique',
+  'planning_learning'
 ];
 const defaultTaskStrategies: Record<ModelRoutingTaskType, AutoModelStrategy> = {
   command_decision: 'fast_low_cost',
@@ -136,7 +142,13 @@ const defaultTaskStrategies: Record<ModelRoutingTaskType, AutoModelStrategy> = {
   note_query: 'context_summary',
   note_write: 'classification',
   model_knowledge: 'knowledge_reasoning',
-  chat: 'balanced'
+  chat: 'balanced',
+  planning_goal_model: 'knowledge_reasoning',
+  planning_evidence: 'context_summary',
+  planning_strategy: 'knowledge_reasoning',
+  planning_execution: 'structured_stable',
+  planning_critique: 'strict_json',
+  planning_learning: 'knowledge_reasoning'
 };
 const autoStrategyScores: Record<AutoModelStrategy, Record<RoutedProvider, number>> = {
   fast_low_cost: { zhipu_glm: 95, deepseek: 88, kimi: 76, openai: 72, custom: 70 },
@@ -184,7 +196,13 @@ function routingTaskLabel(taskType: ModelRoutingTaskType, t: (key: string) => st
     note_query: t('legacy.routingTaskMemoryQuery'),
     note_write: t('legacy.routingTaskMemoryWrite'),
     model_knowledge: t('legacy.routingTaskModelKnowledge'),
-    chat: t('legacy.routingTaskChat')
+    chat: t('legacy.routingTaskChat'),
+    planning_goal_model: t('legacy.routingTaskPlanningGoal'),
+    planning_evidence: t('legacy.routingTaskPlanningEvidence'),
+    planning_strategy: t('legacy.routingTaskPlanningStrategy'),
+    planning_execution: t('legacy.routingTaskPlanningExecution'),
+    planning_critique: t('legacy.routingTaskPlanningCritique'),
+    planning_learning: t('legacy.routingTaskPlanningLearning')
   };
   return labels[taskType] || taskType;
 }
@@ -200,7 +218,13 @@ function routingTaskDescription(taskType: ModelRoutingTaskType, t: (key: string)
     note_query: t('legacy.routingTaskMemoryQueryDesc'),
     note_write: t('legacy.routingTaskMemoryWriteDesc'),
     model_knowledge: t('legacy.routingTaskModelKnowledgeDesc'),
-    chat: t('legacy.routingTaskChatDesc')
+    chat: t('legacy.routingTaskChatDesc'),
+    planning_goal_model: t('legacy.routingTaskPlanningGoalDesc'),
+    planning_evidence: t('legacy.routingTaskPlanningEvidenceDesc'),
+    planning_strategy: t('legacy.routingTaskPlanningStrategyDesc'),
+    planning_execution: t('legacy.routingTaskPlanningExecutionDesc'),
+    planning_critique: t('legacy.routingTaskPlanningCritiqueDesc'),
+    planning_learning: t('legacy.routingTaskPlanningLearningDesc')
   };
   return descriptions[taskType] || '';
 }
@@ -250,7 +274,7 @@ function recommendedRoutingRules(): AiModelRoutingRule[] {
     taskType,
     primaryProvider: 'auto',
     fallbackProviders: ['deepseek'],
-    localFallbackEnabled: true
+    localFallbackEnabled: !taskType.startsWith('planning_')
   }));
 }
 
@@ -1957,7 +1981,9 @@ function ModelSettings(props: {
             <span>{t('legacy.routingFallbackTwo')}</span>
             <span>{t('legacy.routingLocalFallback')}</span>
           </div>
-          {routingRules.map((rule) => (
+          {routingRules.map((rule) => {
+            const cognitiveTask = rule.taskType.startsWith('planning_');
+            return (
             <div className="routing-row" role="row" key={rule.taskType}>
               <span className="routing-task-copy">
                 <strong>{routingTaskLabel(rule.taskType, t)}</strong>
@@ -1996,16 +2022,20 @@ function ModelSettings(props: {
               <label className="routing-toggle">
                 <input
                   type="checkbox"
-                  checked={rule.localFallbackEnabled}
+                  checked={cognitiveTask ? false : rule.localFallbackEnabled}
+                  disabled={cognitiveTask}
                   onChange={(event) => updateRoutingRule(rule.taskType, (current) => ({
                     ...current,
                     localFallbackEnabled: event.target.checked
                   }))}
                 />
-                <span>{rule.localFallbackEnabled ? t('legacy.enabled') : t('legacy.disabled')}</span>
+                <span>{cognitiveTask
+                  ? t('legacy.cognitiveNoLocalFallback')
+                  : rule.localFallbackEnabled ? t('legacy.enabled') : t('legacy.disabled')}</span>
               </label>
             </div>
-          ))}
+            );
+          })}
         </div>
         <div className="settings-actions">
           <button

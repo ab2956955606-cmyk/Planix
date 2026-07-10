@@ -5,6 +5,14 @@ import { AgentThread } from './AgentThread';
 import { ApprovalCard } from './ApprovalCard';
 import { CommandDecisionCard } from './CommandDecisionCard';
 import {
+  CritiqueReportCard,
+  EvidencePackCard,
+  ExecutionBlueprintCard,
+  GoalModelCard,
+  PlanningLearningUpdateCard,
+  StrategyPortfolioCard
+} from './CognitivePlanningCards';
+import {
   AgentDecisionCard,
   AgentMessageCard,
   ExecutionPlanDraftCard,
@@ -294,6 +302,66 @@ function collectButtons(node: ReactNode): ReactElement[] {
 }
 
 describe('Plan command cards', () => {
+  it('renders cognitive planning artifacts as user-readable cards', () => {
+    const goalHtml = renderToStaticMarkup(<GoalModelCard data={{
+      goalStatement: '安全掌握基础游泳能力',
+      desiredChange: '连续游 200 米并掌握安全边界',
+      domain: 'swimming',
+      confidence: 0.82,
+      hardConstraints: [{ statement: '必须在有救生员的泳池练习' }],
+      knownFacts: [{ statement: '用户零基础，每天可练习一小时', sourceText: '零基础，每天一小时' }],
+      assumptions: [{ statement: '每周可去泳池两次', needsUserConfirmation: true }],
+      decisionRelevantUnknowns: [{ description: '是否能稳定使用泳池', whyItChangesThePlan: '影响可行性和排期' }],
+      questions: [{ question: '你能稳定使用有救生员的泳池吗？', whyThisQuestionMatters: '决定是否可以开始水中练习' }],
+      successModel: { definition: '连续游 200 米' },
+      feasibilityJudgment: { summary: '需要先确认安全练习条件' }
+    }} t={t} />);
+    const evidenceHtml = renderToStaticMarkup(<EvidencePackCard data={{
+      synthesis: '安全条件和教练资源会改变第一阶段。',
+      confidence: 0.8,
+      userEvidence: [{ statement: '用户只在有救生员的泳池练习', whyRelevant: '决定安全边界' }],
+      domainEvidence: [{ claim: '零基础练习需要现场安全支持', relevance: '影响资源和任务顺序', sourceRef: 'local:safety-note' }],
+      planningRules: [{ rule: '不安排无人监督的水中练习', evidence: ['用户零基础'] }],
+      resourceCandidates: [{ title: '合格游泳教练', howItHelps: '纠正动作', userFit: '适合零基础' }],
+      gaps: [{ description: '泳池开放时间未知', consequence: '无法精确排期', proposedResolution: 'ask_user' }],
+      calendarReality: { conflicts: [], loadWarnings: [] }
+    }} t={t} />);
+    const strategyHtml = renderToStaticMarkup(<StrategyPortfolioCard data={{
+      recommendedStrategyId: 'safe-route',
+      recommendationReason: '先建立安全基础，再增加距离。',
+      strategies: [{ id: 'safe-route', name: '教练带领的安全路线', coreIdea: '先安全后距离', rationale: { whyItFitsUser: '零基础且重视安全' }, phases: [{ title: '水性与呼吸', outcome: '能安全漂浮' }], tradeoffs: ['进度更稳'], majorRisks: ['教练时间'], expectedResults: ['安全连续游 200 米'], estimatedEffort: '每周两次' }],
+      userDecision: { question: '采用这条路线吗？', options: ['采用', '调整'] }
+    }} t={t} />);
+    const executionHtml = renderToStaticMarkup(<ExecutionBlueprintCard data={{
+      narrative: { executionLogic: '先确认安全条件，再做入水练习。', workloadReasoning: '每次 60 分钟', riskHandling: '无救生员则停止' },
+      resourceCoverage: 'partial',
+      tasks: [{ id: 't1', title: '与教练完成浅水区漂浮评估', scheduledDate: '2026-07-11', estimatedMinutes: 60, difficulty: 'medium', purpose: '建立安全起点', actionSteps: ['确认救生员在场', '完成漂浮评估'], completionEvidence: ['教练确认结果'], deliverable: '漂浮评估记录', fallbackAction: '仅完成岸上安全说明', dependencies: [], resources: [{ title: '游泳教练', exactUsage: '现场指导', expectedContribution: '纠正动作' }] }]
+    }} t={t} />);
+    const critiqueHtml = renderToStaticMarkup(<CritiqueReportCard data={{
+      status: 'passed', score: 91, simulationSummary: '已模拟首次练习和安全失败路径。', calendarWritable: true,
+      strengths: ['安全边界和停止条件明确'], dimensions: { userFit: 92, safety: 95 },
+      issues: [{ responsibleAgent: 'execution_designer', severity: 'minor', description: '安全边界明确', evidence: '有救生员与停止条件' }], remainingRisks: ['泳池临时关闭']
+    }} t={t} />);
+    const learningHtml = renderToStaticMarkup(<PlanningLearningUpdateCard data={{
+      originalFeedback: '资料太理论', diagnosis: { failureStage: 'resource', failedAssumption: '用户适合先看文档', rootCause: '缺少示范' },
+      currentPlanPatch: { instruction: '替换为教练示范' }, userModelHypothesis: { rule: '先示范后阅读', confidence: 0.62 }
+    }} t={t} />);
+
+    expect(goalHtml).toContain('安全掌握基础游泳能力');
+    expect(goalHtml).toContain('影响可行性和排期');
+    expect(goalHtml).toContain('用户零基础，每天可练习一小时');
+    expect(evidenceHtml).toContain('决定安全边界');
+    expect(evidenceHtml).toContain('local:safety-note');
+    expect(evidenceHtml).toContain('不安排无人监督的水中练习');
+    expect(strategyHtml).toContain('教练带领的安全路线');
+    expect(strategyHtml).toContain('安全连续游 200 米');
+    expect(executionHtml).toContain('与教练完成浅水区漂浮评估');
+    expect(executionHtml).toContain('现场指导');
+    expect(critiqueHtml).toContain('可进入日历确认');
+    expect(critiqueHtml).toContain('安全边界和停止条件明确');
+    expect(critiqueHtml).toContain('userFit');
+    expect(learningHtml).toContain('替换为教练示范');
+  });
   it('renders the P Mode empty state with concrete examples', () => {
     const html = renderToStaticMarkup(
       <AgentThread messages={[]} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
@@ -570,6 +638,35 @@ describe('Plan command cards', () => {
     expect(sent).toEqual(['Confirm execution plan', 'The tasks are too heavy', 'The resource is too hard']);
 
     sent.length = 0;
+    const revision = ExecutionPlanDraftCard({
+      t,
+      onSend: (value) => sent.push(value),
+      planningStatus: 'execution_revision',
+      data: {
+        scheduleSummary: 'Independent critic blocked this draft.',
+        resourceCoverageSummary: 'Repair required.',
+        qualityStatus: 'needs_repair',
+        tasks: []
+      }
+    });
+    const revisionHtml = renderToStaticMarkup(revision);
+    collectButtons(revision).forEach((button) => button.props.onClick());
+    expect(revisionHtml).not.toContain('Confirm execution plan');
+    expect(sent).toEqual(['The tasks are too heavy', 'The resource is too hard']);
+
+    const revisionMessages = [{
+      id: 'm-revision',
+      role: 'card' as const,
+      kind: 'planning_session_status' as const,
+      content: 'execution_revision',
+      createdAt: 2,
+      payload: { sessionId: 'session-1', status: 'execution_revision' }
+    }];
+    const revisionActions = renderToStaticMarkup(<DeepPlanningActionBar messages={revisionMessages} onSend={() => undefined} t={t} />);
+    expect(revisionActions).not.toContain('Confirm execution plan');
+    expect(revisionActions).toContain('Too heavy');
+
+    sent.length = 0;
     const ready = ExecutionPlanDraftCard({
       t,
       onSend: (value) => sent.push(value),
@@ -673,6 +770,57 @@ describe('Plan command cards', () => {
     expect(html).toContain('Latest planning step');
     expect(html).toContain('New strategy');
     expect(html).not.toContain('Old strategy');
+  });
+
+  it('keeps technical agent trace cards collapsed inside the latest cognitive group', () => {
+    const messages = [
+      {
+        id: 'decision-1',
+        role: 'card' as const,
+        kind: 'agent_decision' as const,
+        content: '',
+        createdAt: 1,
+        payload: {
+          sessionId: 's-cognitive',
+          data: {
+            agent: 'Context & Evidence Agent',
+            decision: 'approve',
+            reason: 'technical trace detail hidden until expanded',
+            userVisibleSummary: 'Evidence is sufficient.'
+          }
+        }
+      },
+      {
+        id: 'strategy-1',
+        role: 'card' as const,
+        kind: 'strategy_portfolio_ready' as const,
+        content: '',
+        createdAt: 2,
+        payload: {
+          sessionId: 's-cognitive',
+          data: {
+            recommendedStrategyId: 's1',
+            recommendationReason: 'Best evidence fit.',
+            strategies: [{ id: 's1', name: 'Evidence route', coreIdea: 'Use evidence', phases: [] }],
+            userDecision: { question: 'Use it?', options: ['yes'] }
+          }
+        }
+      },
+      {
+        id: 'status-1',
+        role: 'card' as const,
+        kind: 'planning_session_status' as const,
+        content: 'waiting_design_approval',
+        createdAt: 3,
+        payload: { sessionId: 's-cognitive', status: 'waiting_design_approval' }
+      }
+    ];
+    const html = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
+    );
+    expect(html).toContain('Agent decision');
+    expect(html).toContain('Evidence route');
+    expect(html).not.toContain('technical trace detail hidden until expanded');
   });
 
   it('sends fixed natural language messages from deep planning, more, and row actions', () => {
@@ -835,7 +983,21 @@ describe('Plan command cards', () => {
           userVisibleSummary: 'Resource Agent requested task splitting.',
           inputArtifactIds: ['a1'],
           outputArtifactIds: ['a2'],
-          confidence: 0.87
+          confidence: 0.87,
+          modelUsage: {
+            provider: 'deepseek',
+            model: 'deepseek-chat',
+            promptTokens: 200,
+            completionTokens: 80,
+            totalTokens: 280,
+            latencyMs: 1200,
+            taskType: 'planning_evidence',
+            fallbackUsed: true,
+            attempts: [
+              { provider: 'kimi', model: 'kimi-k2.6', status: 'error', errorType: 'timeout', latencyMs: 800 },
+              { provider: 'deepseek', model: 'deepseek-chat', status: 'success', latencyMs: 400 }
+            ]
+          }
         }}
       />
     );
@@ -849,6 +1011,22 @@ describe('Plan command cards', () => {
           reason: 'Replace this task resource with beginner practice.',
           resolved: true,
           payloadJson: { taskId: 't3' }
+        }}
+      />
+    );
+    const failureMessageHtml = renderToStaticMarkup(
+      <AgentMessageCard
+        t={t}
+        data={{
+          fromAgent: 'Goal Modeling Agent',
+          toAgent: 'Goal Modeling Agent',
+          messageType: 'block',
+          reason: 'No model produced a valid goal artifact.',
+          resolved: false,
+          payloadJson: {
+            errorType: 'timeout',
+            attempts: [{ provider: 'kimi', model: 'kimi-k2.6', status: 'error', errorType: 'timeout', latencyMs: 900 }]
+          }
         }}
       />
     );
@@ -873,9 +1051,16 @@ describe('Plan command cards', () => {
     expect(decisionHtml).toContain('Resource Intelligence Agent');
     expect(decisionHtml).toContain('request_agent_revision');
     expect(decisionHtml).toContain('Decision reason');
+    expect(decisionHtml).toContain('kimi-k2.6');
+    expect(decisionHtml).toContain('timeout');
+    expect(decisionHtml).toContain('deepseek-chat');
+    expect(decisionHtml).toContain('280');
     expect(messageHtml).toContain('Feedback Evolution Agent');
     expect(messageHtml).toContain('Resource Intelligence Agent');
     expect(messageHtml).toContain('revision_request');
+    expect(failureMessageHtml).toContain('timeout');
+    expect(failureMessageHtml).toContain('kimi-k2.6');
+    expect(failureMessageHtml).toContain('900ms');
     expect(sent).toEqual([
       'Confirm direction',
       'Adjust direction',

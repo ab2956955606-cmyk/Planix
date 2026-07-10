@@ -4,7 +4,7 @@
 
 Planix is an AI application portfolio project. The portfolio-facing documentation version is `v3.0.0`, and it presents a RIVA-style AI OS Shell on the frontend connected to a real backend Runtime stream while keeping planning, review, RAG, evaluation, and desktop packaging capabilities behind a clean menu-based workspace.
 
-The current focus has moved into **Phase 4: Command Agent / P Mode** while preserving the completed Phase 3 planning/RAG, Dashboard Runtime, and Calendar write behavior. The active backend slice includes Phase 4.8.2 Unified Memory Store + Memory Agent and Phase 4.9B.1 task-level model routing observability, following the Phase 4.8 LLM-First Conversational Agent Router and Phase 4.8.1 P Mode Conversation UX Polish. P Mode keeps a minimal conversation thread, bottom composer, LLM-backed `CommandDecision` routing, auto-mode Runtime planning drafts, forced chat/workbench modes, inline draft detail/regeneration, inline task refinement, Calendar-only plan query cards, memory search/write cards, permission-gated Calendar writing/patching, compact model-usage cards, fixed natural-language quick actions, and a hidden right-side conversation drawer. Calendar plans represent formal executable plans; memories represent long-term context. Backend model calls now flow through `ModelRouter` / `ModelProvider` while `LlmClient` remains the compatibility facade.
+The current focus is **Phase 6: Cognitive Planning Kernel** for P Mode. With `PLANIX_USE_COGNITIVE_PLANNING=true`, planning requests use typed, model-backed stages for goal modeling, evidence synthesis, strategy design, execution design, independent critique, and feedback learning. LangGraph coordinates transitions but does not make planning decisions. Planix persists the artifacts in SQLite, derives legacy Planning Session snapshots for compatibility, and keeps Calendar behind explicit strategy/execution gates, deterministic guards, independent critique, action preview, and PermissionGate. Model failure blocks formal cognitive planning instead of silently producing a template plan. Dashboard Runtime, Goals, Workbench legacy Runtime, and old replay events remain compatible during rollout.
 
 The project is fully named Planix across frontend, backend, desktop, sidecar, installer, database path, environment variables, and documentation.
 
@@ -30,18 +30,35 @@ The portfolio-facing documentation version is `v3.0.0`. Do not confuse this with
 - `apps/desktop`: Tauri v2 desktop shell
 - `backend/app`: FastAPI backend
 - `backend/app/routers/command.py`: Phase 4.8/4.8.1 command chat, approval, thread list, thread replay, and thread deletion endpoints
-- `backend/app/services/command_agent.py`: command threads, messages, LLM-first decision routing with deterministic fallback, thread-local context, Runtime handoff, hidden calendar draft creation, automatic inline plan detail, draft regeneration, draft task refinement, Calendar/Notes actions, approval handling, LLM chat, and safe fallback text
+- `backend/app/services/command_agent.py`: command threads/messages, active Planning Session continuation, command routing, cognitive and legacy planning event adapters, Calendar/memory actions, approval handling, LLM chat, and replay-safe event persistence
 - `backend/app/services/command_decision.py`: strict-JSON `CommandDecisionService`, fallback decision handling, and model usage payload helpers
 - `backend/app/services/model_provider.py`: internal AI SDK layer with `ModelRouter`, provider adapters, URL normalization, usage parsing, standard error types, token caps, and local fallback semantics
 - `backend/app/services/llm.py`: compatibility facade that preserves existing `LlmClient.complete()` / `stream_tokens()` behavior
 - SQLite: plans, memories, month notes, planning goals, daily reviews, AI settings, local RAG compatibility records, FTS5 indexes, AI run logs, agent runs, agent events
 - AI settings persistence: `ai_settings` stores the singular active provider and shared knobs; `ai_provider_configs` stores provider-specific base URL, model, and API Key state.
 - AI client: internal ModelProvider layer for mock, DeepSeek, Kimi, Zhipu GLM, OpenAI, and custom OpenAI-compatible providers with local structured fallback
-- Planning: `StructuredGoalPlan` schema in `backend/app/schemas.py`, helper logic in `backend/app/services/structured_goal_plan.py`, and quality gate logic in `backend/app/services/planning_quality.py`
+- Planning: Phase 6 cognitive contracts/runtime under `backend/app/services/cognitive_planning`; legacy `StructuredGoalPlan` helpers and quality gates remain compatibility paths
 - Runtime: `/api/runtime/run` streams NDJSON events from Planner, Memory, Tool Router, Stream Engine, and Runtime Orchestrator
 - Maintenance: `/api/settings/ai-memory-cache/*` and related Settings maintenance endpoints clear AI memory/cache without touching formal user data
 - RAG: SQLite FTS5/BM25, not Chroma/FAISS
 - Sidecar: FastAPI packaged with PyInstaller as `planix-api.exe`
+
+## Phase 6 Cognitive Planning Rules
+
+- Cognitive artifacts are `UserGoalModel`, `EvidencePack`, `StrategyPortfolio`, `ExecutionNarrative`, `ExecutionBlueprint`, `PlanCritiqueReport`, and `PlanningLearningUpdate`.
+- Each cognitive stage uses an explicit model task type and strict JSON contract. Do not merge all cognition into one prompt or expose hidden chain-of-thought.
+- Model unavailability, invalid JSON, or contract failure blocks the formal flow. Do not use a template/local fallback to claim a model-backed strategy or execution plan exists.
+- Strategy creation requires a sufficiently grounded goal and evidence pack. Execution creation requires explicit strategy approval. Calendar preparation requires explicit execution approval and a writable critic report.
+- The critic can request bounded repairs and veto Calendar. Repair loops are capped at two rounds.
+- Deterministic guards validate identifiers, dependencies, dates, resources, deliverables, evidence links, fallback steps, and forbidden template leakage; they do not invent planning content.
+- Static catalogs and local retrieval provide evidence candidates only. Evidence gaps must remain visible.
+- Cross-session learning is hypothesis-based: one observation is tentative, repeated support increases confidence, and contradiction reduces confidence.
+- New cognitive events/cards remain additive. Existing Planning Session and old Runtime/draft replay must continue to render.
+- `PLANIX_USE_COGNITIVE_PLANNING` defaults to `false` during rollout. Do not migrate Dashboard Runtime or Goals through this flag.
+- `backend/app/services/deep_planning.py` is a compatibility facade. Legacy template content is frozen in `legacy_deep_planning.py` as `legacy-template-v1` and must never be used as a cognitive failure fallback.
+- Strategy approval is persisted as `planning_sessions.approved_strategy_id`; request date/research context is persisted separately and passed to Context & Evidence.
+- Shadow comparison is explicit QA tooling only. `CognitivePlanningShadowRunner` isolates old/new thread IDs and persists safe metrics in `planning_shadow_runs`; normal P Mode must not double-call models.
+- Cognitive stage token limits come from the six `PLANIX_*_MAX_TOKENS` environment variables documented in `.env.example`.
 
 ## Runtime Shape
 

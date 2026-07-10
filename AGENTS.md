@@ -10,7 +10,7 @@ Portfolio-facing documentation version: `v3.0.0`. This is a presentation label f
 
 ## Current Phase
 
-Phase 4 has started with **Command Agent / P Mode**. The current implementation includes Phase 4.8.1 P Mode Conversation UX Polish, Phase 4.8.2 Unified Memory Store + Memory Agent, Phase 4.9A Planix AI SDK / ModelProvider Layer, Phase 4.9A.1 multi-provider API Key persistence, and Phase 4.9B.1 task-level model routing observability. Default `auto` mode asks an LLM-backed `CommandDecisionService` for a structured decision before mapping the request to existing P Mode capabilities. `auto + create_plan` may run the backend Runtime and save a hidden `calendar_plan` draft; forced `chat` mode stays text-only; manual `workbench` mode remains a forced planning entry. Users can expand, regenerate/modify, refine tasks, query Calendar plans, search/write memories, or preview and patch Calendar plans through P Mode permission handling. P Mode also has a hidden right-side conversation drawer for new chat, history, and thread deletion. Backend model calls now go through the internal `ModelRouter` / `ModelProvider` layer while `LlmClient` remains the compatibility facade.
+The current phase is **Phase 6: Cognitive Planning Kernel** for P Mode. Planning requests may be routed through a feature-flagged, AI-first pipeline that produces typed goal, evidence, strategy, execution, critique, and learning artifacts. LangGraph coordinates transitions only; model-backed cognitive agents make planning decisions, deterministic guards enforce structural invariants, and users approve both strategy and execution before Calendar preview. If a cognitive model call fails or returns invalid structured output, the formal planning flow is blocked and preserves session facts; it must never disguise a local template as a model-created plan. Existing Planning Session APIs/events, legacy deep planning, Workbench Runtime, Dashboard Runtime, and Goals remain compatible during rollout.
 
 Allowed in this phase:
 
@@ -22,9 +22,9 @@ Allowed in this phase:
 - Clean Runtime Context Pack history before retrieval and planning.
 - Provide Settings maintenance controls for AI memory/cache cleanup.
 - Keep P Mode Codex-like: outputs appear as inline conversation cards, not as a fixed workspace preview panel.
-- Keep P Mode defaulting to `auto`: normal chat stays conversational, while LLM decision `create_plan` may run Runtime and create hidden `calendar_plan` drafts. Forced `chat` mode must remain non-executing, and manual `workbench` still forces planning.
+- Keep P Mode defaulting to `auto`: normal commands remain conversational, planning requests enter the active Planning Session, and `PLANIX_USE_COGNITIVE_PLANNING=true` selects the cognitive kernel. Forced `chat` remains non-executing; manual `workbench` may still use the old Runtime/hidden-draft path.
 - Keep P Mode context thread-local: recent user/assistant text from the current thread may inform chat and planning, but new chats must not inherit prior thread context.
-- Let P Mode write Calendar plans only from the current hidden `calendar_plan` draft through `command_actions`, `command_approvals`, and PermissionGate.
+- Let cognitive P Mode write Calendar plans only after explicit strategy approval, explicit execution approval, a writable independent critique, deterministic Calendar guards, `command_actions`, `command_approvals`, and PermissionGate.
 - Let P Mode refine tasks in the current hidden `calendar_plan` draft through the existing planning refinement service. Refinement results stay in the command draft until the user writes the plan to Calendar.
 - Let P Mode query Calendar plans only through inline `plan_search_results` cards without running Runtime or creating a draft.
 - Let P Mode query and write long-term context through Memory Agent, `memory_search_results`, `memory_write_preview`, `memory_write_result`, and `command_actions(target="memory")`.
@@ -35,6 +35,11 @@ Allowed in this phase:
 - Let Phase 4.9A standardize model calls through `backend/app/services/model_provider.py`, supporting `mock`, `deepseek`, `kimi`, `zhipu_glm`, `openai`, and `custom` providers behind `ModelRouter` while preserving the public `LlmClient` facade.
 - Let Phase 4.9A.1 persist provider API Keys independently in `ai_provider_configs`; Settings may show saved-key chips and delete one provider key at a time.
 - Let Phase 4.9B.1 route model calls by task type, including `command_decision`, `plan_generation`, `task_refinement`, `calendar_patch`, `memory_query`, `memory_write`, `model_knowledge`, and `chat`, with fallback attempts surfaced in model usage cards.
+- Let Phase 6 route cognitive stages with distinct task types: `planning_goal_model`, `planning_evidence`, `planning_strategy`, `planning_execution`, `planning_critique`, and `planning_learning`. Cognitive routing rules default to no business local fallback.
+- Treat `UserGoalModel`, `EvidencePack`, `StrategyPortfolio`, `ExecutionBlueprint`, `PlanCritiqueReport`, and `PlanningLearningUpdate` as the Phase 6 source-of-truth contracts. Compatibility snapshots may be derived from them but must not overwrite them.
+- Keep static resource catalogs, Memory Store hits, Calendar context, and optional web providers as evidence candidates. An agent must explain relevance and gaps before evidence influences a strategy or task.
+- Limit critic-driven repair to two rounds per execution draft. A non-writable critique after the limit must block Calendar and surface remaining risks.
+- Store learned planning rules as tentative hypotheses. One feedback item must not become a permanent fact; confidence rises with repeated support and falls with contradictory evidence.
 - Phase 3.10 may refine tasks with compact plan context, short time blocks, official/authoritative learning resources, budget explanation, and plan-fit checks.
 - Phase 3.11 demo reliability metrics may be shown in Dashboard proposals, P Mode plan-detail cards, Goals previews, and Settings health/version diagnostics.
 
@@ -48,6 +53,9 @@ Forbidden in this phase:
 - Changing `/api/runtime/run` event protocol.
 - Changing Tauri Windows installer sidecar mechanics.
 - Implementing model voting, dynamic model lists, WriteIntent/Undo, operation logs, or direct memory-to-plan writes in Phase 4.9B.1.
+- Generating a formal Phase 6 strategy, execution blueprint, critique pass, or Calendar-ready plan from deterministic templates when the model is unavailable.
+- Letting LangGraph own business decisions, hidden reasoning, or durable product state. It coordinates nodes; Planix contracts and SQLite remain the source of truth.
+- Allowing a strategy to bypass user approval, an execution blueprint to bypass user approval, or a critic failure to bypass the Calendar gate.
 
 ## Architecture
 
@@ -63,7 +71,7 @@ Forbidden in this phase:
 - Backend: FastAPI in `backend/app`.
 - Database: SQLite with FTS5/BM25 for local RAG.
 - AI: internal ModelProvider layer plus `LlmClient` compatibility facade for mock, DeepSeek, Kimi, Zhipu GLM, OpenAI, and custom OpenAI-compatible providers with local structured fallback.
-- Planning: `StructuredGoalPlan` is the source of truth for AI-generated plans.
+- Planning: Phase 6 typed cognitive artifacts are the source of truth for cognitive P Mode sessions; `StructuredGoalPlan` remains the compatibility/Calendar projection and the source of truth for legacy flows.
 - Runtime: `/api/runtime/run` returns NDJSON events from Planner, Memory, Tool Router, Stream Engine, and Runtime Orchestrator.
 - Desktop runtime: Tauri window loads bundled web resources and starts the PyInstaller sidecar `planix-api.exe`.
 - Desktop API access: normal JSON calls use Tauri IPC `proxy_api`; Runtime streaming uses `stream_agent_runtime`.
@@ -89,6 +97,13 @@ Forbidden in this phase:
 - Command service: `backend/app/services/command_agent.py`
 - Model provider layer: `backend/app/services/model_provider.py`
 - LLM compatibility facade: `backend/app/services/llm.py`
+- Cognitive planning kernel: `backend/app/services/cognitive_planning`
+- Planning compatibility facade: `backend/app/services/deep_planning.py`; frozen rollout-off implementation: `backend/app/services/legacy_deep_planning.py`
+- Cognitive contracts: `backend/app/services/cognitive_planning/contracts`
+- Cognitive agents: `backend/app/services/cognitive_planning/agents`
+- Cognitive orchestration: `backend/app/services/cognitive_planning/orchestration`
+- Cognitive retrieval/evaluation: `backend/app/services/cognitive_planning/retrieval` and `backend/app/services/cognitive_planning/evaluation`
+- QA-only shadow comparison: `CognitivePlanningShadowRunner` writes safe metrics to `planning_shadow_runs` using isolated shadow thread IDs; it is never automatic in normal P Mode.
 - Settings maintenance route: `backend/app/routers/maintenance.py`
 - Settings maintenance service: `backend/app/services/maintenance.py`
 - SQLite setup: `backend/app/db.py`

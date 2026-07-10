@@ -123,6 +123,11 @@ def test_model_routing_rules_save_without_key_validation(client, monkeypatch):
     assert saved_rules["plan_generation"]["primaryProvider"] == "kimi"
     assert saved_rules["plan_generation"]["fallbackProviders"] == ["deepseek"]
     assert saved_rules["chat"]["localFallbackEnabled"] is False
+    assert all(
+        rule["localFallbackEnabled"] is False
+        for task_type, rule in saved_rules.items()
+        if task_type.startswith("planning_")
+    )
 
 
 def test_model_routing_legacy_note_rules_are_normalized_to_memory_tasks(client):

@@ -59,6 +59,7 @@ const labels: Record<string, string> = {
   'legacy.routingFallbackTwo': 'Fallback 2',
   'legacy.routingNoFallback': 'No fallback',
   'legacy.routingLocalFallback': 'Local fallback',
+  'legacy.cognitiveNoLocalFallback': 'No local fallback for deep planning',
   'legacy.routingMissingKey': 'Missing key',
   'legacy.saveRouting': 'Save routing',
   'legacy.savingRouting': 'Saving routing',
@@ -75,6 +76,12 @@ const labels: Record<string, string> = {
   'legacy.routingTaskNoteWrite': 'Write notes',
   'legacy.routingTaskModelKnowledge': 'Knowledge',
   'legacy.routingTaskChat': 'Chat',
+  'legacy.routingTaskPlanningGoal': 'Cognitive goal modeling',
+  'legacy.routingTaskPlanningEvidence': 'Cognitive evidence',
+  'legacy.routingTaskPlanningStrategy': 'Cognitive strategy',
+  'legacy.routingTaskPlanningExecution': 'Cognitive execution',
+  'legacy.routingTaskPlanningCritique': 'Cognitive critique',
+  'legacy.routingTaskPlanningLearning': 'Cognitive learning',
   'legacy.routingTaskCommandDecisionDesc': 'Understands user intent',
   'legacy.routingTaskPlanGenerationDesc': 'Generates structuredPlan',
   'legacy.routingTaskRefinementDesc': 'Breaks tasks down',
@@ -118,6 +125,8 @@ describe('AIWorkspace settings', () => {
     expect(html).toContain('Plan generation');
     expect(html).toContain('Memory query');
     expect(html).toContain('Searches memory');
+    expect(html).toContain('Cognitive critique');
+    expect(html).toContain('No local fallback for deep planning');
     expect(html).toContain('Save routing');
   });
 

@@ -7,6 +7,14 @@ import { CalendarPlanPreviewCard } from './CalendarPlanPreviewCard';
 import { CalendarWriteResultCard } from './CalendarWriteResultCard';
 import { CommandDecisionCard } from './CommandDecisionCard';
 import {
+  CritiqueReportCard,
+  EvidencePackCard,
+  ExecutionBlueprintCard,
+  GoalModelCard,
+  PlanningLearningUpdateCard,
+  StrategyPortfolioCard
+} from './CognitivePlanningCards';
+import {
   AgentDecisionCard,
   AgentMessageCard,
   ExecutionPlanDraftCard,
@@ -54,7 +62,13 @@ const planningCardKinds = new Set<CommandThreadMessage['kind']>([
   'learning_update',
   'agent_decision',
   'agent_message',
-  'planning_session_status'
+  'planning_session_status',
+  'goal_model_updated',
+  'evidence_pack_ready',
+  'strategy_portfolio_ready',
+  'execution_blueprint_ready',
+  'critique_report_ready',
+  'planning_learning_updated'
 ]);
 
 type RenderItem =
@@ -185,6 +199,12 @@ function recordOf(value: unknown): Record<string, unknown> {
 }
 
 function planningKindLabel(kind: CommandThreadMessage['kind'], t: (key: string) => string): string {
+  if (kind === 'goal_model_updated') return t('command.cognitiveGoalModel');
+  if (kind === 'evidence_pack_ready') return t('command.cognitiveEvidence');
+  if (kind === 'strategy_portfolio_ready') return t('command.cognitiveStrategyPortfolio');
+  if (kind === 'execution_blueprint_ready') return t('command.cognitiveExecutionBlueprint');
+  if (kind === 'critique_report_ready') return t('command.cognitiveCritique');
+  if (kind === 'planning_learning_updated') return t('command.cognitiveLearning');
   if (kind === 'user_need_contract') return t('command.userNeedContract');
   if (kind === 'memory_insight_brief') return t('command.memoryInsightAgent');
   if (kind === 'resource_brief') return t('command.resourceIntelligenceAgent');
@@ -199,6 +219,15 @@ function planningKindLabel(kind: CommandThreadMessage['kind'], t: (key: string) 
 function planningCardSummary(message: CommandThreadMessage, t: (key: string) => string): string {
   const payload = payloadOf(message);
   const data = recordOf(payload.data);
+  if (message.kind === 'goal_model_updated') return String(data.goalStatement || message.content || '');
+  if (message.kind === 'evidence_pack_ready') return String(data.synthesis || message.content || '');
+  if (message.kind === 'strategy_portfolio_ready') return String(data.recommendationReason || message.content || '');
+  if (message.kind === 'execution_blueprint_ready') {
+    const tasks = Array.isArray(data.tasks) ? data.tasks.length : 0;
+    return `${tasks} ${t('command.tasks')} · ${String(data.resourceCoverage || '')}`;
+  }
+  if (message.kind === 'critique_report_ready') return `${String(data.status || '')} · ${String(data.score || 0)}`;
+  if (message.kind === 'planning_learning_updated') return String(data.originalFeedback || message.content || '');
   if (message.kind === 'user_need_contract') {
     return String(data.interpretedGoal || message.content || '');
   }
@@ -255,13 +284,13 @@ function latestPlanningStatus(messages: CommandThreadMessage[]): string {
 function shouldExpandPlanningCard(message: CommandThreadMessage, groupMessages: CommandThreadMessage[], isLatestGroup: boolean): boolean {
   if (!isLatestGroup) return false;
   const status = latestPlanningStatus(groupMessages);
-  if (status === 'needs_goal_clarification') return message.kind === 'user_need_contract';
-  if (status === 'waiting_design_approval' || status === 'design_revision') return message.kind === 'plan_design_proposal';
+  if (status === 'needs_goal_clarification') return message.kind === 'goal_model_updated' || (!groupMessages.some((item) => item.kind === 'goal_model_updated') && message.kind === 'user_need_contract');
+  if (status === 'waiting_design_approval' || status === 'design_revision') return message.kind === 'strategy_portfolio_ready' || (!groupMessages.some((item) => item.kind === 'strategy_portfolio_ready') && message.kind === 'plan_design_proposal');
   if (status === 'waiting_execution_approval' || status === 'execution_revision' || status === 'learning_from_feedback') {
-    return message.kind === 'execution_plan_draft' || message.kind === 'learning_update';
+    return message.kind === 'execution_blueprint_ready' || message.kind === 'critique_report_ready' || message.kind === 'planning_learning_updated';
   }
   if (status === 'ready_to_write_calendar' || status === 'written_to_calendar') {
-    return message.kind === 'execution_plan_draft' || message.kind === 'planning_session_status';
+    return message.kind === 'execution_blueprint_ready' || message.kind === 'critique_report_ready' || message.kind === 'planning_session_status';
   }
   return message.kind === 'plan_design_proposal' || message.kind === 'execution_plan_draft' || message.kind === 'user_need_contract';
 }
@@ -326,6 +355,12 @@ function PlanningCardContent({
   actionsEnabled: boolean;
 }) {
   const payload = payloadOf(message);
+  if (message.kind === 'goal_model_updated') return <GoalModelCard data={payload.data} t={t} />;
+  if (message.kind === 'evidence_pack_ready') return <EvidencePackCard data={payload.data} t={t} />;
+  if (message.kind === 'strategy_portfolio_ready') return <StrategyPortfolioCard data={payload.data} t={t} />;
+  if (message.kind === 'execution_blueprint_ready') return <ExecutionBlueprintCard data={payload.data} t={t} />;
+  if (message.kind === 'critique_report_ready') return <CritiqueReportCard data={payload.data} t={t} />;
+  if (message.kind === 'planning_learning_updated') return <PlanningLearningUpdateCard data={payload.data} t={t} />;
   if (message.kind === 'planning_session_started' || message.kind === 'planning_session_status') {
     return <PlanningSessionStatusCard status={String(payload.status || message.content || '')} t={t} />;
   }

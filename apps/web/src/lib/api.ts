@@ -122,6 +122,12 @@ export type CommandChatEvent =
   | { type: 'agent_decision'; sessionId: string; data: unknown }
   | { type: 'agent_message'; sessionId: string; data: unknown }
   | { type: 'planning_session_status'; sessionId: string; status: string }
+  | { type: 'goal_model_updated'; sessionId: string; data: unknown }
+  | { type: 'evidence_pack_ready'; sessionId: string; data: unknown }
+  | { type: 'strategy_portfolio_ready'; sessionId: string; data: unknown }
+  | { type: 'execution_blueprint_ready'; sessionId: string; data: unknown }
+  | { type: 'critique_report_ready'; sessionId: string; data: unknown }
+  | { type: 'planning_learning_updated'; sessionId: string; data: unknown }
   | { type: 'model_usage'; usage: unknown }
   | { type: 'clarify_question'; question: string; decision?: unknown }
   | { type: 'execution_result'; actionId?: string; status: 'success' | 'failed' | 'rejected'; text: string }

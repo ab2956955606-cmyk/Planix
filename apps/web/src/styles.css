@@ -2005,9 +2005,11 @@ select:focus {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   color: #94a3b8;
   font-size: 12px;
-  white-space: nowrap;
+  line-height: 1.35;
+  white-space: normal;
 }
 
 .routing-toggle input {

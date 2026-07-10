@@ -1,4 +1,5 @@
 import type { MouseEvent } from 'react';
+import { ModelUsageBadge } from './ModelUsageBadge';
 
 type Translator = (key: string) => string;
 
@@ -356,7 +357,7 @@ export function ExecutionPlanDraftCard({ data, onSend, t, planningStatus, action
       ) : null}
       {canAct && !['ready_to_write_calendar', 'waiting_calendar_write_approval', 'written_to_calendar'].includes(effectiveStatus) ? (
         <div className="command-row-actions">
-          {qualityPassed ? <button type="button" onClick={() => onSend?.(t('command.confirmExecutionMessage'))}>{t('command.confirmExecution')}</button> : null}
+          {qualityPassed && effectiveStatus === 'waiting_execution_approval' ? <button type="button" onClick={() => onSend?.(t('command.confirmExecutionMessage'))}>{t('command.confirmExecution')}</button> : null}
           <button type="button" onClick={() => onSend?.(t('command.feedbackTooHeavyMessage'))}>{t('command.feedbackTooHeavy')}</button>
           <button type="button" onClick={() => onSend?.(t('command.feedbackResourceHardMessage'))}>{t('command.feedbackResourceHard')}</button>
         </div>
@@ -403,8 +404,8 @@ export function AgentDecisionCard({ data, t }: CardProps) {
         {inputs.length ? <div><dt>{t('command.agentInputs')}</dt><dd>{inputs.join(' / ')}</dd></div> : null}
         {outputs.length ? <div><dt>{t('command.agentOutputs')}</dt><dd>{outputs.join(' / ')}</dd></div> : null}
         {typeof raw.confidence === 'number' ? <div><dt>{t('command.confidence')}</dt><dd>{Math.round(raw.confidence * 100)}%</dd></div> : null}
-        {text(usage.provider) ? <div><dt>{t('command.model')}</dt><dd>{text(usage.provider)} / {text(usage.model)}</dd></div> : null}
       </dl>
+      {Object.keys(usage).length ? <ModelUsageBadge usage={usage} t={t} /> : null}
     </div>
   );
 }
@@ -412,6 +413,7 @@ export function AgentDecisionCard({ data, t }: CardProps) {
 export function AgentMessageCard({ data, t }: CardProps) {
   const raw = record(data);
   const payload = record(raw.payloadJson);
+  const attempts = list(payload.attempts).map(record);
   return (
     <div className={`command-inline-card wide agent-message ${text(raw.messageType)}`}>
       <div className="command-card-heading">
@@ -423,7 +425,9 @@ export function AgentMessageCard({ data, t }: CardProps) {
       </p>
       {text(raw.reason) ? <p>{t('command.agentMessageReason')}: {text(raw.reason)}</p> : null}
       <small>{t('command.agentMessageResolved')}: {raw.resolved ? t('common.yes') : t('common.no')}</small>
-      {Object.keys(payload).length ? <small>{t('command.agentPayload')}: {Object.keys(payload).join(' / ')}</small> : null}
+      {text(payload.errorType) ? <small>{t('command.errorType')}: {text(payload.errorType)}</small> : null}
+      {attempts.length ? <ul className="command-compact-list">{attempts.map((attempt, index) => <li key={index}>{text(attempt.provider)} / {text(attempt.model)} · {text(attempt.status)}{text(attempt.errorType) ? ` · ${text(attempt.errorType)}` : ''}{typeof attempt.latencyMs === 'number' ? ` · ${String(attempt.latencyMs)}ms` : ''}</li>)}</ul> : null}
+      {Object.keys(payload).length && !attempts.length ? <small>{t('command.agentPayload')}: {Object.keys(payload).join(' / ')}</small> : null}
     </div>
   );
 }

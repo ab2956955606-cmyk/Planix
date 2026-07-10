@@ -14,6 +14,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'planix-test.db'}")
     monkeypatch.setenv("USE_REAL_LLM", "0")
     monkeypatch.delenv("PLANIX_USE_LANGGRAPH_PLANNING", raising=False)
+    monkeypatch.delenv("PLANIX_USE_COGNITIVE_PLANNING", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("AI_API_KEY", raising=False)
     with TestClient(app) as test_client:

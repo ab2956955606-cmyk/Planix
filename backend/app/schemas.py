@@ -27,6 +27,11 @@ PlanningAgentName = Literal[
     "Plan Co-Designer Agent",
     "Execution Planner Agent",
     "Feedback Evolution Agent",
+    "Goal Modeling Agent",
+    "Context & Evidence Agent",
+    "Strategy Architect Agent",
+    "Execution Designer Agent",
+    "Independent Critic & Learning Agent",
 ]
 PlanningArtifactType = Literal[
     "user_need_contract",
@@ -35,6 +40,12 @@ PlanningArtifactType = Literal[
     "plan_design_proposal",
     "execution_plan_draft",
     "learning_patch",
+    "user_goal_model",
+    "evidence_pack",
+    "strategy_portfolio",
+    "execution_blueprint",
+    "critique_report",
+    "planning_learning_update",
 ]
 PlanningArtifactStatus = Literal["draft", "approved", "blocked", "needs_revision"]
 PlanningAgentDecisionType = Literal[
@@ -62,6 +73,12 @@ ModelUsageTaskType = Literal[
     "chat",
     "model_knowledge",
     "settings_test",
+    "planning_goal_model",
+    "planning_evidence",
+    "planning_strategy",
+    "planning_execution",
+    "planning_critique",
+    "planning_learning",
 ]
 ModelRoutingTaskType = Literal[
     "command_decision",
@@ -74,6 +91,12 @@ ModelRoutingTaskType = Literal[
     "note_write",
     "chat",
     "model_knowledge",
+    "planning_goal_model",
+    "planning_evidence",
+    "planning_strategy",
+    "planning_execution",
+    "planning_critique",
+    "planning_learning",
 ]
 ModelRouteAttemptStatus = Literal["success", "error", "skipped"]
 
@@ -303,9 +326,16 @@ PlanningResourceSourceType = Literal[
     "user_material",
     "memory_note",
     "official_doc",
+    "tutorial",
+    "coach_or_human",
     "built_in_catalog",
     "project_template",
     "practice_bank",
+    "practice_drill",
+    "safety_checklist",
+    "route_info",
+    "tool",
+    "example",
     "web_search",
     "github",
     "video",
@@ -824,6 +854,38 @@ class MemoryInsightBrief(BaseModel):
     calendar_constraints: list[str] = Field(default_factory=list, alias="calendarConstraints")
     confidence: float = Field(default=0, ge=0, le=1)
     missing_memory_warning: str | None = Field(default=None, alias="missingMemoryWarning")
+    memory_reflection: "MemoryReflection | None" = Field(default=None, alias="memoryReflection")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MemoryReflectionHit(BaseModel):
+    id: str | None = None
+    kind: str
+    summary: str
+    why_relevant: str = Field(alias="whyRelevant")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MemoryPlanningRule(BaseModel):
+    rule: str
+    source: str = ""
+    strength: Literal["hard", "soft"] = "soft"
+    confidence: float = Field(default=0.5, ge=0, le=1)
+
+
+class MemoryRiskWarning(BaseModel):
+    warning: str
+    evidence: str = ""
+
+
+class MemoryReflection(BaseModel):
+    used_memories: list[MemoryReflectionHit] = Field(default_factory=list, alias="usedMemories")
+    planning_rules: list[MemoryPlanningRule] = Field(default_factory=list, alias="planningRules")
+    risk_warnings: list[MemoryRiskWarning] = Field(default_factory=list, alias="riskWarnings")
+    user_profile_gaps: list[str] = Field(default_factory=list, alias="userProfileGaps")
+    influence_on_plan: list[str] = Field(default_factory=list, alias="influenceOnPlan")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -883,6 +945,36 @@ class ResourceBrief(BaseModel):
     resource_candidates: list[ResourceCandidate] = Field(default_factory=list, alias="resourceCandidates")
     coverage: ResourceCoverage
     resource_rules_for_this_plan: list[str] = Field(default_factory=list, alias="resourceRulesForThisPlan")
+    resource_reasoning: "ResourceReasoningResult | None" = Field(default=None, alias="resourceReasoning")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ResourceNeed(BaseModel):
+    topic: str
+    resource_type: Literal[
+        "official_doc",
+        "tutorial",
+        "coach_or_human",
+        "practice_drill",
+        "project_template",
+        "safety_checklist",
+        "route_info",
+        "tool",
+        "example",
+        "ai_micro_material",
+    ] = Field(alias="resourceType")
+    why_needed: str = Field(default="", alias="whyNeeded")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ResourceReasoningResult(BaseModel):
+    resource_strategy: str = Field(alias="resourceStrategy")
+    resource_needs: list[ResourceNeed] = Field(default_factory=list, alias="resourceNeeds")
+    resource_candidates: list[ResourceCandidate] = Field(default_factory=list, alias="resourceCandidates")
+    resource_risks: list[str] = Field(default_factory=list, alias="resourceRisks")
+    coverage: Literal["strong", "partial", "weak", "missing"] = "partial"
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -940,6 +1032,71 @@ class PendingPlanningQuestion(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+PlanningInterviewDomain = Literal[
+    "learning",
+    "travel",
+    "career",
+    "project",
+    "exam",
+    "fitness",
+    "health",
+    "creative",
+    "other",
+]
+
+
+class PlanningKnownFact(BaseModel):
+    key: str
+    label: str
+    value: str
+    source_text: str = Field(default="", alias="sourceText")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningMissingInfo(BaseModel):
+    key: str
+    label: str
+    why_needed: str = Field(default="", alias="whyNeeded")
+    priority: Literal["required", "helpful", "optional"] = "required"
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningAssumption(BaseModel):
+    key: str
+    value: str
+    confidence: float = Field(default=0.5, ge=0, le=1)
+
+
+class PlanningJudgment(BaseModel):
+    summary: str
+    feasibility_notes: list[str] = Field(default_factory=list, alias="feasibilityNotes")
+    risks: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningInterviewQuestion(BaseModel):
+    question: str
+    reason: str = ""
+
+
+class PlanningInterviewResult(BaseModel):
+    interpreted_goal: str = Field(alias="interpretedGoal")
+    domain: PlanningInterviewDomain = "other"
+    subdomain: str | None = None
+    known_facts: list[PlanningKnownFact] = Field(default_factory=list, alias="knownFacts")
+    missing_info: list[PlanningMissingInfo] = Field(default_factory=list, alias="missingInfo")
+    assumptions: list[PlanningAssumption] = Field(default_factory=list)
+    planning_judgment: PlanningJudgment = Field(alias="planningJudgment")
+    next_questions: list[PlanningInterviewQuestion] = Field(default_factory=list, alias="nextQuestions")
+    can_move_to_design: bool = Field(default=False, alias="canMoveToDesign")
+    model_unavailable: bool = Field(default=False, alias="modelUnavailable")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class UserNeedContract(BaseModel):
     raw_user_input: str = Field(alias="rawUserInput")
     interpreted_goal: str = Field(default="", alias="interpretedGoal")
@@ -955,6 +1112,7 @@ class UserNeedContract(BaseModel):
     clarification_questions: list[str] = Field(default_factory=list, alias="clarificationQuestions")
     slot_state: PlanningSlotState | None = Field(default=None, alias="slotState")
     pending_question: PendingPlanningQuestion | None = Field(default=None, alias="pendingQuestion")
+    planning_interview: PlanningInterviewResult | None = Field(default=None, alias="planningInterview")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -981,6 +1139,44 @@ class PlanDesignProposal(BaseModel):
     tradeoffs: list[str] = Field(default_factory=list)
     questions_for_user: list[str] = Field(default_factory=list, alias="questionsForUser")
     status: Literal["waiting_user_approval", "revision_needed", "approved"] = "waiting_user_approval"
+    strategy_design: "StrategyDesign | None" = Field(default=None, alias="strategyDesign")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class StrategyReasoning(BaseModel):
+    why_this_strategy: str = Field(alias="whyThisStrategy")
+    user_fit: str = Field(default="", alias="userFit")
+    tradeoffs: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class StrategyDesignPhase(BaseModel):
+    title: str
+    purpose: str
+    expected_outcome: str = Field(alias="expectedOutcome")
+    why_this_phase_exists: str = Field(default="", alias="whyThisPhaseExists")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class StrategyUserDecisionNeeded(BaseModel):
+    question: str
+    options: list[str] = Field(default_factory=list)
+    why_needed: str = Field(default="", alias="whyNeeded")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class StrategyDesign(BaseModel):
+    strategy_name: str = Field(alias="strategyName")
+    strategy_type: str = Field(default="custom", alias="strategyType")
+    reasoning: StrategyReasoning
+    phases: list[StrategyDesignPhase]
+    user_decision_needed: list[StrategyUserDecisionNeeded] = Field(default_factory=list, alias="userDecisionNeeded")
+    can_move_to_execution: bool = Field(default=False, alias="canMoveToExecution")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -994,12 +1190,15 @@ class ExecutionTask(BaseModel):
     title: str
     description: str = ""
     due_date: str | None = Field(default=None, alias="dueDate")
+    scheduled_date: str | None = Field(default=None, alias="scheduledDate")
     estimated_minutes: int = Field(alias="estimatedMinutes", ge=1, le=1440)
     priority: GoalPriority = "medium"
     why_this_task_matters: str = Field(alias="whyThisTaskMatters")
+    action_steps: list[str] = Field(default_factory=list, alias="actionSteps")
     acceptance_criteria: list[str] = Field(alias="acceptanceCriteria")
     deliverable: str
     fallback_adjustment: str = Field(alias="fallbackAdjustment")
+    risk_notes: list[str] = Field(default_factory=list, alias="riskNotes")
     knowledge_points: list[str] = Field(default_factory=list, alias="knowledgePoints")
     resource_bundle: TaskResourceBundle = Field(alias="resourceBundle")
     resource_coverage: ExecutionTaskResourceCoverage = Field(alias="resourceCoverage")
@@ -1033,6 +1232,31 @@ class ExecutionPlanQualityReport(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class SemanticPlanBlocker(BaseModel):
+    issue: str
+    evidence: str = ""
+    responsible_stage: str = Field(default="", alias="responsibleStage")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SemanticPlanRepairInstruction(BaseModel):
+    target_agent: str = Field(alias="targetAgent")
+    instruction: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SemanticPlanQualityReport(BaseModel):
+    status: Literal["passed", "needs_repair", "blocked"]
+    score: int = Field(ge=0, le=100)
+    blockers: list[SemanticPlanBlocker] = Field(default_factory=list)
+    repair_instructions: list[SemanticPlanRepairInstruction] = Field(default_factory=list, alias="repairInstructions")
+    calendar_writable: bool = Field(default=False, alias="calendarWritable")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class ExecutionPlanDraft(BaseModel):
     design_id: str = Field(alias="designId")
     tasks: list[ExecutionTask]
@@ -1043,6 +1267,7 @@ class ExecutionPlanDraft(BaseModel):
     status: Literal["waiting_user_approval", "revision_needed", "approved"] = "waiting_user_approval"
     quality_report: ExecutionPlanQualityReport | None = Field(default=None, alias="qualityReport")
     quality_status: ExecutionPlanQualityStatus | None = Field(default=None, alias="qualityStatus")
+    semantic_quality_report: SemanticPlanQualityReport | None = Field(default=None, alias="semanticQualityReport")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1077,7 +1302,17 @@ class LearningMemoryUpdate(BaseModel):
     content: str
 
 
+class LearningDiagnosis(BaseModel):
+    failed_assumption: str = Field(default="", alias="failedAssumption")
+    responsible_stage: Literal["interview", "memory", "resource", "strategy", "execution", "quality"] = Field(default="execution", alias="responsibleStage")
+    why_it_failed: str = Field(default="", alias="whyItFailed")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class LearningPatch(BaseModel):
+    original_feedback: str = Field(default="", alias="originalFeedback")
+    diagnosis: LearningDiagnosis | None = None
     feedback_type: Literal["positive", "negative", "constraint", "preference", "execution_failure", "resource_feedback"] = Field(alias="feedbackType")
     affected_scope: Literal["current_plan", "future_plans", "specific_task", "planning_style", "resource_selection"] = Field(alias="affectedScope")
     insight: str
@@ -1160,6 +1395,20 @@ class PlanningBlackboard(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+PlanningMode = Literal["model_backed", "degraded_read_only", "blocked_model_unavailable"]
+
+
+class CognitivePlanningMetadata(BaseModel):
+    engine_version: Literal["cognitive-v2"] = Field(default="cognitive-v2", alias="engineVersion")
+    planning_mode: PlanningMode = Field(alias="planningMode")
+    current_stage: str = Field(alias="currentStage")
+    agent_confidence: float | None = Field(default=None, alias="agentConfidence", ge=0, le=1)
+    applied_user_rules: list[str] = Field(default_factory=list, alias="appliedUserRules")
+    repair_count: int = Field(default=0, alias="repairCount", ge=0, le=2)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class PlanningSessionResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
     thread_id: str = Field(default="", alias="threadId")
@@ -1174,6 +1423,14 @@ class PlanningSessionResponse(BaseModel):
     design_proposal: PlanDesignProposal | None = Field(default=None, alias="designProposal")
     execution_draft: ExecutionPlanDraft | None = Field(default=None, alias="executionDraft")
     learning_patch: LearningPatch | None = Field(default=None, alias="learningPatch")
+    cognitive_metadata: CognitivePlanningMetadata | None = Field(default=None, alias="cognitiveMetadata")
+    goal_model: dict[str, Any] | None = Field(default=None, alias="goalModel")
+    evidence_pack: dict[str, Any] | None = Field(default=None, alias="evidencePack")
+    strategy_portfolio: dict[str, Any] | None = Field(default=None, alias="strategyPortfolio")
+    execution_blueprint: dict[str, Any] | None = Field(default=None, alias="executionBlueprint")
+    critique_report: dict[str, Any] | None = Field(default=None, alias="critiqueReport")
+    planning_learning_update: dict[str, Any] | None = Field(default=None, alias="planningLearningUpdate")
+    approved_strategy_id: str | None = Field(default=None, alias="approvedStrategyId")
     artifacts: list[PlanningArtifact] = Field(default_factory=list)
     decisions: list[AgentDecision] = Field(default_factory=list)
     messages: list[AgentMessage] = Field(default_factory=list)

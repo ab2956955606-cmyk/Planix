@@ -57,9 +57,15 @@ function primaryActions(status: PlanningStatus | undefined, t: Translator): Plan
       { key: 'reviseDesign', label: t('command.reviseDesign'), message: t('command.reviseDesignMessage'), icon: PencilLine }
     ];
   }
-  if (status === 'waiting_execution_approval' || status === 'execution_revision' || status === 'learning_from_feedback') {
+  if (status === 'waiting_execution_approval') {
     return [
       { key: 'confirmExecution', label: t('command.confirmExecution'), message: t('command.confirmExecutionMessage'), icon: CheckCircle2 },
+      { key: 'feedbackTooHeavy', label: t('command.feedbackTooHeavy'), message: t('command.feedbackTooHeavyMessage'), icon: RotateCcw },
+      { key: 'feedbackResourceHard', label: t('command.feedbackResourceHard'), message: t('command.feedbackResourceHardMessage'), icon: FileSearch }
+    ];
+  }
+  if (status === 'execution_revision' || status === 'learning_from_feedback') {
+    return [
       { key: 'feedbackTooHeavy', label: t('command.feedbackTooHeavy'), message: t('command.feedbackTooHeavyMessage'), icon: RotateCcw },
       { key: 'feedbackResourceHard', label: t('command.feedbackResourceHard'), message: t('command.feedbackResourceHardMessage'), icon: FileSearch }
     ];

@@ -32,6 +32,7 @@ from ..schemas import (
     RefineTaskRequest,
 )
 from .command_decision import CommandDecisionResult, CommandDecisionService, local_fallback_usage, usage_from_llm_result
+from .cognitive_planning.compatibility import cognitive_events
 from .langgraph_planning import get_deep_planning_orchestrator
 from .llm import LlmClient
 from .memory_agent import MemoryAgentService, detect_query_kinds
@@ -1363,6 +1364,17 @@ class CommandAgentService:
                 data=data,
                 content=message.reason or message.message_type,
             )
+        for event_type, data in cognitive_events(session):
+            summary_keys = {
+                "goal_model_updated": "goalStatement",
+                "evidence_pack_ready": "synthesis",
+                "strategy_portfolio_ready": "recommendationReason",
+                "execution_blueprint_ready": "resourceCoverage",
+                "critique_report_ready": "simulationSummary",
+                "planning_learning_updated": "originalFeedback",
+            }
+            content = str(data.get(summary_keys[event_type]) or event_type)
+            yield self._planning_event(thread_id, event_type, session.session_id, data=data, content=content)
         if session.user_need_contract:
             data = session.user_need_contract.model_dump(by_alias=True)
             yield self._planning_event(thread_id, "user_need_contract", session.session_id, data=data, content=session.user_need_contract.interpreted_goal)
@@ -1418,13 +1430,17 @@ class CommandAgentService:
             return None
         if session.status == "needs_goal_clarification":
             return "clarify", session
-        if session.status == "waiting_design_approval":
+        if session.status in {"waiting_design_approval", "design_revision"}:
             if _planning_approval_text(text):
                 return "approve_design", session
             return "revise_design", session
         if session.status == "waiting_execution_approval":
             if _planning_approval_text(text):
                 return "approve_execution", session
+            return "revise_execution", session
+        if session.status == "execution_revision":
+            if _planning_approval_text(text):
+                return "execution_revision_status", session
             return "revise_execution", session
         if session.status == "ready_to_write_calendar":
             if _planning_calendar_write_text(text):
@@ -1479,6 +1495,28 @@ class CommandAgentService:
                 data={
                     "agent": "Execution Planner Agent",
                     "decision": "approve",
+                    "reason": summary,
+                    "confidence": 1,
+                    "inputArtifactIds": [],
+                    "outputArtifactIds": [],
+                    "userVisibleSummary": summary,
+                },
+                content=summary,
+            )
+            yield self._planning_event(thread_id, "planning_session_status", session.session_id, status=session.status, content=session.status)
+            return
+        if action == "execution_revision_status":
+            critique = session.critique_report or {}
+            issues = critique.get("issues") if isinstance(critique, dict) else []
+            descriptions = [str(item.get("description") or "") for item in issues or [] if isinstance(item, dict)]
+            summary = "The independent critic has not approved this execution plan. " + ("; ".join(filter(None, descriptions)) or "Please revise it before confirmation.")
+            yield self._planning_event(
+                thread_id,
+                "agent_decision",
+                session.session_id,
+                data={
+                    "agent": "Independent Critic & Learning Agent",
+                    "decision": "block",
                     "reason": summary,
                     "confidence": 1,
                     "inputArtifactIds": [],

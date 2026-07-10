@@ -19,6 +19,10 @@ def use_langgraph_planning() -> bool:
 
 
 def get_deep_planning_orchestrator() -> DeepPlanningService | "LangGraphPlanningRuntime":
+    from ..cognitive_planning import CognitivePlanningRuntime, use_cognitive_planning
+
+    if use_cognitive_planning():
+        return CognitivePlanningRuntime()
     if use_langgraph_planning():
         return LangGraphPlanningRuntime()
     return DeepPlanningService()

@@ -11,6 +11,12 @@ from ..db import get_conn
 from ..schemas import AgentDecision, AgentMessage, ModelUsage, PlanningArtifact, PlanningBlackboard
 
 
+# Compatibility persistence protocol. New planning cognition belongs in
+# CognitivePlanningRuntime; this service remains for artifact/decision/message
+# audit records and replay only.
+PLANNING_AGENT_RUNTIME_STATUS = "deprecated-compatibility-protocol"
+
+
 ARTIFACT_OWNER: dict[str, str] = {
     "user_need_contract": "User Advocate Agent",
     "memory_insight_brief": "Memory Insight Agent",
@@ -18,6 +24,12 @@ ARTIFACT_OWNER: dict[str, str] = {
     "plan_design_proposal": "Plan Co-Designer Agent",
     "execution_plan_draft": "Execution Planner Agent",
     "learning_patch": "Feedback Evolution Agent",
+    "user_goal_model": "Goal Modeling Agent",
+    "evidence_pack": "Context & Evidence Agent",
+    "strategy_portfolio": "Strategy Architect Agent",
+    "execution_blueprint": "Execution Designer Agent",
+    "critique_report": "Independent Critic & Learning Agent",
+    "planning_learning_update": "Independent Critic & Learning Agent",
 }
 
 

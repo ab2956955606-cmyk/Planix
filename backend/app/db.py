@@ -91,6 +91,17 @@ def init_db(conn: sqlite3.Connection) -> None:
           design_proposal_json TEXT NOT NULL DEFAULT '{}',
           execution_draft_json TEXT NOT NULL DEFAULT '{}',
           latest_learning_patch_json TEXT NOT NULL DEFAULT '{}',
+          cognitive_metadata_json TEXT NOT NULL DEFAULT '{}',
+          goal_model_json TEXT NOT NULL DEFAULT '{}',
+          evidence_pack_json TEXT NOT NULL DEFAULT '{}',
+          strategy_portfolio_json TEXT NOT NULL DEFAULT '{}',
+          execution_blueprint_json TEXT NOT NULL DEFAULT '{}',
+          critique_report_json TEXT NOT NULL DEFAULT '{}',
+          planning_learning_update_json TEXT NOT NULL DEFAULT '{}',
+          conversation_history_json TEXT NOT NULL DEFAULT '[]',
+          request_context_json TEXT NOT NULL DEFAULT '{}',
+          approved_strategy_id TEXT NOT NULL DEFAULT '',
+          repair_count INTEGER NOT NULL DEFAULT 0,
           version INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -204,6 +215,32 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_memories_source_key
           ON memories(source_key);
+
+        CREATE TABLE IF NOT EXISTS user_planning_hypotheses (
+          id TEXT PRIMARY KEY,
+          statement TEXT NOT NULL,
+          statement_key TEXT NOT NULL UNIQUE,
+          domain_scope_json TEXT NOT NULL DEFAULT '[]',
+          evidence_count INTEGER NOT NULL DEFAULT 1,
+          positive_evidence_json TEXT NOT NULL DEFAULT '[]',
+          negative_evidence_json TEXT NOT NULL DEFAULT '[]',
+          confidence REAL NOT NULL DEFAULT 0.5,
+          status TEXT NOT NULL DEFAULT 'tentative',
+          first_observed_at TEXT NOT NULL,
+          last_validated_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_planning_hypotheses_status
+          ON user_planning_hypotheses(status, last_validated_at);
+
+        CREATE TABLE IF NOT EXISTS planning_shadow_runs (
+          id TEXT PRIMARY KEY,
+          legacy_session_id TEXT NOT NULL,
+          cognitive_session_id TEXT NOT NULL,
+          comparison_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL
+        );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
           USING fts5(memory_id, kind, title, content, summary, tags);
@@ -360,6 +397,17 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "command_approvals", "decision", "TEXT NOT NULL DEFAULT 'pending'")
     ensure_column(conn, "planning_sessions", "slot_state_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "pending_question_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "cognitive_metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "goal_model_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "evidence_pack_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "strategy_portfolio_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "execution_blueprint_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "critique_report_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "planning_learning_update_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "conversation_history_json", "TEXT NOT NULL DEFAULT '[]'")
+    ensure_column(conn, "planning_sessions", "request_context_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "approved_strategy_id", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "planning_sessions", "repair_count", "INTEGER NOT NULL DEFAULT 0")
     action_columns = {row["name"] for row in conn.execute("PRAGMA table_info(command_actions)").fetchall()}
     if {"error", "error_message"} <= action_columns:
         conn.execute(
