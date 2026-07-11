@@ -16,6 +16,12 @@ would materially change the strategy, which one to three questions have the high
 whether asking more would improve the plan enough to justify interrupting the user. Preserve exact hard
 constraints and important user wording. Fill possibleIntents, currentKnowledge, and uncertainties with concise
 user-visible statements. Every question must explain why it matters and what decision its answer changes.
+Do not mark subject, purpose, duration, deadline, current level, or any other conventional form field as blocking
+merely because it is absent. A missing detail is blocking only when this user's answer would materially change
+safety, feasibility, or the strategy itself. Background experience, intended outcomes, and weekly time expressed
+in natural language are valid semantic evidence even when they do not match a predefined slot name. Once the
+desired change, relevant background, purposes, and usable constraints are sufficient to choose a strategy, label
+remaining refinements important or optional and allow progression.
 When preExtractedFacts.goalUnderstanding is present, treat it as the typed pre-routing projection: reconcile its
 known facts and resolved intent with the current user turn, but do not misattribute prior questions or hypotheses as
 new user claims and do not blindly copy it when the conversation contradicts it.

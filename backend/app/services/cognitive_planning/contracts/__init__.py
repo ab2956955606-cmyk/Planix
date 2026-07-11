@@ -34,6 +34,11 @@ from .goal_model import (
     Preference,
     UserGoalModel,
 )
+from .goal_completion import (
+    GoalCompletionBlockingUnknown,
+    GoalCompletionNextStage,
+    GoalCompletionResult,
+)
 from .learning import (
     CurrentPlanPatch,
     LearningDiagnosis,

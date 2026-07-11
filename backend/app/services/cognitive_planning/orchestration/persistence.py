@@ -39,6 +39,7 @@ class CognitivePlanningPersistence:
     JSON_COLUMNS = {
         "cognitive_metadata": "cognitive_metadata_json",
         "goal_model": "goal_model_json",
+        "goal_completion": "goal_completion_json",
         "reality_assessment": "reality_assessment_json",
         "evidence_pack": "evidence_pack_json",
         "strategy_portfolio": "strategy_portfolio_json",
@@ -77,7 +78,7 @@ class CognitivePlanningPersistence:
             return conn.execute("SELECT * FROM planning_sessions WHERE id = ?", (session_id,)).fetchone()
 
     def latest_active(self, thread_id: str):
-        active = (
+        active = {
             "needs_goal_clarification",
             "waiting_design_approval",
             "design_revision",
@@ -87,16 +88,17 @@ class CognitivePlanningPersistence:
             "waiting_calendar_write_approval",
             "learning_from_feedback",
             "MODEL_UNAVAILABLE",
-        )
+        }
         with get_conn() as conn:
-            return conn.execute(
-                f"""
+            row = conn.execute(
+                """
                 SELECT * FROM planning_sessions
-                WHERE thread_id = ? AND status IN ({','.join('?' for _ in active)})
+                WHERE thread_id = ?
                 ORDER BY updated_at DESC LIMIT 1
                 """,
-                (thread_id, *active),
+                (thread_id,),
             ).fetchone()
+        return row if row and row["status"] in active else None
 
     def conversation(self, row) -> list[ConversationTurn]:
         values = json_list(row["conversation_history_json"] if "conversation_history_json" in row.keys() else "[]")
@@ -154,6 +156,8 @@ class CognitivePlanningPersistence:
         session_id: str,
         *,
         status: str | None = None,
+        business_status: str | None = None,
+        runtime_status: str | None = None,
         repair_count: int | None = None,
         approved_strategy_id: str | None = None,
         clear: tuple[str, ...] = (),
@@ -164,6 +168,12 @@ class CognitivePlanningPersistence:
         if status:
             assignments.append("status = ?")
             params.append(status)
+        if business_status is not None:
+            assignments.append("business_status = ?")
+            params.append(business_status)
+        if runtime_status is not None:
+            assignments.append("runtime_status = ?")
+            params.append(runtime_status)
         if repair_count is not None:
             assignments.append("repair_count = ?")
             params.append(max(0, min(int(repair_count), 2)))
@@ -190,4 +200,17 @@ class CognitivePlanningPersistence:
             conn.execute(f"UPDATE planning_sessions SET {', '.join(assignments)} WHERE id = ?", params)
 
     def mark_written(self, session_id: str) -> None:
-        self.update(session_id, status="written_to_calendar")
+        self.update(
+            session_id,
+            status="written_to_calendar",
+            business_status="completed",
+            runtime_status="idle",
+        )
+
+    def mark_cancelled(self, session_id: str) -> None:
+        self.update(
+            session_id,
+            status="cancelled",
+            business_status="cancelled",
+            runtime_status="idle",
+        )

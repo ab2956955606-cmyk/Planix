@@ -170,32 +170,37 @@ const labels: Record<string, string> = {
   'command.actionContinueMemoryViewMessage': '继续查看第 {index} 条记忆',
   'command.planningSessionStarted': 'Deep planning session',
   'command.planningSessionStatus': 'Planning status',
+  'command.planningWorkspace': 'Planning Workspace',
+  'command.planningBusinessStatus': 'Business status',
+  'command.planningRuntimeStatus': 'Runtime status',
+  'command.goalCompletion': 'Goal completion',
+  'command.goalComplete': 'Sufficiently understood',
+  'command.goalIncomplete': 'Blocking information remains',
   'command.latestPlanningStep': 'Latest planning step',
-  'command.planningProcessCollapsed': 'Planning process · collapsed',
-  'command.planningProcess': 'Planning process',
-  'command.planningStepsCompleted': '{count} steps completed',
-  'command.planningStepUnderstandGoal': 'Understand the goal',
-  'command.planningStepAnalyzeBackground': 'Analyze user context',
-  'command.planningStepFindInformation': 'Find relevant information',
-  'command.planningStepDesignSolution': 'Design the approach',
-  'command.planningStepGenerateExecution': 'Generate the execution plan',
   'command.currentStage': 'Current Stage',
   'command.currentUnderstanding': 'Current Understanding',
   'command.importantDecisions': 'Important Decisions',
+  'command.importantUnknowns': 'Important Unknowns',
   'command.nextAction': 'Next Action',
-  'command.goalUnderstanding': 'Goal understanding',
-  'command.knownFacts': 'Known facts',
+  'command.goalUnderstanding': 'Goal Understanding',
+  'command.knownFacts': 'Known Facts',
+  'command.optionalUnknowns': 'Optional context (does not block planning)',
+  'command.noKnownFacts': 'No known facts have been saved yet.',
+  'command.noBlockingUnknowns': 'No blocking unknowns. Planning can continue.',
   'command.uncertainties': 'Needs confirmation',
   'command.consistencyWarning': 'Goal consistency warning',
   'command.planningPossibleDirections': 'Possible directions',
   'command.planningFactLocation': 'Location',
+  'command.planningFactGoal': 'Goal',
   'command.planningFactSkill': 'Target skill',
+  'command.planningFactBackground': 'Background',
   'command.planningFactPurpose': 'Purpose',
   'command.planningDirectionTravel': 'Travel',
   'command.planningDirectionCareer': 'Work or career',
   'command.planningDirectionRelocation': 'Relocation',
   'command.planningDirectionOther': 'Other',
   'command.planningUnderstandingPending': 'Understanding your goal',
+  'command.planningRuntimeWaitingModel': 'Goal model saved. Known facts saved. Waiting for the model to recover.',
   'command.noImportantDecisions': 'No important decisions yet.',
   'command.planningStageUnderstandGoal': 'Understand Goal',
   'command.planningStageConfirmDirection': 'Confirm Direction',
@@ -352,6 +357,9 @@ function collectButtons(node: ReactNode): ReactElement[] {
 
 describe('Plan command cards', () => {
   it('maps model-unavailable to the latest completed planning stage', () => {
+    expect(planningStageFromStatus('goal_understood', [])).toBe('design_plan');
+    expect(planningStageFromStatus('strategy_pending', [])).toBe('design_plan');
+    expect(planningStageFromStatus('execution_pending', [])).toBe('waiting_confirmation');
     expect(planningStageFromStatus('MODEL_UNAVAILABLE', [])).toBe('understand_goal');
     expect(planningStageFromStatus('MODEL_UNAVAILABLE', [{
       id: 'strategy', role: 'card', kind: 'strategy_portfolio_ready', content: '', createdAt: 1
@@ -790,7 +798,7 @@ describe('Plan command cards', () => {
     expect(historical).not.toContain('The tasks are too heavy');
   });
 
-  it('auto-collapses historical deep planning groups and keeps the latest group expanded', () => {
+  it('renders one live planning workspace for the latest session instead of per-message timelines', () => {
     const messages = [
       {
         id: 'old-contract',
@@ -836,14 +844,88 @@ describe('Plan command cards', () => {
       <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
     );
 
-    expect(html).toContain('Planning process · collapsed');
+    expect((html.match(/Planning Workspace/g) || [])).toHaveLength(1);
     expect(html).toContain('Current Stage');
     expect(html).toContain('Confirm Direction');
-    expect(html).toContain('Planning process');
-    expect(html).toContain('4 steps completed');
-    expect(html).toContain('New strategy');
-    expect(html).not.toContain('Old strategy');
+    expect(html).toContain('New Python plan');
+    expect(html).not.toContain('Planning process');
+    expect(html).not.toContain('Old Go plan');
     expect(html).not.toContain('waiting_design_approval');
+  });
+
+  it('updates the same workspace across follow-ups and lets a complete goal advance to strategy', () => {
+    const messages = [
+      {
+        id: 'understanding-go',
+        role: 'card' as const,
+        kind: 'goal_understanding' as const,
+        content: '',
+        createdAt: 1,
+        payload: {
+          sessionId: 's-go',
+          intentState: 'clear_goal',
+          understoodIntent: 'Learn Go for web development',
+          knownFacts: { subject: 'Go', purpose: 'Web development' },
+          uncertainties: []
+        }
+      },
+      { id: 'follow-up', role: 'user' as const, content: 'I have Python and web experience.', createdAt: 2 },
+      {
+        id: 'goal-model-go',
+        role: 'card' as const,
+        kind: 'goal_model_updated' as const,
+        content: '',
+        createdAt: 3,
+        payload: {
+          sessionId: 's-go',
+          data: {
+            goalStatement: 'Go Web development',
+            knownFacts: [
+              { key: 'background', statement: 'Python experience' },
+              { key: 'background', statement: 'Web development experience' },
+              { key: 'purpose', statement: 'Job search and personal projects' },
+              { key: 'time', statement: '20 hours/week' }
+            ]
+          }
+        }
+      },
+      { id: 'continue', role: 'user' as const, content: 'Next', createdAt: 4 },
+      {
+        id: 'completion-go',
+        role: 'card' as const,
+        kind: 'goal_completion_updated' as const,
+        content: '',
+        createdAt: 5,
+        payload: {
+          sessionId: 's-go',
+          businessStatus: 'strategy_pending',
+          runtimeStatus: 'running',
+          data: {
+            complete: true,
+            blockingUnknowns: [],
+            optionalUnknowns: ['Preferred Go framework'],
+            nextStage: 'strategy'
+          }
+        }
+      }
+    ];
+
+    const html = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
+    );
+
+    expect((html.match(/Planning Workspace/g) || [])).toHaveLength(1);
+    expect(html).toContain('Design Plan');
+    expect(html).toContain('Go Web development');
+    expect(html).toContain('Goal: Go');
+    expect(html).toContain('Python experience');
+    expect(html).toContain('Job search and personal projects');
+    expect(html).toContain('20 hours/week');
+    expect(html).toContain('Important Unknowns');
+    expect(html).toContain('No blocking unknowns. Planning can continue.');
+    expect(html).toContain('Preferred Go framework');
+    expect(html).not.toContain('Planning process');
+    expect(html).not.toContain('Add the missing detail.');
   });
 
   it('hides technical agent trace cards from the cognitive planning workspace', () => {
@@ -892,13 +974,15 @@ describe('Plan command cards', () => {
     const html = renderToStaticMarkup(
       <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
     );
-    expect(html).toContain('Evidence route');
+    expect(html).toContain('Planning Workspace');
+    expect(html).not.toContain('Evidence route');
     expect(html).not.toContain('Agent decision');
     expect(html).not.toContain('technical trace detail hidden until expanded');
 
     const advancedHtml = renderToStaticMarkup(
       <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} advancedAgentTrace t={t} />
     );
+    expect(advancedHtml).toContain('Evidence route');
     expect(advancedHtml).toContain('Context &amp; Evidence Agent');
     expect(advancedHtml).toContain('technical trace detail hidden until expanded');
     expect(advancedHtml).toContain('waiting_design_approval');
@@ -937,7 +1021,8 @@ describe('Plan command cards', () => {
     expect(html).toContain('Goal consistency warning');
     expect(html).toContain('The stated purpose does not match the skiing goal.');
     expect(html).toContain('What is the main purpose of going to Beijing?');
-    expect(html).toContain('1 steps completed');
+    expect(html).toContain('Planning Workspace');
+    expect(html).not.toContain('Planning process');
     expect(html).not.toContain('ambiguous_goal');
     expect(html).not.toContain('deepseek-chat');
 
@@ -972,12 +1057,18 @@ describe('Plan command cards', () => {
 
   it('renders an honest model-unavailable state without a fake plan', () => {
     const cardHtml = renderToStaticMarkup(<ModelUnavailableCard t={t} />);
+    const messages = [{
+      id: 'unavailable', role: 'card' as const, kind: 'planning_session_status' as const, content: 'MODEL_UNAVAILABLE', createdAt: 1,
+      payload: {
+        sessionId: 's-unavailable',
+        status: 'MODEL_UNAVAILABLE',
+        businessStatus: 'strategy_pending',
+        runtimeStatus: 'blocked_model_unavailable'
+      }
+    }];
     const threadHtml = renderToStaticMarkup(
       <AgentThread
-        messages={[{
-          id: 'unavailable', role: 'card', kind: 'planning_session_status', content: 'MODEL_UNAVAILABLE', createdAt: 1,
-          payload: { sessionId: 's-unavailable', status: 'MODEL_UNAVAILABLE' }
-        }]}
+        messages={messages}
         sending={false}
         onApprove={() => undefined}
         onSend={() => undefined}
@@ -985,9 +1076,18 @@ describe('Plan command cards', () => {
       />
     );
     expect(cardHtml).toContain('current deep planning');
-    expect(threadHtml).toContain('Deep planning unavailable');
+    expect(threadHtml).toContain('Planning Workspace');
+    expect(threadHtml).toContain('Design Plan');
+    expect(threadHtml).toContain('Goal model saved. Known facts saved. Waiting for the model to recover.');
+    expect(threadHtml).not.toContain('Deep planning unavailable');
     expect(threadHtml).not.toContain('MODEL_UNAVAILABLE');
     expect(threadHtml).not.toContain('Execution blueprint');
+
+    const advancedHtml = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} advancedAgentTrace t={t} />
+    );
+    expect(advancedHtml).toContain('strategy_pending');
+    expect(advancedHtml).toContain('blocked_model_unavailable');
   });
 
   it('sends fixed natural language messages from deep planning, more, and row actions', () => {

@@ -5,6 +5,7 @@ from ....schemas import PlanningSessionResponse
 
 COGNITIVE_EVENT_FIELDS = (
     ("goal_model_updated", "goal_model"),
+    ("goal_completion_updated", "goal_completion"),
     ("reality_assessment_ready", "reality_assessment"),
     ("evidence_pack_ready", "evidence_pack"),
     ("strategy_portfolio_ready", "strategy_portfolio"),

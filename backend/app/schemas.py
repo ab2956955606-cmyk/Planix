@@ -33,6 +33,7 @@ PlanningAgentName = Literal[
     "Execution Designer Agent",
     "Independent Critic & Learning Agent",
     "Goal Intelligence Agent",
+    "Goal Completion Judge",
     "Reality Agent",
     "Evidence Agent",
     "Strategy Agent",
@@ -47,6 +48,7 @@ PlanningArtifactType = Literal[
     "execution_plan_draft",
     "learning_patch",
     "user_goal_model",
+    "goal_completion",
     "reality_assessment",
     "evidence_pack",
     "strategy_portfolio",
@@ -70,6 +72,14 @@ PlanningAgentMessageType = Literal["handoff", "revision_request", "block", "appr
 ModelUsageMode = Literal["llm", "local_fallback", "model_unavailable"]
 ModelUsageTaskType = Literal[
     "goal_understanding",
+    "goal_completion_updated",
+    "goal_model_updated",
+    "reality_assessment_ready",
+    "evidence_pack_ready",
+    "strategy_portfolio_ready",
+    "execution_blueprint_ready",
+    "critique_report_ready",
+    "planning_learning_updated",
     "command_decision",
     "plan_generation",
     "task_refinement",
@@ -365,6 +375,31 @@ PlanningSessionStatus = Literal[
     "written_to_calendar",
     "learning_from_feedback",
     "MODEL_UNAVAILABLE",
+    "cancelled",
+]
+PlanningBusinessStatus = Literal[
+    "goal_clarification",
+    "goal_understood",
+    "evidence_pending",
+    "strategy_pending",
+    "execution_pending",
+    "calendar_pending",
+    "completed",
+    "cancelled",
+]
+PlanningRuntimeStatus = Literal[
+    "idle",
+    "running",
+    "blocked_model",
+    "retry_required",
+]
+PlanningControlIntent = Literal[
+    "continue_current_stage",
+    "approve_current_stage",
+    "modify_current_stage",
+    "restart_planning",
+    "cancel_planning",
+    "provide_goal_information",
 ]
 
 
@@ -1426,6 +1461,8 @@ class PlanningSessionResponse(BaseModel):
     thread_id: str = Field(default="", alias="threadId")
     entry_point: Literal["p_mode"] = Field(alias="entryPoint")
     status: PlanningSessionStatus
+    business_status: PlanningBusinessStatus = Field(default="goal_clarification", alias="businessStatus")
+    runtime_status: PlanningRuntimeStatus = Field(default="idle", alias="runtimeStatus")
     user_input: str = Field(alias="userInput")
     user_need_contract: UserNeedContract | None = Field(default=None, alias="userNeedContract")
     slot_state: PlanningSlotState | None = Field(default=None, alias="slotState")
@@ -1437,6 +1474,7 @@ class PlanningSessionResponse(BaseModel):
     learning_patch: LearningPatch | None = Field(default=None, alias="learningPatch")
     cognitive_metadata: CognitivePlanningMetadata | None = Field(default=None, alias="cognitiveMetadata")
     goal_model: dict[str, Any] | None = Field(default=None, alias="goalModel")
+    goal_completion: dict[str, Any] | None = Field(default=None, alias="goalCompletion")
     reality_assessment: dict[str, Any] | None = Field(default=None, alias="realityAssessment")
     evidence_pack: dict[str, Any] | None = Field(default=None, alias="evidencePack")
     strategy_portfolio: dict[str, Any] | None = Field(default=None, alias="strategyPortfolio")

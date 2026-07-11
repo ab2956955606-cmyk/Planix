@@ -121,6 +121,18 @@ describe('commandAgentStore workbench mode', () => {
         source: 'llm'
       });
       handlers.onEvent({
+        type: 'goal_completion_updated',
+        sessionId: 'session-1',
+        businessStatus: 'strategy_pending',
+        runtimeStatus: 'running',
+        data: {
+          complete: true,
+          blockingUnknowns: [],
+          optionalUnknowns: ['Preferred framework'],
+          nextStage: 'strategy'
+        }
+      });
+      handlers.onEvent({
         type: 'user_need_contract',
         sessionId: 'session-1',
         data: { interpretedGoal: 'Python plan', canMoveToDesign: true }
@@ -161,6 +173,7 @@ describe('commandAgentStore workbench mode', () => {
     const html = renderMessageKinds();
     expect(html).toContain('planning_session_started');
     expect(html).toContain('goal_understanding');
+    expect(html).toContain('goal_completion_updated');
     expect(html).toContain('user_need_contract');
     expect(html).toContain('memory_insight_brief');
     expect(html).toContain('resource_brief');

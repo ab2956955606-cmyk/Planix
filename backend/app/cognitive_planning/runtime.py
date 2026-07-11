@@ -14,12 +14,16 @@ from ..services.cognitive_planning.contracts import (
     UserGoalModel,
 )
 from ..services.cognitive_planning.orchestration.persistence import json_object
-from ..services.cognitive_planning.orchestration.runtime import CognitivePlanningRuntime as Phase6Runtime
+from ..services.cognitive_planning.orchestration.runtime import (
+    RESUME_NODE_BY_STAGE,
+    CognitivePlanningRuntime as Phase6Runtime,
+)
 from .agents import (
     CognitiveModelClient,
     CriticAgent,
     EvidenceAgent,
     ExecutionAgent,
+    GoalCompletionJudge,
     GoalIntelligenceAgent,
     PlanningModelUnavailable,
     RealityAgent,
@@ -60,6 +64,7 @@ class CognitiveOSRuntime(Phase6Runtime):
         super().__init__(model_client=model, persistence=persistence)
         self.user_model = user_model or UserModelMemoryRepository()
         self.goal_agent = GoalIntelligenceAgent(model)
+        self.goal_completion_judge = GoalCompletionJudge()
         self.reality_agent = RealityAgent(model)
         self.evidence_agent = EvidenceAgent(model=model, user_model=self.user_model)
         self.strategy_agent = StrategyAgent(model)
@@ -105,19 +110,48 @@ class CognitiveOSRuntime(Phase6Runtime):
         agent: str,
         error: SafePlanningError,
     ) -> CognitivePlanningState:
-        blocked = super()._block_model(state, agent=agent, error=error)
-        blocked["status"] = "MODEL_UNAVAILABLE"
+        stage = str(error.stage or "")
+        if stage in {"goal_intelligence", "goal_modeling", "goal_completion"}:
+            completion = state.get("goal_completion")
+            business_status = "goal_understood" if completion and completion.complete else "goal_clarification"
+        elif stage in {"reality_assessment", "context_evidence", "evidence_synthesis"}:
+            business_status = "evidence_pending"
+        elif stage in {"strategy_architecture", "strategy_design"}:
+            business_status = "strategy_pending"
+        else:
+            business_status = "execution_pending"
+        state["planning_mode"] = "blocked_model_unavailable"
+        state["errors"] = [*state.get("errors", []), error]
+        state["status"] = "MODEL_UNAVAILABLE"
+        state["business_status"] = business_status
+        state["runtime_status"] = "blocked_model"
+        state["resume_node"] = RESUME_NODE_BY_STAGE.get(stage, "goal_intelligence")
+        self.agent_runtime.record_message(
+            state["session_id"],
+            from_agent=agent,
+            to_agent=agent,
+            message_type="block",
+            reason=error.message,
+            payload={
+                "errorType": error.error_type,
+                "retryable": error.retryable,
+                "attempts": error.attempts,
+                "resumeNode": state["resume_node"],
+            },
+            resolved=False,
+        )
         self.persistence.update(
             state["session_id"],
             status="MODEL_UNAVAILABLE",
+            business_status=business_status,
+            runtime_status="blocked_model",
             cognitive_metadata=self._metadata(
                 mode="blocked_model_unavailable",
                 stage=error.stage,
                 repair_count=int(state.get("repair_count", 0)),
             ),
-            clear=("strategy_portfolio", "execution_blueprint", "critique_report", "approved_strategy_id"),
         )
-        return blocked
+        return state
 
     def goal_modeling_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
         previous = state.get("goal_model")
@@ -163,27 +197,22 @@ class CognitiveOSRuntime(Phase6Runtime):
         goal = result.artifact
         state["goal_model"] = goal
         state["planning_mode"] = "model_backed"
-        status = "needs_goal_clarification" if not goal.can_proceed_to_evidence else state.get("status", "needs_goal_clarification")
-        state["status"] = status
+        state["runtime_status"] = "running"
         self._record_artifact(
             state,
             agent=self.goal_agent.name,
             artifact_type=self.goal_agent.artifact_type,
             artifact=goal,
             model_usage=result.model_usage,
-            decision="approve" if goal.can_proceed_to_evidence else "request_user_input",
+            decision="produce_artifact",
             reason=(goal.questions[0].why_this_question_matters if goal.questions else goal.desired_change),
-            summary=(
-                "The goal is understood well enough for an independent reality check."
-                if goal.can_proceed_to_evidence
-                else "Planix needs the highest-impact unknown resolved before designing anything."
-            ),
-            status="approved" if goal.can_proceed_to_evidence else "blocked",
+            summary="Goal Intelligence updated the semantic goal model; completion is judged separately.",
+            status="draft",
             input_artifact_types=("user_goal_model",),
         )
         self.persistence.update(
             state["session_id"],
-            status=status,
+            runtime_status="running",
             goal_model=goal,
             cognitive_metadata=self._metadata(
                 mode="model_backed",
@@ -192,16 +221,67 @@ class CognitiveOSRuntime(Phase6Runtime):
                 rules=[item.statement for item in user_model_memories],
                 repair_count=int(state.get("repair_count", 0)),
             ),
+        )
+        return state
+
+    def goal_completion_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
+        goal = state.get("goal_model")
+        if not goal:
+            return state
+        completion = self.goal_completion_judge.evaluate(goal)
+        if goal.can_proceed_to_evidence != completion.complete:
+            goal = goal.model_copy(update={"can_proceed_to_evidence": completion.complete})
+            state["goal_model"] = goal
+        state["goal_completion"] = completion
+        status = "needs_goal_clarification" if not completion.complete else state.get("status", "needs_goal_clarification")
+        business_status = "goal_understood" if completion.complete else "goal_clarification"
+        runtime_status = "running" if completion.complete else "idle"
+        state["status"] = status
+        state["business_status"] = business_status
+        state["runtime_status"] = runtime_status
+        self._record_artifact(
+            state,
+            agent=self.goal_completion_judge.name,
+            artifact_type=self.goal_completion_judge.artifact_type,
+            artifact=completion,
+            model_usage={},
+            decision="approve" if completion.complete else "request_user_input",
+            reason=(
+                "Only non-blocking unknowns remain."
+                if completion.complete
+                else completion.blocking_unknowns[0].impact
+            ),
+            summary=(
+                "Goal completion passed; planning may continue toward strategy."
+                if completion.complete
+                else "Goal completion is waiting only on decision-blocking information."
+            ),
+            status="approved" if completion.complete else "blocked",
+            input_artifact_types=("user_goal_model",),
+        )
+        self.persistence.update(
+            state["session_id"],
+            status=status,
+            business_status=business_status,
+            runtime_status=runtime_status,
+            goal_model=goal,
+            goal_completion=completion,
+            cognitive_metadata=self._metadata(
+                mode="model_backed",
+                stage="goal_completion",
+                confidence=goal.confidence,
+                repair_count=int(state.get("repair_count", 0)),
+            ),
             clear=("reality_assessment", "evidence_pack", "strategy_portfolio", "execution_blueprint", "critique_report")
-            if not goal.can_proceed_to_evidence
+            if not completion.complete
             else (),
         )
-        if goal.can_proceed_to_evidence:
+        if completion.complete:
             self._handoff(state, self.goal_agent.name, self.reality_agent.name, "Goal understanding is reliable enough for reality assessment.")
-        elif goal.questions:
+        elif completion.blocking_unknowns:
             state["conversation_history"] = self.persistence.append_assistant_turn(
                 state["session_id"],
-                "\n".join(item.question for item in goal.questions),
+                "\n".join(item.question for item in completion.blocking_unknowns),
             )
         return state
 
@@ -226,6 +306,8 @@ class CognitiveOSRuntime(Phase6Runtime):
         reality = result.artifact
         state["reality_assessment"] = reality
         state["status"] = "needs_goal_clarification" if not reality.can_proceed_to_evidence else state.get("status", "needs_goal_clarification")
+        state["business_status"] = "evidence_pending"
+        state["runtime_status"] = "running" if reality.can_proceed_to_evidence else "idle"
         self._record_artifact(
             state,
             agent=self.reality_agent.name,
@@ -245,6 +327,8 @@ class CognitiveOSRuntime(Phase6Runtime):
         self.persistence.update(
             state["session_id"],
             status=state["status"],
+            business_status="evidence_pending",
+            runtime_status=state["runtime_status"],
             reality_assessment=reality,
             cognitive_metadata=self._metadata(
                 mode="model_backed",

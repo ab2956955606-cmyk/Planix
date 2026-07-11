@@ -102,6 +102,10 @@ export function deriveDeepPlanningStatus(messages: CommandThreadMessage[]): Plan
 
 export function planningStageFromStatus(status: string | undefined, messages: CommandThreadMessage[] = []): PlanningStage {
   const kinds = new Set(messages.map((message) => message.kind));
+  if (status === 'goal_understood' || status === 'evidence_pending' || status === 'strategy_pending') return 'design_plan';
+  if (status === 'execution_pending') return 'waiting_confirmation';
+  if (status === 'calendar_pending' || status === 'completed') return 'write_calendar';
+  if (status === 'goal_clarification') return 'understand_goal';
   if (status === 'MODEL_UNAVAILABLE') {
     if (kinds.has('execution_blueprint_ready') || kinds.has('execution_plan_draft') || kinds.has('critique_report_ready')) return 'optimize_plan';
     if (kinds.has('strategy_portfolio_ready') || kinds.has('plan_design_proposal')) return 'design_plan';

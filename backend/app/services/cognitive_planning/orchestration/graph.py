@@ -35,6 +35,8 @@ def build_cognitive_graph(runtime):
         route_from_guard,
         {
             "goal_modeling": "goal_modeling",
+            "wait_for_goal_answer": "wait_for_goal_answer",
+            "context_evidence": "context_evidence",
             "strategy_architect": "strategy_architect",
             "execution_designer": "execution_designer",
             "wait_for_execution_approval": "wait_for_execution_approval",

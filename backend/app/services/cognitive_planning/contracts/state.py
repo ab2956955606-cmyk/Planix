@@ -9,6 +9,7 @@ from .critique import PlanCritiqueReport
 from .evidence import EvidencePack
 from .execution import ExecutionBlueprint
 from .goal_model import ConversationTurn, UserGoalModel
+from .goal_completion import GoalCompletionResult
 from .learning import PlanningLearningUpdate
 from .strategy import StrategyPortfolio
 
@@ -26,6 +27,7 @@ CognitivePlanningStatus = Literal[
     "learning_from_feedback",
     "blocked_model_unavailable",
     "MODEL_UNAVAILABLE",
+    "cancelled",
 ]
 
 
@@ -55,6 +57,8 @@ UserAction = Literal[
     "give_feedback",
     "write_calendar",
     "restart",
+    "continue_current_stage",
+    "cancel",
 ]
 
 
@@ -65,6 +69,7 @@ class CognitivePlanningState(TypedDict, total=False):
     conversation_history: list[ConversationTurn]
     request_context: dict[str, Any]
     goal_model: UserGoalModel
+    goal_completion: GoalCompletionResult
     evidence_pack: EvidencePack
     reality_assessment: Any
     strategy_portfolio: StrategyPortfolio
@@ -74,6 +79,9 @@ class CognitivePlanningState(TypedDict, total=False):
     learning_update: PlanningLearningUpdate
     user_action: UserAction
     status: CognitivePlanningStatus
+    business_status: str
+    runtime_status: str
+    resume_node: str
     planning_mode: PlanningMode
     repair_count: int
     repair_loop: bool

@@ -7,6 +7,7 @@ from ...planning_agent_runtime import PlanningAgentRuntime
 from ..contracts import (
     EvidencePack,
     ExecutionBlueprint,
+    GoalCompletionResult,
     PlanCritiqueReport,
     PlanningLearningUpdate,
     RealityAssessment,
@@ -30,6 +31,7 @@ class SessionApiAdapter:
 
     def from_row(self, row) -> PlanningSessionResponse:
         goal_raw = json_object(row["goal_model_json"])
+        completion_raw = json_object(row["goal_completion_json"]) if "goal_completion_json" in row.keys() else {}
         evidence_raw = json_object(row["evidence_pack_json"])
         reality_raw = json_object(row["reality_assessment_json"]) if "reality_assessment_json" in row.keys() else {}
         strategy_raw = json_object(row["strategy_portfolio_json"])
@@ -39,6 +41,7 @@ class SessionApiAdapter:
         metadata_raw = json_object(row["cognitive_metadata_json"])
 
         goal = UserGoalModel.model_validate(goal_raw) if goal_raw else None
+        completion = GoalCompletionResult.model_validate(completion_raw) if completion_raw else None
         evidence = EvidencePack.model_validate(evidence_raw) if evidence_raw else None
         reality = RealityAssessment.model_validate(reality_raw) if reality_raw else None
         strategy = StrategyPortfolio.model_validate(strategy_raw) if strategy_raw else None
@@ -50,6 +53,32 @@ class SessionApiAdapter:
         design_approved = bool(execution or row["status"] in {"waiting_execution_approval", "ready_to_write_calendar", "waiting_calendar_write_approval", "written_to_calendar"})
         execution_approved = row["status"] in {"ready_to_write_calendar", "waiting_calendar_write_approval", "written_to_calendar"}
         contract = goal_to_contract(goal, row["user_input"]) if goal else None
+        if contract and completion:
+            if completion.complete:
+                contract = contract.model_copy(
+                    update={
+                        "can_move_to_design": True,
+                        "missing_information": [],
+                        "clarification_questions": [],
+                        "pending_question": None,
+                    }
+                )
+            else:
+                questions = [item.question for item in completion.blocking_unknowns]
+                impacts = [item.impact for item in completion.blocking_unknowns]
+                contract = contract.model_copy(
+                    update={
+                        "can_move_to_design": False,
+                        "missing_information": impacts,
+                        "clarification_questions": questions,
+                        "pending_question": PendingPlanningQuestion(
+                            askedFields=["blocking_unknown"],
+                            expectedAnswerType="goal_clarification",
+                            questionText=questions[0],
+                            questions=questions,
+                        ),
+                    }
+                )
         memory = evidence_to_memory(evidence) if evidence else None
         resources = evidence_to_resources(evidence, goal.domain if goal else "") if evidence else None
         design = strategy_to_design(strategy, goal, approved=design_approved) if strategy and goal else None
@@ -74,7 +103,12 @@ class SessionApiAdapter:
         if not contract:
             legacy_contract = json_object(row["user_need_contract_json"])
             contract = UserNeedContract.model_validate(legacy_contract) if legacy_contract else None
-        if contract and metadata and metadata.planning_mode == "blocked_model_unavailable":
+        if (
+            contract
+            and metadata
+            and metadata.planning_mode == "blocked_model_unavailable"
+            and not (completion and completion.complete)
+        ):
             contract = contract.model_copy(update={"can_move_to_design": False})
 
         return PlanningSessionResponse(
@@ -82,6 +116,8 @@ class SessionApiAdapter:
             threadId=row["thread_id"],
             entryPoint=row["entry_point"],
             status=row["status"],
+            businessStatus=(row["business_status"] or "goal_clarification") if "business_status" in row.keys() else "goal_clarification",
+            runtimeStatus=(row["runtime_status"] or "idle") if "runtime_status" in row.keys() else "idle",
             userInput=row["user_input"],
             userNeedContract=contract,
             pendingQuestion=contract.pending_question if contract else None,
@@ -92,6 +128,7 @@ class SessionApiAdapter:
             learningPatch=patch,
             cognitiveMetadata=metadata,
             goalModel=goal_raw or None,
+            goalCompletion=completion.model_dump(by_alias=True) if completion else None,
             realityAssessment=reality.model_dump(by_alias=True) if reality else None,
             evidencePack=evidence_raw or None,
             strategyPortfolio=strategy_raw or None,

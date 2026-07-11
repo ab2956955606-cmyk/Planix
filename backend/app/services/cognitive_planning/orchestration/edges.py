@@ -4,6 +4,32 @@ from ..contracts import CognitivePlanningState
 
 
 def route_from_guard(state: CognitivePlanningState) -> str:
+    if state.get("user_action") == "continue_current_stage":
+        resume_node = {
+            "goal_intelligence": "goal_modeling",
+            "goal_completion": "goal_modeling",
+            "reality": "context_evidence",
+            "evidence": "context_evidence",
+            "strategy": "strategy_architect",
+            "execution": "execution_designer",
+            "critic": "independent_critic",
+            "feedback_learning": "feedback_learning",
+        }.get(str(state.get("resume_node") or ""))
+        if state.get("status") == "MODEL_UNAVAILABLE" and resume_node:
+            return resume_node
+        completion = state.get("goal_completion")
+        if completion and not completion.complete:
+            return "wait_for_goal_answer"
+        if resume_node not in {"goal_modeling", None}:
+            return resume_node
+        return {
+            "goal_clarification": "wait_for_goal_answer",
+            "goal_understood": "context_evidence",
+            "evidence_pending": "context_evidence",
+            "strategy_pending": "strategy_architect",
+            "execution_pending": "wait_for_execution_approval",
+            "calendar_pending": "calendar_gate",
+        }.get(str(state.get("business_status") or ""), "wait_for_goal_answer")
     return {
         "create": "goal_modeling",
         "answer_question": "goal_modeling",

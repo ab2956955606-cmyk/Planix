@@ -121,7 +121,26 @@ export type CommandChatEvent =
   | { type: 'learning_update'; sessionId: string; data: unknown }
   | { type: 'agent_decision'; sessionId: string; data: unknown }
   | { type: 'agent_message'; sessionId: string; data: unknown }
-  | { type: 'planning_session_status'; sessionId: string; status: string }
+  | {
+      type: 'planning_session_status';
+      sessionId: string;
+      status: string;
+      businessStatus?: string;
+      runtimeStatus?: string;
+      goalCompletion?: GoalCompletionResult;
+      data?: {
+        businessStatus?: string;
+        runtimeStatus?: string;
+        goalCompletion?: GoalCompletionResult;
+      };
+    }
+  | {
+      type: 'goal_completion_updated';
+      sessionId: string;
+      data: GoalCompletionResult;
+      businessStatus?: string;
+      runtimeStatus?: string;
+    }
   | { type: 'goal_model_updated'; sessionId: string; data: unknown }
   | { type: 'reality_assessment_ready'; sessionId: string; data: unknown }
   | { type: 'evidence_pack_ready'; sessionId: string; data: unknown }
@@ -149,6 +168,16 @@ export type CommandChatEvent =
   | { type: 'execution_result'; actionId?: string; status: 'success' | 'failed' | 'rejected'; text: string }
   | { type: 'done'; threadId: string }
   | { type: 'error'; error: string };
+
+export type GoalCompletionResult = {
+  complete: boolean;
+  blockingUnknowns: Array<{
+    question: string;
+    impact: string;
+  }>;
+  optionalUnknowns: string[];
+  nextStage: 'goal_clarification' | 'evidence' | 'strategy';
+};
 
 export interface CommandChatPayload {
   threadId?: string;

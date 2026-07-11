@@ -26,6 +26,7 @@ from ..contracts import (
     CriticRepairRequest,
     CritiqueIssue,
     ExecutionBlueprint,
+    GoalCompletionResult,
     GoalModelingInput,
     PlanCritiqueReport,
     PlanningLearningUpdate,
@@ -37,9 +38,28 @@ from ..evaluation import DeterministicGuardError, calendar_write_allowed, valida
 from ..retrieval import PlanningHypothesisRepository
 from .graph import build_cognitive_graph
 from .persistence import CognitivePlanningPersistence, json_object
+from ..control_intent import detect_planning_control_intent
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+RESUME_NODE_BY_STAGE = {
+    "goal_modeling": "goal_modeling",
+    "goal_intelligence": "goal_intelligence",
+    "goal_completion": "goal_completion",
+    "reality_assessment": "reality",
+    "context_evidence": "evidence",
+    "evidence_synthesis": "evidence",
+    "strategy_architecture": "strategy",
+    "strategy_design": "strategy",
+    "execution_narrative": "execution",
+    "execution_design": "execution",
+    "independent_critique": "critic",
+    "critic_review": "critic",
+    "plan_critique": "critic",
+    "feedback_learning": "feedback_learning",
+}
 
 
 def use_cognitive_planning() -> bool:
@@ -92,6 +112,8 @@ class CognitivePlanningRuntime:
             "request_context": json_object(row["request_context_json"]) if "request_context_json" in row.keys() else {},
             "user_action": action,
             "status": row["status"],
+            "business_status": (row["business_status"] or "goal_clarification") if "business_status" in row.keys() else "goal_clarification",
+            "runtime_status": (row["runtime_status"] or "idle") if "runtime_status" in row.keys() else "idle",
             "planning_mode": "model_backed",
             "repair_count": int(row["repair_count"] or 0),
             "errors": [],
@@ -100,6 +122,7 @@ class CognitivePlanningRuntime:
             state["approved_strategy_id"] = row["approved_strategy_id"]
         mappings = (
             ("goal_model", "goal_model_json", UserGoalModel),
+            ("goal_completion", "goal_completion_json", GoalCompletionResult),
             ("evidence_pack", "evidence_pack_json", EvidencePack),
             ("strategy_portfolio", "strategy_portfolio_json", StrategyPortfolio),
             ("execution_blueprint", "execution_blueprint_json", ExecutionBlueprint),
@@ -113,6 +136,9 @@ class CognitivePlanningRuntime:
         metadata = json_object(row["cognitive_metadata_json"])
         if metadata:
             state["planning_mode"] = metadata.get("planningMode", "model_backed")
+            stage = str(metadata.get("currentStage") or "")
+            if stage in RESUME_NODE_BY_STAGE:
+                state["resume_node"] = RESUME_NODE_BY_STAGE[stage]
         return state
 
     def _invoke(self, state: CognitivePlanningState) -> PlanningSessionResponse:
@@ -217,15 +243,39 @@ class CognitivePlanningRuntime:
 
     def wait_for_goal_answer_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
         state["status"] = "needs_goal_clarification"
+        completion = state.get("goal_completion")
+        state["business_status"] = "evidence_pending" if completion and completion.complete else "goal_clarification"
+        state["runtime_status"] = "idle"
+        self.persistence.update(
+            state["session_id"],
+            status="needs_goal_clarification",
+            business_status=state["business_status"],
+            runtime_status="idle",
+        )
         return state
 
     def wait_for_strategy_approval_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
         state["status"] = "waiting_design_approval"
+        state["business_status"] = "strategy_pending"
+        state["runtime_status"] = "idle"
+        self.persistence.update(
+            state["session_id"],
+            status="waiting_design_approval",
+            business_status="strategy_pending",
+            runtime_status="idle",
+        )
         return state
 
     def wait_for_execution_approval_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
         if state.get("user_action") == "approve_execution":
             return self.execution_approval_node(state)
+        state["business_status"] = "execution_pending"
+        state["runtime_status"] = "idle"
+        self.persistence.update(
+            state["session_id"],
+            business_status="execution_pending",
+            runtime_status="idle",
+        )
         return state
 
     def goal_modeling_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
@@ -301,6 +351,8 @@ class CognitivePlanningRuntime:
         evidence = result.artifact
         state["evidence_pack"] = evidence
         state["status"] = "needs_goal_clarification" if not evidence.can_proceed_to_strategy else state.get("status", "needs_goal_clarification")
+        state["business_status"] = "strategy_pending" if evidence.can_proceed_to_strategy else "evidence_pending"
+        state["runtime_status"] = "running" if evidence.can_proceed_to_strategy else "idle"
         rules = [item.rule for item in evidence.planning_rules]
         self._record_artifact(
             state,
@@ -317,6 +369,8 @@ class CognitivePlanningRuntime:
         self.persistence.update(
             state["session_id"],
             status=state["status"],
+            business_status=state["business_status"],
+            runtime_status=state["runtime_status"],
             evidence_pack=evidence,
             cognitive_metadata=self._metadata(
                 mode="model_backed",
@@ -354,6 +408,8 @@ class CognitivePlanningRuntime:
         strategy = result.artifact
         state["strategy_portfolio"] = strategy
         state["status"] = "waiting_design_approval"
+        state["business_status"] = "strategy_pending"
+        state["runtime_status"] = "idle"
         state.pop("execution_blueprint", None)
         state.pop("critique_report", None)
         if not state.get("repair_loop"):
@@ -373,6 +429,8 @@ class CognitivePlanningRuntime:
         self.persistence.update(
             state["session_id"],
             status="waiting_design_approval",
+            business_status="strategy_pending",
+            runtime_status="idle",
             strategy_portfolio=strategy,
             repair_count=int(state.get("repair_count", 0)),
             cognitive_metadata=self._metadata(
@@ -398,6 +456,8 @@ class CognitivePlanningRuntime:
         strategy = self._approved_strategy(state)
         if not goal or not evidence or not strategy:
             state["status"] = "waiting_design_approval"
+            state["business_status"] = "strategy_pending"
+            state["runtime_status"] = "idle"
             return state
         repair = state.pop("repair_instructions", [])
         try:
@@ -409,6 +469,8 @@ class CognitivePlanningRuntime:
             return self._block_model(state, agent=self.execution_agent.name, error=exc.error)
         execution = result.artifact
         state["execution_blueprint"] = execution
+        state["business_status"] = "execution_pending"
+        state["runtime_status"] = "running"
         self._record_artifact(
             state,
             agent=self.execution_agent.name,
@@ -422,6 +484,8 @@ class CognitivePlanningRuntime:
         )
         self.persistence.update(
             state["session_id"],
+            business_status="execution_pending",
+            runtime_status="running",
             execution_blueprint=execution,
             cognitive_metadata=self._metadata(
                 mode="model_backed",
@@ -507,6 +571,8 @@ class CognitivePlanningRuntime:
         state["critique_report"] = critique
         review_passed = critique.status == "passed" and critique.calendar_writable
         state["status"] = "waiting_execution_approval" if review_passed else "execution_revision"
+        state["business_status"] = "execution_pending"
+        state["runtime_status"] = "idle"
         self._record_artifact(
             state,
             agent=self.critic_agent.name,
@@ -522,6 +588,8 @@ class CognitivePlanningRuntime:
         self.persistence.update(
             state["session_id"],
             status=state["status"],
+            business_status="execution_pending",
+            runtime_status="idle",
             critique_report=critique,
             repair_count=int(state.get("repair_count", 0)),
             cognitive_metadata=self._metadata(
@@ -586,9 +654,13 @@ class CognitivePlanningRuntime:
         if not allowed:
             raise HTTPException(status_code=422, detail={"message": "execution plan has not passed the independent critic"})
         state["status"] = "ready_to_write_calendar"
+        state["business_status"] = "calendar_pending"
+        state["runtime_status"] = "idle"
         self.persistence.update(
             state["session_id"],
             status="ready_to_write_calendar",
+            business_status="calendar_pending",
+            runtime_status="idle",
             cognitive_metadata=self._metadata(
                 mode="model_backed",
                 stage="waiting_calendar_write",
@@ -627,6 +699,8 @@ class CognitivePlanningRuntime:
         update = result.artifact
         state["learning_update"] = update
         state["status"] = "learning_from_feedback"
+        state["business_status"] = "execution_pending"
+        state["runtime_status"] = "running"
         if update.current_plan_patch:
             state["repair_count"] = 0
         self._record_artifact(
@@ -648,6 +722,8 @@ class CognitivePlanningRuntime:
         self.persistence.update(
             state["session_id"],
             status="learning_from_feedback",
+            business_status="execution_pending",
+            runtime_status="running",
             planning_learning_update=update,
             repair_count=int(state.get("repair_count", 0)),
             cognitive_metadata=self._metadata(
@@ -680,9 +756,13 @@ class CognitivePlanningRuntime:
         ):
             raise HTTPException(status_code=422, detail={"message": "only a model-backed, critic-passed plan can be written to Calendar"})
         state["status"] = "waiting_calendar_write_approval"
+        state["business_status"] = "calendar_pending"
+        state["runtime_status"] = "idle"
         self.persistence.update(
             state["session_id"],
             status="waiting_calendar_write_approval",
+            business_status="calendar_pending",
+            runtime_status="idle",
             cognitive_metadata=self._metadata(
                 mode="model_backed",
                 stage="calendar_permission_gate",
@@ -700,17 +780,62 @@ class CognitivePlanningRuntime:
             context=payload.context,
         )
         row = self.persistence.get_row(session_id)
+        self.persistence.update(session_id, runtime_status="running")
+        row = self.persistence.get_row(session_id)
         state = self._state_from_row(row, action="create", user_input=payload.user_input)
         return self._invoke(state)
 
     def clarify(self, session_id: str, payload: PlanningSessionTextRequest) -> PlanningSessionResponse:
+        control_intent = detect_planning_control_intent(payload.text)
+        if control_intent == "continue_current_stage":
+            return self.continue_current_stage(session_id)
+        if control_intent in {"cancel_planning", "restart_planning"}:
+            return self.cancel(session_id)
+        if control_intent == "approve_current_stage":
+            current = self.get_session(session_id)
+            if current.status in {"waiting_design_approval", "design_revision"}:
+                return self.approve_design(session_id)
+            if current.status == "waiting_execution_approval":
+                return self.approve_execution(session_id)
+            return self.continue_current_stage(session_id)
+        if control_intent == "modify_current_stage":
+            return self.get_session(session_id)
         history = self.persistence.append_user_turn(session_id, payload.text)
         row = self.persistence.get_row(session_id)
         if not row:
             raise HTTPException(status_code=404, detail={"message": "planning session not found"})
         state = self._state_from_row(row, action="answer_question", user_input=payload.text)
+        state["runtime_status"] = "running"
+        state["planning_mode"] = "model_backed"
+        self.persistence.update(session_id, runtime_status="running")
         state["conversation_history"] = history
         return self._invoke(state)
+
+    def continue_current_stage(self, session_id: str) -> PlanningSessionResponse:
+        row = self.persistence.get_row(session_id)
+        if not row:
+            raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        if row["status"] in {"cancelled", "written_to_calendar"}:
+            return self.adapter.from_row(row)
+        state = self._state_from_row(row, action="continue_current_stage")
+        if state.get("runtime_status") == "idle" and row["status"] in {
+            "waiting_design_approval",
+            "waiting_execution_approval",
+            "ready_to_write_calendar",
+            "waiting_calendar_write_approval",
+        }:
+            return self.adapter.from_row(row)
+        state["runtime_status"] = "running"
+        state["planning_mode"] = "model_backed"
+        self.persistence.update(session_id, runtime_status="running")
+        return self._invoke(state)
+
+    def cancel(self, session_id: str) -> PlanningSessionResponse:
+        row = self.persistence.get_row(session_id)
+        if not row:
+            raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        self.persistence.mark_cancelled(session_id)
+        return self.get_session(session_id)
 
     def revise_design(self, session_id: str, payload: PlanningSessionTextRequest) -> PlanningSessionResponse:
         self.persistence.append_user_turn(session_id, payload.text)

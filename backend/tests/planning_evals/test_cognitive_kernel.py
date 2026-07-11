@@ -1626,16 +1626,19 @@ def test_phase7_travel_uses_model_judgment_not_static_catalog(isolated_db):
     assert "README" not in visible
 
 
-def test_phase7_model_failure_is_terminal_and_never_fakes_ai_planning(isolated_db):
+def test_phase7_model_failure_is_recoverable_and_never_fakes_ai_planning(isolated_db):
     runtime = CognitiveOSRuntime(model_client=UnavailableCognitiveModel())
     session = runtime.create_session(
         CreatePlanningSessionRequest(entryPoint="p_mode", threadId="phase7-unavailable", userInput="我要学游泳")
     )
     assert session.status == "MODEL_UNAVAILABLE"
+    assert session.business_status == "goal_clarification"
+    assert session.runtime_status == "blocked_model"
     assert session.cognitive_metadata.engine_version == "cognitive-os-v1"
     assert session.cognitive_metadata.planning_mode == "blocked_model_unavailable"
     assert session.strategy_portfolio is None
     assert session.execution_blueprint is None
+    assert not session.decisions
     with pytest.raises(HTTPException) as exc_info:
         runtime.prepare_calendar_write(session.session_id)
     assert exc_info.value.status_code == 409
@@ -1728,11 +1731,19 @@ def test_phase7_p_mode_stream_keeps_user_artifacts_and_advanced_trace_data(clien
     assert {
         "planning_session_started",
         "goal_model_updated",
+        "goal_completion_updated",
         "reality_assessment_ready",
         "evidence_pack_ready",
         "strategy_portfolio_ready",
         "planning_session_status",
     }.issubset(event_types)
+    completion_event = next(item for item in events if item.get("type") == "goal_completion_updated")
+    assert completion_event["data"]["complete"] is True
+    assert completion_event["data"]["nextStage"] == "strategy"
+    status_event = next(item for item in reversed(events) if item.get("type") == "planning_session_status")
+    assert status_event["businessStatus"] == "strategy_pending"
+    assert status_event["runtimeStatus"] == "idle"
+    assert status_event["goalCompletion"]["complete"] is True
     assert "command_decision" not in event_types
     assert "agent_decision" in event_types
     assert "agent_message" in event_types
@@ -1741,6 +1752,9 @@ def test_phase7_p_mode_stream_keeps_user_artifacts_and_advanced_trace_data(clien
     assert "user_need_contract" not in event_types
     assert "memory_insight_brief" not in event_types
     assert "resource_brief" not in event_types
+    replay = client.get(f"/api/command/thread/{events[-1]['threadId']}")
+    assert replay.status_code == 200
+    assert "goal_completion_updated" in {item.get("kind") for item in replay.json()["messages"]}
 
 
 def test_phase7_p_mode_model_unavailable_has_no_fake_plan_and_keeps_debug_diagnostics(client, monkeypatch):
@@ -1762,7 +1776,13 @@ def test_phase7_p_mode_model_unavailable_has_no_fake_plan_and_keeps_debug_diagno
         json={"message": "我要学Go", "mode": "auto", "permission": "low"},
     )
     events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
-    assert any(item.get("type") == "planning_session_status" and item.get("status") == "MODEL_UNAVAILABLE" for item in events)
+    assert any(
+        item.get("type") == "planning_session_status"
+        and item.get("status") == "MODEL_UNAVAILABLE"
+        and item.get("businessStatus") == "goal_clarification"
+        and item.get("runtimeStatus") == "blocked_model"
+        for item in events
+    )
     forbidden = {
         "command_decision",
         "strategy_portfolio_ready",
@@ -1772,5 +1792,5 @@ def test_phase7_p_mode_model_unavailable_has_no_fake_plan_and_keeps_debug_diagno
         "calendar_plan_preview",
     }
     assert not forbidden.intersection({item.get("type") for item in events})
-    assert any(item.get("type") == "agent_decision" for item in events)
+    assert not any(item.get("type") == "agent_decision" for item in events)
     assert any(item.get("type") == "agent_message" for item in events)

@@ -34,6 +34,7 @@ from ..schemas import (
 )
 from .command_decision import CommandDecisionResult, CommandDecisionService, local_fallback_usage, usage_from_llm_result
 from .cognitive_planning.compatibility import cognitive_events
+from .cognitive_planning.control_intent import detect_planning_control_intent
 from .goal_understanding import GoalUnderstandingOutcome, GoalUnderstandingService
 from .langgraph_planning import get_deep_planning_orchestrator
 from .llm import LlmClient
@@ -1342,11 +1343,20 @@ class CommandAgentService:
         *,
         data: dict[str, Any] | None = None,
         status: str | None = None,
+        business_status: str | None = None,
+        runtime_status: str | None = None,
+        goal_completion: dict[str, Any] | None = None,
         content: str = "",
     ) -> str:
         payload: dict[str, Any] = {"sessionId": session_id}
         if status is not None:
             payload["status"] = status
+        if business_status is not None:
+            payload["businessStatus"] = business_status
+        if runtime_status is not None:
+            payload["runtimeStatus"] = runtime_status
+        if goal_completion is not None:
+            payload["goalCompletion"] = goal_completion
         if data is not None:
             payload["data"] = data
         self._add_planning_session_card(thread_id, kind, content or status or session_id, payload)
@@ -1422,6 +1432,7 @@ class CommandAgentService:
         for event_type, data in cognitive_events(session):
             summary_keys = {
                 "goal_model_updated": "goalStatement",
+                "goal_completion_updated": "nextStage",
                 "reality_assessment_ready": "feasibilitySummary",
                 "evidence_pack_ready": "synthesis",
                 "strategy_portfolio_ready": "recommendationReason",
@@ -1449,7 +1460,16 @@ class CommandAgentService:
         if session.learning_patch and not cognitive_os:
             data = session.learning_patch.model_dump(by_alias=True)
             yield self._planning_event(thread_id, "learning_update", session.session_id, data=data, content=session.learning_patch.insight)
-        yield self._planning_event(thread_id, "planning_session_status", session.session_id, status=session.status, content=session.status)
+        yield self._planning_event(
+            thread_id,
+            "planning_session_status",
+            session.session_id,
+            status=session.status,
+            business_status=session.business_status,
+            runtime_status=session.runtime_status,
+            goal_completion=session.goal_completion,
+            content=session.status,
+        )
 
     def _stream_deep_planning_start(
         self,
@@ -1494,18 +1514,31 @@ class CommandAgentService:
         if not session:
             return None
         text = payload.message
+        control_intent = detect_planning_control_intent(text)
+        if control_intent == "cancel_planning":
+            return "cancel", session
+        if control_intent == "restart_planning":
+            return "restart_control", session
         if _planning_restart_text(text):
-            return None
+            return "restart", session
+        if control_intent == "continue_current_stage":
+            return "continue_current_stage", session
+        if control_intent == "modify_current_stage":
+            return "modify_current_stage", session
         if session.status == "needs_goal_clarification":
             return "clarify", session
         if session.status == "MODEL_UNAVAILABLE":
-            return "clarify", session
+            return (
+                "continue_current_stage"
+                if session.goal_completion and session.goal_completion.get("complete")
+                else "clarify"
+            ), session
         if session.status in {"waiting_design_approval", "design_revision"}:
-            if _planning_approval_text(text):
+            if control_intent == "approve_current_stage" or _planning_approval_text(text):
                 return "approve_design", session
             return "revise_design", session
         if session.status == "waiting_execution_approval":
-            if _planning_approval_text(text):
+            if control_intent == "approve_current_stage" or _planning_approval_text(text):
                 return "approve_execution", session
             return "revise_execution", session
         if session.status == "execution_revision":
@@ -1533,6 +1566,31 @@ class CommandAgentService:
     ) -> Iterator[str]:
         service = get_deep_planning_orchestrator()
         request = PlanningSessionTextRequest(text=payload.message)
+        if action == "continue_current_stage":
+            updated = service.continue_current_stage(session.session_id)
+            yield from self._stream_planning_session_snapshot(thread_id, updated)
+            return
+        if action == "modify_current_stage":
+            updated = service.get_session(session.session_id)
+            yield from self._stream_planning_session_snapshot(thread_id, updated)
+            return
+        if action == "cancel":
+            updated = service.cancel(session.session_id)
+            yield from self._stream_planning_session_snapshot(thread_id, updated)
+            return
+        if action == "restart_control":
+            cancel = getattr(service, "cancel", None)
+            if callable(cancel):
+                cancel(session.session_id)
+            restart_payload = payload.model_copy(update={"message": session.user_input})
+            yield from self._stream_deep_planning_start(thread_id, restart_payload)
+            return
+        if action == "restart":
+            cancel = getattr(service, "cancel", None)
+            if callable(cancel):
+                cancel(session.session_id)
+            yield from self._stream_deep_planning_start(thread_id, payload)
+            return
         if action == "clarify":
             updated = service.clarify(session.session_id, request)
             agents = [("User Advocate Agent", "Merged the clarification and checked whether the goal is now clear.")]

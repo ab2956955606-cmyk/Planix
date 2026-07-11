@@ -82,6 +82,8 @@ def init_db(conn: sqlite3.Connection) -> None:
           thread_id TEXT NOT NULL DEFAULT '',
           entry_point TEXT NOT NULL DEFAULT 'p_mode',
           status TEXT NOT NULL,
+          business_status TEXT NOT NULL DEFAULT 'goal_clarification',
+          runtime_status TEXT NOT NULL DEFAULT 'idle',
           user_input TEXT NOT NULL,
           user_need_contract_json TEXT NOT NULL DEFAULT '{}',
           slot_state_json TEXT NOT NULL DEFAULT '{}',
@@ -93,6 +95,7 @@ def init_db(conn: sqlite3.Connection) -> None:
           latest_learning_patch_json TEXT NOT NULL DEFAULT '{}',
           cognitive_metadata_json TEXT NOT NULL DEFAULT '{}',
           goal_model_json TEXT NOT NULL DEFAULT '{}',
+          goal_completion_json TEXT NOT NULL DEFAULT '{}',
           reality_assessment_json TEXT NOT NULL DEFAULT '{}',
           evidence_pack_json TEXT NOT NULL DEFAULT '{}',
           strategy_portfolio_json TEXT NOT NULL DEFAULT '{}',
@@ -420,6 +423,19 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "planning_sessions", "pending_question_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "cognitive_metadata_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "goal_model_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "planning_sessions", "goal_completion_json", "TEXT NOT NULL DEFAULT '{}'")
+    business_status_added = ensure_column(
+        conn,
+        "planning_sessions",
+        "business_status",
+        "TEXT NOT NULL DEFAULT 'goal_clarification'",
+    )
+    runtime_status_added = ensure_column(
+        conn,
+        "planning_sessions",
+        "runtime_status",
+        "TEXT NOT NULL DEFAULT 'idle'",
+    )
     ensure_column(conn, "planning_sessions", "reality_assessment_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "evidence_pack_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "strategy_portfolio_json", "TEXT NOT NULL DEFAULT '{}'")
@@ -430,6 +446,125 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "planning_sessions", "request_context_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "approved_strategy_id", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "planning_sessions", "repair_count", "INTEGER NOT NULL DEFAULT 0")
+    if business_status_added:
+        conn.execute(
+            """
+            UPDATE planning_sessions
+            SET business_status = CASE
+              WHEN status = 'written_to_calendar' THEN 'completed'
+              WHEN status = 'cancelled' THEN 'cancelled'
+              WHEN status IN ('ready_to_write_calendar', 'waiting_calendar_write_approval') THEN 'calendar_pending'
+              WHEN status IN ('waiting_execution_approval', 'execution_revision', 'learning_from_feedback') THEN 'execution_pending'
+              WHEN status IN ('waiting_design_approval', 'design_revision') THEN 'strategy_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND (
+                cognitive_metadata_json LIKE '%goal_intelligence%'
+                OR cognitive_metadata_json LIKE '%goal_modeling%'
+                OR cognitive_metadata_json LIKE '%goal_completion%'
+              ) THEN 'goal_clarification'
+              WHEN status = 'MODEL_UNAVAILABLE' AND (
+                cognitive_metadata_json LIKE '%reality_assessment%'
+                OR cognitive_metadata_json LIKE '%context_evidence%'
+                OR cognitive_metadata_json LIKE '%evidence_synthesis%'
+              ) THEN 'evidence_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND (
+                cognitive_metadata_json LIKE '%strategy_architecture%'
+                OR cognitive_metadata_json LIKE '%strategy_design%'
+              ) THEN 'strategy_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND TRIM(execution_blueprint_json) NOT IN ('', '{}', 'null') THEN 'execution_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND approved_strategy_id != '' THEN 'execution_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND (
+                TRIM(strategy_portfolio_json) NOT IN ('', '{}', 'null')
+                OR TRIM(evidence_pack_json) NOT IN ('', '{}', 'null')
+              ) THEN 'strategy_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND TRIM(goal_model_json) NOT IN ('', '{}', 'null') THEN 'evidence_pending'
+              ELSE 'goal_clarification'
+            END
+            """
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE planning_sessions
+            SET business_status = CASE
+              WHEN status = 'written_to_calendar' THEN 'completed'
+              WHEN status = 'cancelled' THEN 'cancelled'
+              WHEN status IN ('ready_to_write_calendar', 'waiting_calendar_write_approval') THEN 'calendar_pending'
+              WHEN status IN ('waiting_execution_approval', 'execution_revision', 'learning_from_feedback') THEN 'execution_pending'
+              WHEN status IN ('waiting_design_approval', 'design_revision') THEN 'strategy_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND (
+                cognitive_metadata_json LIKE '%goal_intelligence%'
+                OR cognitive_metadata_json LIKE '%goal_modeling%'
+                OR cognitive_metadata_json LIKE '%goal_completion%'
+              ) THEN 'goal_clarification'
+              WHEN status = 'MODEL_UNAVAILABLE' AND (
+                cognitive_metadata_json LIKE '%reality_assessment%'
+                OR cognitive_metadata_json LIKE '%context_evidence%'
+                OR cognitive_metadata_json LIKE '%evidence_synthesis%'
+              ) THEN 'evidence_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND (
+                cognitive_metadata_json LIKE '%strategy_architecture%'
+                OR cognitive_metadata_json LIKE '%strategy_design%'
+              ) THEN 'strategy_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND TRIM(execution_blueprint_json) NOT IN ('', '{}', 'null') THEN 'execution_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND approved_strategy_id != '' THEN 'execution_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND (
+                TRIM(strategy_portfolio_json) NOT IN ('', '{}', 'null')
+                OR TRIM(evidence_pack_json) NOT IN ('', '{}', 'null')
+              ) THEN 'strategy_pending'
+              WHEN status = 'MODEL_UNAVAILABLE' AND TRIM(goal_model_json) NOT IN ('', '{}', 'null') THEN 'evidence_pending'
+              ELSE 'goal_clarification'
+            END
+            WHERE business_status IS NULL
+               OR TRIM(business_status) = ''
+               OR (
+                 business_status = 'goal_clarification'
+                 AND (
+                   status IN (
+                     'written_to_calendar', 'cancelled', 'ready_to_write_calendar',
+                     'waiting_calendar_write_approval', 'waiting_execution_approval',
+                     'execution_revision', 'learning_from_feedback',
+                     'waiting_design_approval', 'design_revision'
+                   )
+                   OR (
+                     status = 'MODEL_UNAVAILABLE'
+                     AND cognitive_metadata_json NOT LIKE '%goal_intelligence%'
+                     AND cognitive_metadata_json NOT LIKE '%goal_modeling%'
+                     AND cognitive_metadata_json NOT LIKE '%goal_completion%'
+                     AND (
+                       TRIM(execution_blueprint_json) NOT IN ('', '{}', 'null')
+                       OR approved_strategy_id != ''
+                       OR TRIM(strategy_portfolio_json) NOT IN ('', '{}', 'null')
+                       OR TRIM(evidence_pack_json) NOT IN ('', '{}', 'null')
+                       OR TRIM(goal_model_json) NOT IN ('', '{}', 'null')
+                     )
+                   )
+                 )
+               )
+            """
+        )
+    if runtime_status_added:
+        conn.execute(
+            """
+            UPDATE planning_sessions
+            SET runtime_status = CASE
+              WHEN status = 'MODEL_UNAVAILABLE' THEN 'blocked_model'
+              ELSE 'idle'
+            END
+            """
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE planning_sessions
+            SET runtime_status = CASE
+              WHEN status = 'MODEL_UNAVAILABLE' THEN 'blocked_model'
+              ELSE 'idle'
+            END
+            WHERE runtime_status IS NULL
+               OR TRIM(runtime_status) = ''
+               OR (runtime_status = 'idle' AND status = 'MODEL_UNAVAILABLE')
+            """
+        )
     action_columns = {row["name"] for row in conn.execute("PRAGMA table_info(command_actions)").fetchall()}
     if {"error", "error_message"} <= action_columns:
         conn.execute(
@@ -480,10 +615,12 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
 
 
-def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> bool:
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        return True
+    return False
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, object] | None:

@@ -3032,6 +3032,13 @@ select:focus {
   background: linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(13, 22, 38, 0.78));
 }
 
+.planning-workspace-title {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
 .planning-overview-stage {
   display: flex;
   align-items: center;
@@ -3094,35 +3101,9 @@ select:focus {
   background: rgba(79, 70, 229, 0.14);
 }
 
-.planning-process-summary {
-  border-top: 1px solid rgba(148, 163, 184, 0.16);
-  padding-top: 12px;
-}
-
-.planning-process-summary summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  cursor: pointer;
-  color: #e2e8f0;
-}
-
-.planning-process-summary summary span {
-  color: #a7f3d0;
+.planning-optional-unknowns {
+  color: #94a3b8;
   font-size: 12px;
-}
-
-.planning-process-summary ol {
-  display: grid;
-  gap: 7px;
-  margin: 12px 0 0;
-  padding-left: 24px;
-  color: #cbd5e1;
-}
-
-.planning-overview-history > .command-collapsible-body > .planning-overview-card {
-  margin: 0;
 }
 
 .advanced-debug-settings {

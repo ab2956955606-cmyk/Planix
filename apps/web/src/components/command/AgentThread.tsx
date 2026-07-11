@@ -41,7 +41,7 @@ import { PlanPatchPreviewCard } from './PlanPatchPreviewCard';
 import { PlanPatchResultCard } from './PlanPatchResultCard';
 import { PlanSearchResultsCard } from './PlanSearchResultsCard';
 import { RefinedTasksResultCard } from './RefinedTasksResultCard';
-import { GoalUnderstandingDetailCard, PlanningOverviewCard } from './PlanningOverviewCard';
+import { GoalCompletionDetailCard, GoalUnderstandingDetailCard, PlanningOverviewCard } from './PlanningOverviewCard';
 
 interface AgentThreadProps {
   messages: CommandThreadMessage[];
@@ -68,6 +68,7 @@ const planningCardKinds = new Set<CommandThreadMessage['kind']>([
   'agent_message',
   'planning_session_status',
   'goal_understanding',
+  'goal_completion_updated',
   'goal_model_updated',
   'reality_assessment_ready',
   'evidence_pack_ready',
@@ -79,6 +80,7 @@ const planningCardKinds = new Set<CommandThreadMessage['kind']>([
 
 const cognitiveWorkspaceKinds = new Set<CommandThreadMessage['kind']>([
   'goal_understanding',
+  'goal_completion_updated',
   'goal_model_updated',
   'reality_assessment_ready',
   'evidence_pack_ready',
@@ -162,6 +164,33 @@ function groupMessages(messages: CommandThreadMessage[]): RenderItem[] {
   return items;
 }
 
+function planningSessionId(message: CommandThreadMessage): string {
+  const value = payloadOf(message).sessionId;
+  return typeof value === 'string' ? value : '';
+}
+
+function livePlanningMessages(messages: CommandThreadMessage[]): CommandThreadMessage[] {
+  const planningMessages = messages.filter((message) => message.role === 'card' && planningCardKinds.has(message.kind));
+  if (!planningMessages.length) return [];
+
+  const latestSessionId = [...planningMessages].reverse().map(planningSessionId).find(Boolean) || '';
+  if (!latestSessionId) return planningMessages;
+
+  const scoped = planningMessages.filter((message) => planningSessionId(message) === latestSessionId);
+  const firstScopedIndex = messages.findIndex((message) => planningSessionId(message) === latestSessionId && planningCardKinds.has(message.kind));
+  if (firstScopedIndex < 0) return scoped;
+
+  for (let index = firstScopedIndex - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    const candidateSessionId = planningSessionId(candidate);
+    if (candidateSessionId && candidateSessionId !== latestSessionId && planningCardKinds.has(candidate.kind)) break;
+    if (candidate.kind === 'goal_understanding' && !candidateSessionId) {
+      return [candidate, ...scoped];
+    }
+  }
+  return scoped;
+}
+
 function ExecutionGroupCard({ messages, t }: { messages: CommandThreadMessage[]; t: (key: string) => string }) {
   const last = messages[messages.length - 1];
   const status = messages.some((message) => message.status === 'error')
@@ -224,6 +253,7 @@ function recordOf(value: unknown): Record<string, unknown> {
 
 function planningKindLabel(kind: CommandThreadMessage['kind'], t: (key: string) => string): string {
   if (kind === 'goal_understanding') return t('command.goalUnderstanding');
+  if (kind === 'goal_completion_updated') return t('command.goalCompletion');
   if (kind === 'goal_model_updated') return t('command.cognitiveGoalModel');
   if (kind === 'reality_assessment_ready') return t('command.cognitiveReality');
   if (kind === 'evidence_pack_ready') return t('command.cognitiveEvidence');
@@ -246,6 +276,7 @@ function planningCardSummary(message: CommandThreadMessage, t: (key: string) => 
   const payload = payloadOf(message);
   const data = recordOf(payload.data);
   if (message.kind === 'goal_understanding') return String(payload.understoodIntent || payload.nextQuestion || message.content || '');
+  if (message.kind === 'goal_completion_updated') return String(data.nextStage || message.content || '');
   if (message.kind === 'goal_model_updated') return String(data.goalStatement || message.content || '');
   if (message.kind === 'reality_assessment_ready') return String(data.feasibilitySummary || message.content || '');
   if (message.kind === 'evidence_pack_ready') return String(data.synthesis || message.content || '');
@@ -397,6 +428,9 @@ function PlanningCardContent({
     const nested = recordOf(payload.data);
     return <GoalUnderstandingDetailCard data={Object.keys(nested).length ? nested : payload} t={t} />;
   }
+  if (message.kind === 'goal_completion_updated') {
+    return <GoalCompletionDetailCard data={{ ...recordOf(payload.data), businessStatus: payload.businessStatus, runtimeStatus: payload.runtimeStatus }} t={t} />;
+  }
   if (message.kind === 'goal_model_updated') return <GoalModelCard data={payload.data} t={t} />;
   if (message.kind === 'reality_assessment_ready') return <RealityAssessmentCard data={payload.data} t={t} />;
   if (message.kind === 'evidence_pack_ready') return <EvidencePackCard data={payload.data} t={t} />;
@@ -405,7 +439,20 @@ function PlanningCardContent({
   if (message.kind === 'critique_report_ready') return <CritiqueReportCard data={payload.data} t={t} />;
   if (message.kind === 'planning_learning_updated') return <PlanningLearningUpdateCard data={payload.data} t={t} />;
   if (message.kind === 'planning_session_started' || message.kind === 'planning_session_status') {
-    return <PlanningSessionStatusCard status={String(payload.status || message.content || '')} t={t} />;
+    const nested = recordOf(payload.data);
+    const businessStatus = String(payload.businessStatus || nested.businessStatus || '');
+    const runtimeStatus = String(payload.runtimeStatus || nested.runtimeStatus || '');
+    return (
+      <>
+        <PlanningSessionStatusCard status={String(payload.status || message.content || '')} t={t} />
+        {businessStatus || runtimeStatus ? (
+          <dl className="command-result-meta planning-status-trace">
+            {businessStatus ? <div><dt>{t('command.planningBusinessStatus')}</dt><dd>{businessStatus}</dd></div> : null}
+            {runtimeStatus ? <div><dt>{t('command.planningRuntimeStatus')}</dt><dd>{runtimeStatus}</dd></div> : null}
+          </dl>
+        ) : null}
+      </>
+    );
   }
   if (message.kind === 'user_need_contract') {
     return <UserNeedContractCard data={payload.data} t={t} />;
@@ -464,29 +511,18 @@ function DeepPlanningCardGroup({
         : status === 'ready_to_write_calendar' || status === 'waiting_calendar_write_approval' || status === 'written_to_calendar'
           ? t('command.cognitiveWorkspaceReady')
           : t('command.cognitiveWorkspaceUnderstanding');
-  const title = isLatest ? t('command.latestPlanningStep') : t('command.planningProcessCollapsed');
+  const title = isLatest ? t('command.latestPlanningStep') : t('command.planningWorkspace');
   const summary = [status, labels.join(' / ')].filter(Boolean).join(' · ');
 
   if (!advancedAgentTrace) {
-    const overview = <PlanningOverviewCard messages={messages} status={status} t={t} />;
-    if (isLatest) return overview;
-    return (
-      <CollapsiblePanel
-        title={t('command.planningProcessCollapsed')}
-        defaultExpanded={false}
-        t={t}
-        className="deep-planning-group historical planning-overview-history"
-      >
-        {overview}
-      </CollapsiblePanel>
-    );
+    return <PlanningOverviewCard messages={messages} status={status} t={t} />;
   }
 
   if (isCognitiveWorkspace) {
     return (
       <CollapsiblePanel
         title={workspaceTitle}
-        summary={isLatest ? undefined : t('command.planningProcessCollapsed')}
+        summary={isLatest ? undefined : t('command.planningWorkspace')}
         defaultExpanded={isLatest}
         t={t}
         className={`deep-planning-group cognitive-workspace ${isLatest ? 'latest' : 'historical'}`}
@@ -566,6 +602,12 @@ export function AgentThread({ messages, sending, onApprove, onSend, advancedAgen
 
   const renderItems = groupMessages(messages);
   const latestPlanningGroupId = [...renderItems].reverse().find((item) => item.type === 'planning_group')?.id;
+  const workspaceMessages = livePlanningMessages(messages);
+  const latestWorkspaceMessageId = workspaceMessages[workspaceMessages.length - 1]?.id;
+  const livePlanningGroup = [...renderItems].reverse().find((item) => (
+    item.type === 'planning_group' && item.messages.some((message) => message.id === latestWorkspaceMessageId)
+  ));
+  const livePlanningGroupId = livePlanningGroup?.type === 'planning_group' ? livePlanningGroup.id : undefined;
 
   return (
     <div className="agent-thread">
@@ -596,12 +638,14 @@ export function AgentThread({ messages, sending, onApprove, onSend, advancedAgen
           );
         }
         if (item.type === 'planning_group') {
-          if (!advancedAgentTrace && isNonPlanningGoalUnderstandingGroup(item.messages)) return null;
+          if (!advancedAgentTrace && item.id !== livePlanningGroupId) return null;
+          const planningMessages = advancedAgentTrace ? item.messages : workspaceMessages;
+          if (!advancedAgentTrace && isNonPlanningGoalUnderstandingGroup(planningMessages)) return null;
           return (
-            <article className="command-message card" key={`planning-${item.id}`}>
+            <article className="command-message card" key={advancedAgentTrace ? `planning-${item.id}` : 'planning-workspace-live'}>
               <DeepPlanningCardGroup
-                messages={item.messages}
-                isLatest={item.id === latestPlanningGroupId}
+                messages={planningMessages}
+                isLatest={!advancedAgentTrace || item.id === latestPlanningGroupId}
                 advancedAgentTrace={advancedAgentTrace}
                 onSend={onSend}
                 t={t}

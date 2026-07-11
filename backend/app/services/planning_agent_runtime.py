@@ -25,6 +25,7 @@ ARTIFACT_OWNER: dict[str, str] = {
     "execution_plan_draft": "Execution Planner Agent",
     "learning_patch": "Feedback Evolution Agent",
     "user_goal_model": "Goal Modeling Agent",
+    "goal_completion": "Goal Completion Judge",
     "reality_assessment": "Reality Agent",
     "evidence_pack": "Context & Evidence Agent",
     "strategy_portfolio": "Strategy Architect Agent",
