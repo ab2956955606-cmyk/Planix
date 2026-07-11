@@ -5,10 +5,12 @@ from collections import Counter
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 
 from app.cognitive_planning import CognitiveOSRuntime
 from app.cognitive_planning.agents import CognitiveModelClient, PlanningModelUnavailable
 from app.db import get_conn
+from app.harness.persistence import HarnessStateRepository
 from app.schemas import CreatePlanningSessionRequest, PlanningSessionTextRequest
 from app.services.cognitive_planning.contracts import (
     Constraint,
@@ -231,6 +233,26 @@ class SemanticGoProgressionModel(StubCognitiveModel):
         )
 
 
+class CriticalGoalProgressionModel(SemanticGoProgressionModel):
+    def __init__(self, critical_mode: str):
+        super().__init__()
+        self.critical_mode = critical_mode
+
+    def _goal(self, payload: dict[str, Any]) -> UserGoalModel:
+        goal = super()._goal(payload)
+        if self.critical_mode == "consistency":
+            return goal.model_copy(
+                update={"consistency_warnings": ["The requested outcome conflicts with the saved goal."]}
+            )
+        unknowns = [
+            item.model_copy(update={"impact": self.critical_mode})
+            if item.priority == "blocking"
+            else item
+            for item in goal.decision_relevant_unknowns
+        ]
+        return goal.model_copy(update={"decision_relevant_unknowns": unknowns})
+
+
 def _full_go_request() -> str:
     return "\n".join(
         [
@@ -331,9 +353,15 @@ def test_phase73_strategy_auth_failure_preserves_state_and_resumes_only_strategy
         for task in ("planning_goal_model", "planning_reality", "planning_evidence")
     }
     assert model.attempts_by_task["planning_strategy"] == 1
+    blocked_harness = HarnessStateRepository().recover(blocked.session_id)
+    assert blocked_harness.pending_agent == "strategy"
+    assert blocked_harness.waiting_state == "model_recovery"
+    assert blocked_harness.artifact_versions["evidence_pack"] == 1
 
     model.fail_strategy = False
-    recovered = runtime.continue_current_stage(blocked.session_id)
+    # A new runtime instance must restore the exact pending Agent/checkpoint.
+    recovered_runtime = CognitiveOSRuntime(model_client=model)
+    recovered = recovered_runtime.continue_current_stage(blocked.session_id)
 
     assert recovered.session_id == blocked.session_id
     assert recovered.status == "waiting_design_approval"
@@ -356,6 +384,16 @@ def test_phase73_strategy_auth_failure_preserves_state_and_resumes_only_strategy
         item.agent == "Strategy Agent" and item.decision == "block"
         for item in recovered.decisions
     )
+    resumed_harness = HarnessStateRepository().recover(blocked.session_id)
+    assert resumed_harness.pending_agent is None
+    assert resumed_harness.waiting_state == "strategy_approval"
+    assert resumed_harness.artifact_versions["strategy_portfolio"] == 1
+    recovery_events = [
+        item
+        for item in HarnessStateRepository().events(blocked.session_id)
+        if item.event_type == "recovery_action"
+    ]
+    assert any(item.decision == "checkpoint_resume" for item in recovery_events)
 
 
 def test_phase73_goal_auth_failure_after_new_information_retries_goal_stage(isolated_db) -> None:
@@ -434,6 +472,164 @@ def test_phase73_next_step_control_does_not_become_goal_evidence(isolated_db) ->
     assert [(item.id, item.artifact_type, item.version) for item in unchanged.artifacts] == artifacts_before
     assert unchanged.goal_completion == blocked.goal_completion
     assert unchanged.pending_question == blocked.pending_question
+
+
+def test_phase73_skip_goal_clarification_uses_saved_context_and_advances(isolated_db) -> None:
+    model = SemanticGoProgressionModel()
+    runtime = CognitiveOSRuntime(model_client=model)
+    blocked = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="phase73-control-skip",
+            userInput="Learn Go",
+        )
+    )
+    assert blocked.goal_completion and blocked.goal_completion["complete"] is False
+    calls_before = Counter(model.attempts_by_task)
+    input_before = blocked.user_input
+    goal_artifacts_before = _artifact_ids(blocked, "user_goal_model")
+    completion_artifacts_before = _artifact_ids(blocked, "goal_completion")
+
+    advanced = runtime.clarify(
+        blocked.session_id,
+        PlanningSessionTextRequest(
+            text="Skip this step and continue with the information already provided"
+        ),
+    )
+
+    assert advanced.session_id == blocked.session_id
+    assert advanced.status == "waiting_design_approval"
+    assert advanced.business_status == "strategy_pending"
+    assert advanced.runtime_status == "idle"
+    assert advanced.user_input == input_before
+    assert "Skip this step" not in advanced.user_input
+    assert advanced.goal_completion
+    assert advanced.goal_completion["complete"] is True
+    assert advanced.goal_completion["blockingUnknowns"] == []
+    assert advanced.goal_completion["nextStage"] == "strategy"
+    skipped_description = blocked.goal_model["decisionRelevantUnknowns"][0]["description"]
+    assert skipped_description in advanced.goal_completion["optionalUnknowns"]
+    assert all(
+        item["priority"] != "blocking"
+        for item in advanced.goal_model["decisionRelevantUnknowns"]
+    )
+    assert skipped_description in {
+        item["statement"] for item in advanced.goal_model["assumptions"]
+    }
+    assert _artifact_ids(advanced, "user_goal_model") == goal_artifacts_before
+    assert len(_artifact_ids(advanced, "goal_completion")) == len(completion_artifacts_before) + 1
+    assert model.attempts_by_task["planning_goal_model"] == calls_before["planning_goal_model"]
+    assert model.attempts_by_task["planning_reality"] == 1
+    assert model.attempts_by_task["planning_evidence"] == 1
+    assert model.attempts_by_task["planning_strategy"] == 1
+    assert any(
+        item.agent == "Goal Completion Judge"
+        and item.decision == "approve"
+        and "explicitly skipped" in item.reason
+        for item in advanced.decisions
+    )
+    calls_after_advance = Counter(model.attempts_by_task)
+    strategy_after_advance = advanced.strategy_portfolio
+
+    with pytest.raises(HTTPException) as exc_info:
+        runtime.clarify(
+            advanced.session_id,
+            PlanningSessionTextRequest(text="跳过这一步"),
+        )
+
+    assert exc_info.value.status_code == 409
+    still_waiting = runtime.get_session(advanced.session_id)
+    assert still_waiting.status == "waiting_design_approval"
+    assert still_waiting.strategy_portfolio == strategy_after_advance
+    assert Counter(model.attempts_by_task) == calls_after_advance
+
+
+@pytest.mark.parametrize("critical_mode", ["consistency", "safety", "feasibility"])
+def test_phase73_skip_rejects_critical_goal_blockers(
+    isolated_db,
+    critical_mode: str,
+) -> None:
+    model = CriticalGoalProgressionModel(critical_mode)
+    runtime = CognitiveOSRuntime(model_client=model)
+    blocked = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId=f"phase73-control-skip-{critical_mode}",
+            userInput="Learn Go",
+        )
+    )
+    calls_before = Counter(model.attempts_by_task)
+    artifacts_before = [(item.id, item.artifact_type, item.version) for item in blocked.artifacts]
+    decisions_before = [(item.id, item.decision) for item in blocked.decisions]
+
+    with pytest.raises(HTTPException) as exc_info:
+        runtime.clarify(
+            blocked.session_id,
+            PlanningSessionTextRequest(text="跳过这一步"),
+        )
+
+    assert exc_info.value.status_code == 409
+    unchanged = runtime.get_session(blocked.session_id)
+    assert unchanged.user_input == blocked.user_input
+    assert unchanged.goal_model == blocked.goal_model
+    assert unchanged.goal_completion == blocked.goal_completion
+    assert [(item.id, item.artifact_type, item.version) for item in unchanged.artifacts] == artifacts_before
+    assert [(item.id, item.decision) for item in unchanged.decisions] == decisions_before
+    assert Counter(model.attempts_by_task) == calls_before
+
+
+def test_phase73_command_skip_control_does_not_become_goal_evidence(client, monkeypatch) -> None:
+    model = SemanticGoProgressionModel()
+
+    def complete_contract(_self, **kwargs):
+        return model.complete_contract(**kwargs)
+
+    monkeypatch.setenv("PLANIX_COGNITIVE_MODE", "true")
+    monkeypatch.setattr(CognitiveModelClient, "complete_contract", complete_contract)
+    started = client.post(
+        "/api/command/chat",
+        json={"message": "我要学Go语言", "mode": "auto", "permission": "low"},
+    )
+    assert started.status_code == 200
+    started_events = [json.loads(line) for line in started.text.splitlines() if line.strip()]
+    thread_id = started_events[-1]["threadId"]
+    started_status = next(
+        item for item in started_events if item.get("type") == "planning_session_status"
+    )
+    assert started_status["status"] == "needs_goal_clarification"
+
+    skipped = client.post(
+        "/api/command/chat",
+        json={
+            "message": "跳过这一步，根据现有内容直接继续下一步",
+            "mode": "auto",
+            "threadId": thread_id,
+            "permission": "low",
+        },
+    )
+
+    assert skipped.status_code == 200
+    skipped_events = [json.loads(line) for line in skipped.text.splitlines() if line.strip()]
+    skipped_status = next(
+        item for item in skipped_events if item.get("type") == "planning_session_status"
+    )
+    assert skipped_status["status"] == "waiting_design_approval"
+    assert skipped_status["goalCompletion"]["complete"] is True
+    assert not any(item.get("type") == "planning_session_started" for item in skipped_events)
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT user_input, conversation_history_json
+            FROM planning_sessions
+            WHERE thread_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (thread_id,),
+        ).fetchone()
+    assert row is not None
+    assert "跳过这一步" not in row["user_input"]
+    assert "跳过这一步" not in row["conversation_history_json"]
 
 
 def test_phase73_modify_control_does_not_become_revision_evidence(client, monkeypatch) -> None:

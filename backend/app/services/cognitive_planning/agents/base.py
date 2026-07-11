@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from ....harness.recovery import recover_json_object
 from ...llm import LlmClient, LlmError, LlmResult
 from ..contracts import SafePlanningError
 
@@ -40,22 +40,9 @@ class AgentResult(Generic[ContractT]):
 
 
 def _extract_json(value: str) -> dict[str, Any]:
-    text = (value or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?", "", text, flags=re.I).strip()
-        text = re.sub(r"```$", "", text).strip()
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start < 0 or end <= start:
-            return {}
-        try:
-            parsed = json.loads(text[start : end + 1])
-        except json.JSONDecodeError:
-            return {}
-    return parsed if isinstance(parsed, dict) else {}
+    # Harness recovery repairs syntax only (fences/prefixes/trailing commas).
+    # Missing or invalid contract fields still fail closed below.
+    return recover_json_object(value) or {}
 
 
 def _safe_error(stage: str, error: LlmError | None, message: str) -> SafePlanningError:

@@ -118,7 +118,7 @@ class UserModelMemoryRepository:
             rows = conn.execute(
                 """
                 SELECT * FROM user_model_memories
-                WHERE status IN ('tentative', 'confirmed', 'conflicted')
+                WHERE status IN ('tentative', 'confirmed')
                 ORDER BY confidence DESC, last_validated_at DESC
                 LIMIT ?
                 """,

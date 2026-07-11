@@ -3101,6 +3101,37 @@ select:focus {
   background: rgba(79, 70, 229, 0.14);
 }
 
+.planning-skip-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.planning-skip-control button {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border: 1px solid rgba(129, 140, 248, 0.55);
+  border-radius: 8px;
+  background: rgba(79, 70, 229, 0.24);
+  color: #eef2ff;
+  font-weight: 700;
+}
+
+.planning-skip-control button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.planning-skip-control small {
+  color: #a5b4fc;
+  line-height: 1.45;
+}
+
+.planning-skip-control .planning-skip-blocked {
+  color: #fbbf24;
+}
+
 .planning-optional-unknowns {
   color: #94a3b8;
   font-size: 12px;

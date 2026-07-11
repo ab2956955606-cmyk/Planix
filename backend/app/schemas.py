@@ -39,6 +39,7 @@ PlanningAgentName = Literal[
     "Strategy Agent",
     "Execution Agent",
     "Critic Agent",
+    "Memory Evaluation Agent",
 ]
 PlanningArtifactType = Literal[
     "user_need_contract",
@@ -55,6 +56,7 @@ PlanningArtifactType = Literal[
     "execution_blueprint",
     "critique_report",
     "planning_learning_update",
+    "memory_evaluation",
 ]
 PlanningArtifactStatus = Literal["draft", "approved", "blocked", "needs_revision"]
 PlanningAgentDecisionType = Literal[
@@ -395,6 +397,7 @@ PlanningRuntimeStatus = Literal[
 ]
 PlanningControlIntent = Literal[
     "continue_current_stage",
+    "skip_current_stage",
     "approve_current_stage",
     "modify_current_stage",
     "restart_planning",

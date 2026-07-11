@@ -194,6 +194,11 @@ def test_goal_completion_judge_matches_questions_by_semantics_not_list_position(
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
+        ("跳过这一步", "skip_current_stage"),
+        (
+            "Skip this step and continue with the information already provided",
+            "skip_current_stage",
+        ),
         ("下一步", "continue_current_stage"),
         ("继续", "continue_current_stage"),
         ("开始规划", "continue_current_stage"),

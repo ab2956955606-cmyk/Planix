@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import os
 
+from fastapi import HTTPException
+
+from ..harness import HarnessRuntime
 from ..schemas import PlanningSessionResponse
 from ..services.cognitive_planning.contracts import (
     CognitivePlanningMetadata,
     CognitivePlanningState,
+    GoalAssumption,
+    GoalCompletionResult,
     GoalModelingInput,
     MemoryHint,
     RealityAssessment,
@@ -15,7 +20,6 @@ from ..services.cognitive_planning.contracts import (
 )
 from ..services.cognitive_planning.orchestration.persistence import json_object
 from ..services.cognitive_planning.orchestration.runtime import (
-    RESUME_NODE_BY_STAGE,
     CognitivePlanningRuntime as Phase6Runtime,
 )
 from .agents import (
@@ -36,6 +40,19 @@ from .memory import UserModelMemoryRepository
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
+
+
+def _dedupe_text(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = str(value or "").strip()
+        key = cleaned.casefold()
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+    return result
 
 
 def use_cognitive_os() -> bool:
@@ -62,6 +79,7 @@ class CognitiveOSRuntime(Phase6Runtime):
     ):
         model = model_client or CognitiveModelClient()
         super().__init__(model_client=model, persistence=persistence)
+        self.harness = HarnessRuntime()
         self.user_model = user_model or UserModelMemoryRepository()
         self.goal_agent = GoalIntelligenceAgent(model)
         self.goal_completion_judge = GoalCompletionJudge()
@@ -96,10 +114,14 @@ class CognitiveOSRuntime(Phase6Runtime):
             raw = json_object(row["reality_assessment_json"])
             if raw:
                 state["reality_assessment"] = RealityAssessment.model_validate(raw)
-        return state
+        return self.harness.restore_graph_state(state)
 
     def _invoke(self, state: CognitivePlanningState) -> PlanningSessionResponse:
-        result = build_cognitive_os_graph(self).invoke(state)
+        result = self.harness.invoke(
+            adapter=self,
+            graph_builder=build_cognitive_os_graph,
+            state=state,
+        )
         session_id = str(result.get("session_id") or state["session_id"])
         return self.get_session(session_id)
 
@@ -110,22 +132,14 @@ class CognitiveOSRuntime(Phase6Runtime):
         agent: str,
         error: SafePlanningError,
     ) -> CognitivePlanningState:
-        stage = str(error.stage or "")
-        if stage in {"goal_intelligence", "goal_modeling", "goal_completion"}:
-            completion = state.get("goal_completion")
-            business_status = "goal_understood" if completion and completion.complete else "goal_clarification"
-        elif stage in {"reality_assessment", "context_evidence", "evidence_synthesis"}:
-            business_status = "evidence_pending"
-        elif stage in {"strategy_architecture", "strategy_design"}:
-            business_status = "strategy_pending"
-        else:
-            business_status = "execution_pending"
-        state["planning_mode"] = "blocked_model_unavailable"
+        recovery = self.harness.decide_model_failure(state, error)
+        business_status = recovery.business_status
+        state["planning_mode"] = recovery.planning_mode
         state["errors"] = [*state.get("errors", []), error]
-        state["status"] = "MODEL_UNAVAILABLE"
+        state["status"] = recovery.compatibility_status
         state["business_status"] = business_status
-        state["runtime_status"] = "blocked_model"
-        state["resume_node"] = RESUME_NODE_BY_STAGE.get(stage, "goal_intelligence")
+        state["runtime_status"] = recovery.runtime_status
+        state["resume_node"] = recovery.resume_node
         self.agent_runtime.record_message(
             state["session_id"],
             from_agent=agent,
@@ -137,21 +151,151 @@ class CognitiveOSRuntime(Phase6Runtime):
                 "retryable": error.retryable,
                 "attempts": error.attempts,
                 "resumeNode": state["resume_node"],
+                "recoveryAction": recovery.action.value,
+                "allowReadOnly": recovery.allow_read_only,
             },
             resolved=False,
         )
         self.persistence.update(
             state["session_id"],
-            status="MODEL_UNAVAILABLE",
+            status=recovery.compatibility_status,
             business_status=business_status,
-            runtime_status="blocked_model",
+            runtime_status=recovery.runtime_status,
             cognitive_metadata=self._metadata(
-                mode="blocked_model_unavailable",
+                mode=recovery.planning_mode,
                 stage=error.stage,
                 repair_count=int(state.get("repair_count", 0)),
             ),
         )
         return state
+
+    def skip_current_stage(self, session_id: str) -> PlanningSessionResponse:
+        row = self.persistence.get_row(session_id)
+        if not row:
+            raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        state = self._state_from_row(row, action="skip_current_stage")
+        goal = state.get("goal_model")
+        completion = state.get("goal_completion")
+        if (
+            row["status"] != "needs_goal_clarification"
+            or state.get("business_status") != "goal_clarification"
+            or not goal
+            or not completion
+            or completion.complete
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "only an incomplete goal clarification step can be skipped"},
+            )
+
+        critical_unknowns = [
+            item
+            for item in goal.decision_relevant_unknowns
+            if item.priority == "blocking" and item.impact in {"safety", "feasibility"}
+        ]
+        if goal.consistency_warnings or critical_unknowns:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "goal consistency, safety, and feasibility blockers must be resolved before planning can continue"
+                    )
+                },
+            )
+
+        skipped_unknowns = [
+            item for item in goal.decision_relevant_unknowns if item.priority == "blocking"
+        ]
+        if not skipped_unknowns:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "there are no ordinary goal-clarification blockers to skip"},
+            )
+
+        existing_assumptions = {item.statement.casefold() for item in goal.assumptions}
+        assumptions = list(goal.assumptions)
+        for item in skipped_unknowns:
+            if item.description.casefold() in existing_assumptions:
+                continue
+            assumptions.append(
+                GoalAssumption(
+                    statement=item.description,
+                    confidence=0.4,
+                    needsUserConfirmation=False,
+                )
+            )
+            existing_assumptions.add(item.description.casefold())
+
+        goal = goal.model_copy(
+            update={
+                "decision_relevant_unknowns": [
+                    item.model_copy(update={"priority": "optional"})
+                    if item.priority == "blocking"
+                    else item
+                    for item in goal.decision_relevant_unknowns
+                ],
+                "assumptions": assumptions,
+                "questions": [],
+                "can_proceed_to_evidence": True,
+            }
+        )
+        skipped_questions = [item.question for item in completion.blocking_unknowns]
+        completion = GoalCompletionResult(
+            complete=True,
+            blockingUnknowns=[],
+            optionalUnknowns=_dedupe_text(
+                [
+                    *completion.optional_unknowns,
+                    *(item.description for item in skipped_unknowns),
+                    *skipped_questions,
+                ]
+            ),
+            nextStage="strategy",
+        )
+        state["goal_model"] = goal
+        state["goal_completion"] = completion
+        state["business_status"] = "goal_understood"
+        state["runtime_status"] = "running"
+        state["planning_mode"] = "model_backed"
+        self._record_artifact(
+            state,
+            agent=self.goal_completion_judge.name,
+            artifact_type=self.goal_completion_judge.artifact_type,
+            artifact=completion,
+            model_usage={},
+            decision="approve",
+            reason="The user explicitly skipped ordinary goal clarification and accepted best-effort assumptions.",
+            summary="Goal clarification was skipped using the saved goal and known facts; planning may continue.",
+            status="approved",
+            input_artifact_types=("user_goal_model", "goal_completion"),
+        )
+        self.persistence.update(
+            session_id,
+            business_status="goal_understood",
+            runtime_status="running",
+            goal_model=goal,
+            goal_completion=completion,
+            cognitive_metadata=self._metadata(
+                mode="model_backed",
+                stage="goal_completion",
+                confidence=goal.confidence,
+                repair_count=int(state.get("repair_count", 0)),
+            ),
+            clear=(
+                "reality_assessment",
+                "evidence_pack",
+                "strategy_portfolio",
+                "execution_blueprint",
+                "critique_report",
+            ),
+        )
+        self._handoff(
+            state,
+            self.goal_completion_judge.name,
+            self.reality_agent.name,
+            "The user accepted best-effort assumptions and asked planning to continue with saved context.",
+        )
+        return self._invoke(state)
 
     def goal_modeling_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
         previous = state.get("goal_model")
@@ -361,5 +505,14 @@ class CognitiveOSRuntime(Phase6Runtime):
         }.get(str(state.get("next_node") or ""), state.get("next_node", "__end__"))
         return state
 
+    def _persist_learning_hypothesis(self, state, update) -> None:
+        # Long-term rules are evaluated independently from the Critic that
+        # diagnosed the feedback. Rejection or evaluator failure never blocks
+        # the current-plan repair.
+        self.harness.evaluate_memory_candidate(
+            state["session_id"],
+            learning_update=update,
+            memory_repository=self.user_model,
+        )
 
 __all__ = ["CognitiveOSRuntime", "use_cognitive_os"]

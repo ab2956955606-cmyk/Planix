@@ -7,6 +7,17 @@ from ...schemas import PlanningControlIntent
 
 def detect_planning_control_intent(text: str) -> PlanningControlIntent:
     normalized = re.sub(r"[\s。！？!?，,]+", "", (text or "").strip().lower())
+    if normalized in {
+        "跳过这一步",
+        "跳过当前步骤",
+        "按现有内容继续",
+        "跳过这一步根据现有内容直接继续下一步",
+        "skip",
+        "skipthisstep",
+        "skipcurrentstep",
+        "skipthisstepandcontinuewiththeinformationalreadyprovided",
+    }:
+        return "skip_current_stage"
     if normalized in {"下一步", "继续", "开始规划", "next", "continue", "proceed", "startplanning"}:
         return "continue_current_stage"
     if normalized in {"确认", "确认方向", "确认执行计划", "approve", "confirm", "yes", "ok", "okay"}:

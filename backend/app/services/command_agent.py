@@ -1515,6 +1515,8 @@ class CommandAgentService:
             return None
         text = payload.message
         control_intent = detect_planning_control_intent(text)
+        if control_intent == "skip_current_stage":
+            return "skip_current_stage", session
         if control_intent == "cancel_planning":
             return "cancel", session
         if control_intent == "restart_planning":
@@ -1566,6 +1568,13 @@ class CommandAgentService:
     ) -> Iterator[str]:
         service = get_deep_planning_orchestrator()
         request = PlanningSessionTextRequest(text=payload.message)
+        if action == "skip_current_stage":
+            skip = getattr(service, "skip_current_stage", None)
+            if not callable(skip):
+                raise HTTPException(status_code=409, detail={"message": "this planning runtime cannot skip goal clarification"})
+            updated = skip(session.session_id)
+            yield from self._stream_planning_session_snapshot(thread_id, updated)
+            return
         if action == "continue_current_stage":
             updated = service.continue_current_stage(session.session_id)
             yield from self._stream_planning_session_snapshot(thread_id, updated)
@@ -1671,6 +1680,28 @@ class CommandAgentService:
         service = get_deep_planning_orchestrator()
         updated = service.prepare_calendar_write(session.session_id)
         structured_plan = service.execution_to_structured_plan(updated)
+        execution_artifact = max(
+            (
+                item
+                for item in updated.artifacts
+                if item.artifact_type in {"execution_blueprint", "execution_plan_draft"}
+            ),
+            key=lambda item: (
+                1 if item.artifact_type == "execution_blueprint" else 0,
+                item.version,
+            ),
+            default=None,
+        )
+        if execution_artifact is None:
+            raise RuntimeError("Calendar preview requires a versioned Execution artifact")
+        execution_artifact_ref = {
+            "id": execution_artifact.id,
+            "sessionId": execution_artifact.session_id,
+            "kind": execution_artifact.artifact_type,
+            "version": execution_artifact.version,
+            "owner": execution_artifact.owner_agent,
+            "status": execution_artifact.status,
+        }
         title = updated.user_need_contract.interpreted_goal if updated.user_need_contract else _plan_title(structured_plan, updated.user_input)
         summary = updated.execution_draft.schedule_summary if updated.execution_draft else title
         self._create_calendar_draft(
@@ -1681,6 +1712,7 @@ class CommandAgentService:
             payload={
                 "structuredPlan": structured_plan,
                 "planningSessionId": updated.session_id,
+                "executionArtifactRef": execution_artifact_ref,
                 "executionDraft": updated.execution_draft.model_dump(by_alias=True) if updated.execution_draft else {},
                 "designProposal": updated.design_proposal.model_dump(by_alias=True) if updated.design_proposal else {},
                 "goal": updated.user_input,
@@ -2166,6 +2198,27 @@ class CommandAgentService:
             yield _ndjson({"type": "done", "threadId": thread_id})
             return
 
+        action_payload = _json_object(action["payload_json"])
+        planning_session_id = str(action_payload.get("planningSessionId") or "")
+        if action["target"] == "calendar" and planning_session_id:
+            # Bind the human decision to the current Execution artifact. The
+            # write path rechecks the same policy immediately before mutation.
+            orchestrator = get_deep_planning_orchestrator()
+            approve_calendar = getattr(orchestrator, "approve_calendar_write", None)
+            execution_ref = action_payload.get("executionArtifactRef")
+            if not self._planning_execution_ref_is_current(
+                planning_session_id,
+                execution_ref,
+            ):
+                raise RuntimeError("planning Calendar approval requires a versioned Harness action")
+            if execution_ref.get("kind") == "execution_blueprint":
+                if not callable(approve_calendar):
+                    raise RuntimeError("canonical planning Calendar approval requires Harness policy")
+                approve_calendar(
+                    planning_session_id,
+                    execution_artifact_ref=execution_ref,
+                )
+
         if action["target"] in {"notes", "memory"}:
             result = self._execute_memory_action(payload.action_id, action)
             text = _memory_result_text(result)
@@ -2619,9 +2672,9 @@ class CommandAgentService:
         self.add_message(thread_id, "card", "准备修改日历计划", kind="plan_patch_preview", payload=preview)
         yield _ndjson({"type": "plan_patch_preview", **preview})
 
-        requires_approval = command_action_requires_approval(payload.permission, risk) or (
-            operation == "delete" and before.get("source") == "manual"
-        )
+        # Calendar updates and deletes are human-approved regardless of the
+        # generic command permission level.
+        requires_approval = True
         if requires_approval:
             self._update_action(action_id, status="waiting_approval")
             self._record_approval(thread_id, action_id, payload.permission, "pending")
@@ -2905,26 +2958,23 @@ class CommandAgentService:
         self.add_message(thread_id, "card", "准备写入日历", kind="calendar_plan_preview", payload=preview)
         yield _ndjson({"type": "calendar_plan_preview", **preview})
 
-        if command_action_requires_approval(payload.permission, "write"):
-            self._update_action(action_id, status="waiting_approval")
-            self._record_approval(thread_id, action_id, payload.permission, "pending")
-            approval = {
-                "actionId": action_id,
-                "draftId": draft.id,
-                "permission": payload.permission,
-                "risk": "write",
-                "target": "calendar",
-                "operation": "create_or_update_plans",
-                "summary": f"准备写入 {len(items)} 个日历计划，需要确认。",
-            }
-            self.add_message(thread_id, "card", approval["summary"], kind="approval_request", payload=approval)
-            yield _ndjson({"type": "approval_required", **approval})
-            return
-
-        result = self._execute_calendar_action(action_id)
-        text = _write_result_text(result)
-        self.add_message(thread_id, "card", text, kind="calendar_write_result", payload=result)
-        yield _ndjson({"type": "calendar_write_result", **result})
+        # Calendar mutations always require an explicit human approval. Generic
+        # low/medium/high permission may add safeguards, but cannot bypass this
+        # final gate.
+        self._update_action(action_id, status="waiting_approval")
+        self._record_approval(thread_id, action_id, payload.permission, "pending")
+        approval = {
+            "actionId": action_id,
+            "draftId": draft.id,
+            "permission": payload.permission,
+            "risk": "write",
+            "target": "calendar",
+            "operation": "create_or_update_plans",
+            "summary": f"准备写入 {len(items)} 个日历计划，需要确认。",
+        }
+        self.add_message(thread_id, "card", approval["summary"], kind="approval_request", payload=approval)
+        yield _ndjson({"type": "approval_required", **approval})
+        return
 
     def _stream_runtime_handoff(
         self,
@@ -3184,6 +3234,7 @@ class CommandAgentService:
         payload = {"draftId": draft.id, "plans": items}
         if draft.payload.get("planningSessionId"):
             payload["planningSessionId"] = draft.payload.get("planningSessionId")
+            payload["executionArtifactRef"] = draft.payload.get("executionArtifactRef")
         with get_conn() as conn:
             conn.execute(
                 """
@@ -3416,6 +3467,52 @@ class CommandAgentService:
                 (str(uuid4()), thread_id, action_id, permission, decision, _now()),
             )
 
+    def _calendar_action_is_approved(self, action_id: str) -> bool:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT decision
+                FROM command_approvals
+                WHERE action_id = ?
+                ORDER BY rowid DESC
+                LIMIT 1
+                """,
+                (action_id,),
+            ).fetchone()
+        return bool(row and row["decision"] == "approve")
+
+    def _planning_execution_ref_is_current(
+        self,
+        session_id: str,
+        raw_ref: Any,
+    ) -> bool:
+        if not _is_record(raw_ref):
+            return False
+        kind = str(raw_ref.get("kind") or "")
+        if kind not in {"execution_blueprint", "execution_plan_draft"}:
+            return False
+        try:
+            expected_version = int(raw_ref.get("version") or 0)
+        except (TypeError, ValueError):
+            return False
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT id, version
+                FROM planning_artifacts
+                WHERE session_id = ? AND artifact_type = ?
+                ORDER BY version DESC, created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (session_id, kind),
+            ).fetchone()
+        return bool(
+            row
+            and str(raw_ref.get("sessionId") or "") == session_id
+            and str(raw_ref.get("id") or "") == row["id"]
+            and expected_version == int(row["version"] or 0)
+        )
+
     def _execute_calendar_patch_action(self, action_id: str, action) -> dict[str, Any]:
         self._update_action(action_id, status="running")
         payload = _json_object(action["payload_json"])
@@ -3578,10 +3675,40 @@ class CommandAgentService:
         action = self._load_action(action_id)
         if not action:
             return {"created": 0, "updated": 0, "failed": 1, "affectedDates": [], "errors": ["action not found"], "plans": []}
+        if action["target"] == "calendar" and not self._calendar_action_is_approved(action_id):
+            self._update_action(action_id, status="waiting_approval")
+            return {
+                "actionId": action_id,
+                "created": 0,
+                "updated": 0,
+                "failed": 1,
+                "affectedDates": [],
+                "errors": ["calendar action requires explicit approval"],
+                "plans": [],
+            }
+        payload = _json_object(action["payload_json"])
+        planning_session_id = str(payload.get("planningSessionId") or "")
+        if planning_session_id:
+            # Fail closed at execution time so a repaired plan cannot reuse a
+            # stale preview or stale human approval.
+            orchestrator = get_deep_planning_orchestrator()
+            assert_calendar = getattr(orchestrator, "assert_calendar_write_allowed", None)
+            execution_ref = payload.get("executionArtifactRef")
+            if not self._planning_execution_ref_is_current(
+                planning_session_id,
+                execution_ref,
+            ):
+                raise RuntimeError("planning Calendar write requires a versioned Harness action")
+            if execution_ref.get("kind") == "execution_blueprint":
+                if not callable(assert_calendar):
+                    raise RuntimeError("canonical planning Calendar write requires Harness policy")
+                assert_calendar(
+                    planning_session_id,
+                    execution_artifact_ref=execution_ref,
+                )
         if action["operation"] in {"update", "delete"}:
             return self._execute_calendar_patch_action(action_id, action)
         self._update_action(action_id, status="running")
-        payload = _json_object(action["payload_json"])
         items = payload.get("plans") if isinstance(payload.get("plans"), list) else []
         created = 0
         updated = 0
@@ -3619,12 +3746,17 @@ class CommandAgentService:
             "errors": errors,
             "plans": written_plans,
         }
-        self._update_action(action_id, status="success" if failed == 0 else "failed", result=result, error="; ".join(errors))
         if failed == 0 and payload.get("planningSessionId"):
-            try:
-                get_deep_planning_orchestrator().mark_calendar_written(str(payload.get("planningSessionId")))
-            except Exception:
-                pass
+            orchestrator = get_deep_planning_orchestrator()
+            execution_ref = payload.get("executionArtifactRef")
+            if _is_record(execution_ref) and execution_ref.get("kind") == "execution_blueprint":
+                orchestrator.mark_calendar_written(
+                    str(payload.get("planningSessionId")),
+                    execution_artifact_ref=execution_ref,
+                )
+            else:
+                orchestrator.mark_calendar_written(str(payload.get("planningSessionId")))
+        self._update_action(action_id, status="success" if failed == 0 else "failed", result=result, error="; ".join(errors))
         return result
 
     def _upsert_calendar_plan(self, item: dict[str, Any]):

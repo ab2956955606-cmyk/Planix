@@ -1519,6 +1519,64 @@ def test_cognitive_p_mode_calendar_write_still_requires_permission_gate(client, 
     assert session_status == "written_to_calendar"
 
 
+def test_planning_calendar_action_rejects_stale_execution_artifact(client, monkeypatch):
+    model = StubCognitiveModel()
+
+    def complete_contract(_self, **kwargs):
+        return model.complete_contract(**kwargs)
+
+    monkeypatch.setenv("PLANIX_USE_COGNITIVE_PLANNING", "true")
+    monkeypatch.setattr(CognitiveModelClient, "complete_contract", complete_contract)
+    created = client.post(
+        "/api/command/chat",
+        json={"message": "30天准备 Python AI 应用实习，每天3小时，要有代码和项目产出", "mode": "auto", "permission": "low"},
+    )
+    events = [json.loads(line) for line in created.text.splitlines() if line.strip()]
+    thread_id = events[-1]["threadId"]
+    session_id = next(item for item in events if item.get("type") == "planning_session_started")["sessionId"]
+    client.post(
+        "/api/command/chat",
+        json={"threadId": thread_id, "message": "确认方向", "mode": "auto", "permission": "low"},
+    )
+    client.post(
+        "/api/command/chat",
+        json={"threadId": thread_id, "message": "确认执行计划", "mode": "auto", "permission": "low"},
+    )
+    preview = client.post(
+        "/api/command/chat",
+        json={"threadId": thread_id, "message": "写入日历", "mode": "auto", "permission": "low"},
+    )
+    preview_events = [json.loads(line) for line in preview.text.splitlines() if line.strip()]
+    action_id = next(item for item in preview_events if item.get("type") == "approval_required")["actionId"]
+    with get_conn() as conn:
+        execution = conn.execute(
+            """
+            SELECT owner_agent, content_json
+            FROM planning_artifacts
+            WHERE session_id = ? AND artifact_type = 'execution_blueprint'
+            ORDER BY version DESC LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+    assert execution is not None
+    PlanningAgentRuntime().record_artifact(
+        session_id,
+        owner_agent=execution["owner_agent"],
+        artifact_type="execution_blueprint",
+        content=json.loads(execution["content_json"]),
+    )
+
+    approved = client.post(
+        "/api/command/approve",
+        json={"threadId": thread_id, "actionId": action_id, "decision": "approve", "permission": "low"},
+    )
+    approved_events = [json.loads(line) for line in approved.text.splitlines() if line.strip()]
+    assert any(item.get("type") == "error" for item in approved_events)
+    assert not any(item.get("type") == "calendar_write_result" for item in approved_events)
+    with get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
+
+
 class GoClarificationModel(StubCognitiveModel):
     def _goal(self, payload: dict[str, Any]) -> UserGoalModel:
         text = self._conversation_text(payload)

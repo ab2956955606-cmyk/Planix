@@ -4,6 +4,9 @@ from ..contracts import CognitivePlanningState
 
 
 def route_from_guard(state: CognitivePlanningState) -> str:
+    if state.get("user_action") == "skip_current_stage":
+        completion = state.get("goal_completion")
+        return "context_evidence" if state.get("goal_model") and completion and completion.complete else "wait_for_goal_answer"
     if state.get("user_action") == "continue_current_stage":
         resume_node = {
             "goal_intelligence": "goal_modeling",

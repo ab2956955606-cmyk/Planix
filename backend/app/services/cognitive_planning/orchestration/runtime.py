@@ -76,6 +76,12 @@ class CognitivePlanningRuntime:
         persistence: CognitivePlanningPersistence | None = None,
     ):
         model = model_client or CognitiveModelClient()
+        # Compatibility runtime nodes remain Agent adapters; the Harness owns
+        # version-bound approval/policy state even when this legacy graph is
+        # selected explicitly.
+        from ....harness import HarnessRuntime
+
+        self.harness = HarnessRuntime()
         self.persistence = persistence or CognitivePlanningPersistence()
         self.agent_runtime = PlanningAgentRuntime()
         self.adapter = SessionApiAdapter(self.agent_runtime)
@@ -714,11 +720,7 @@ class CognitivePlanningRuntime:
             summary="Feedback was diagnosed into a responsible stage, current-plan patch, and evidence-based learning hypothesis.",
             input_artifact_types=("user_goal_model", "evidence_pack", "strategy_portfolio", "execution_blueprint", "critique_report", "planning_learning_update"),
         )
-        if update.should_persist and update.user_model_hypothesis:
-            self.hypotheses.upsert(
-                update.user_model_hypothesis,
-                positive=update.user_model_hypothesis.evidence_polarity == "positive",
-            )
+        self._persist_learning_hypothesis(state, update)
         self.persistence.update(
             state["session_id"],
             status="learning_from_feedback",
@@ -733,6 +735,19 @@ class CognitivePlanningRuntime:
             ),
         )
         return state
+
+    def _persist_learning_hypothesis(
+        self,
+        state: CognitivePlanningState,
+        update: PlanningLearningUpdate,
+    ) -> None:
+        """Route every automatic long-term rule through Memory Evaluation."""
+
+        self.harness.evaluate_memory_candidate(
+            state["session_id"],
+            learning_update=update,
+            memory_repository=self.hypotheses,
+        )
 
     def calendar_gate_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
         execution = state.get("execution_blueprint")
@@ -787,6 +802,11 @@ class CognitivePlanningRuntime:
 
     def clarify(self, session_id: str, payload: PlanningSessionTextRequest) -> PlanningSessionResponse:
         control_intent = detect_planning_control_intent(payload.text)
+        if control_intent == "skip_current_stage":
+            skip = getattr(self, "skip_current_stage", None)
+            if not callable(skip):
+                raise HTTPException(status_code=409, detail={"message": "this planning runtime cannot skip goal clarification"})
+            return skip(session_id)
         if control_intent == "continue_current_stage":
             return self.continue_current_stage(session_id)
         if control_intent in {"cancel_planning", "restart_planning"}:
@@ -851,6 +871,7 @@ class CognitivePlanningRuntime:
         if row["status"] != "waiting_design_approval" or not json_object(row["strategy_portfolio_json"]):
             raise HTTPException(status_code=409, detail={"message": "strategy is not waiting for approval"})
         portfolio = StrategyPortfolio.model_validate(json_object(row["strategy_portfolio_json"]))
+        self.harness.record_approval(session_id, "strategy")
         approved_strategy_id = portfolio.recommended_strategy_id
         self.persistence.update(session_id, approved_strategy_id=approved_strategy_id)
         row = self.persistence.get_row(session_id)
@@ -873,7 +894,18 @@ class CognitivePlanningRuntime:
             raise HTTPException(status_code=404, detail={"message": "planning session not found"})
         if row["status"] != "waiting_execution_approval":
             raise HTTPException(status_code=409, detail={"message": "execution plan is not waiting for approval"})
-        return self._invoke(self._state_from_row(row, action="approve_execution"))
+        state = self._state_from_row(row, action="approve_execution")
+        critic_policy = self.harness.critic_policy(
+            session_id,
+            critique_report=state.get("critique_report"),
+        )
+        if not critic_policy.allowed:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "current Execution artifact has not passed the independent Critic"},
+            )
+        self.harness.record_approval(session_id, "execution")
+        return self._invoke(state)
 
     def revise_execution(self, session_id: str, payload: PlanningSessionTextRequest) -> PlanningSessionResponse:
         self.persistence.append_user_turn(session_id, payload.text)
@@ -889,7 +921,84 @@ class CognitivePlanningRuntime:
         row = self.persistence.get_row(session_id)
         if not row:
             raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        if row["status"] != "ready_to_write_calendar":
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "execution plan must be approved before Calendar preparation"},
+            )
         return self._invoke(self._state_from_row(row, action="write_calendar"))
+
+    def approve_calendar_write(
+        self,
+        session_id: str,
+        *,
+        execution_artifact_ref: dict | None = None,
+    ) -> None:
+        row = self.persistence.get_row(session_id)
+        if not row:
+            raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        if row["status"] != "waiting_calendar_write_approval":
+            raise HTTPException(status_code=409, detail={"message": "Calendar write is not waiting for approval"})
+        if not execution_artifact_ref:
+            raise HTTPException(status_code=409, detail={"message": "Calendar action is not bound to an Execution artifact"})
+        try:
+            self.harness.assert_current_artifact(
+                session_id,
+                kind="execution_blueprint",
+                expected_ref=execution_artifact_ref,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail={"message": str(exc)}) from exc
+        state = self._state_from_row(row, action="write_calendar")
+        decision = self.harness.calendar_write_policy(
+            session_id,
+            planning_mode=str(state.get("planning_mode") or "blocked_model_unavailable"),
+            critique_report=state.get("critique_report"),
+        )
+        blockers = [gate for gate in decision.failed_gates if gate != "calendar_approval"]
+        if blockers:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Calendar approval is stale or upstream planning gates failed",
+                    "failedGates": blockers,
+                },
+            )
+        self.harness.record_approval(session_id, "calendar")
+
+    def assert_calendar_write_allowed(
+        self,
+        session_id: str,
+        *,
+        execution_artifact_ref: dict | None = None,
+    ) -> None:
+        row = self.persistence.get_row(session_id)
+        if not row:
+            raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        if not execution_artifact_ref:
+            raise HTTPException(status_code=409, detail={"message": "Calendar action is not bound to an Execution artifact"})
+        try:
+            self.harness.assert_current_artifact(
+                session_id,
+                kind="execution_blueprint",
+                expected_ref=execution_artifact_ref,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail={"message": str(exc)}) from exc
+        state = self._state_from_row(row, action="write_calendar")
+        decision = self.harness.calendar_write_policy(
+            session_id,
+            planning_mode=str(state.get("planning_mode") or "blocked_model_unavailable"),
+            critique_report=state.get("critique_report"),
+        )
+        if not decision.allowed:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Calendar write failed the Harness policy gate",
+                    "failedGates": list(decision.failed_gates),
+                },
+            )
 
     def latest_for_thread(self, thread_id: str) -> PlanningSessionResponse | None:
         row = self.persistence.latest_active(thread_id)
@@ -901,8 +1010,18 @@ class CognitivePlanningRuntime:
             raise HTTPException(status_code=404, detail={"message": "planning session not found"})
         return self.adapter.from_row(row)
 
-    def mark_calendar_written(self, session_id: str) -> None:
+    def mark_calendar_written(
+        self,
+        session_id: str,
+        *,
+        execution_artifact_ref: dict | None = None,
+    ) -> None:
+        self.assert_calendar_write_allowed(
+            session_id,
+            execution_artifact_ref=execution_artifact_ref,
+        )
         self.persistence.mark_written(session_id)
+        self.harness.consume_calendar_approval(session_id)
 
     def execution_to_structured_plan(self, session: PlanningSessionResponse) -> dict[str, Any]:
         if not session.execution_blueprint or not session.goal_model:

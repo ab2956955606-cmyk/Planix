@@ -32,6 +32,7 @@ ARTIFACT_OWNER: dict[str, str] = {
     "execution_blueprint": "Execution Designer Agent",
     "critique_report": "Independent Critic & Learning Agent",
     "planning_learning_update": "Independent Critic & Learning Agent",
+    "memory_evaluation": "Memory Evaluation Agent",
 }
 
 ARTIFACT_OWNER_ALIASES: dict[str, set[str]] = {
@@ -41,6 +42,7 @@ ARTIFACT_OWNER_ALIASES: dict[str, set[str]] = {
     "execution_blueprint": {"Execution Designer Agent", "Execution Agent"},
     "critique_report": {"Independent Critic & Learning Agent", "Critic Agent"},
     "planning_learning_update": {"Independent Critic & Learning Agent", "Critic Agent"},
+    "memory_evaluation": {"Memory Evaluation Agent"},
 }
 
 

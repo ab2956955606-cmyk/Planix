@@ -164,6 +164,48 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_agent_messages_session_time
           ON agent_messages(session_id, created_at);
 
+        CREATE TABLE IF NOT EXISTS harness_states (
+          session_id TEXT PRIMARY KEY,
+          lifecycle TEXT NOT NULL DEFAULT 'active',
+          current_stage TEXT NOT NULL DEFAULT 'session_guard',
+          completed_agents_json TEXT NOT NULL DEFAULT '[]',
+          pending_agent TEXT NOT NULL DEFAULT '',
+          artifact_versions_json TEXT NOT NULL DEFAULT '{}',
+          waiting_state TEXT NOT NULL DEFAULT 'none',
+          errors_json TEXT NOT NULL DEFAULT '[]',
+          recovery_actions_json TEXT NOT NULL DEFAULT '[]',
+          approvals_json TEXT NOT NULL DEFAULT '[]',
+          repair_target TEXT NOT NULL DEFAULT '',
+          checkpoint_version INTEGER NOT NULL DEFAULT 1,
+          checkpoint_json TEXT NOT NULL DEFAULT '{}',
+          last_decision_json TEXT NOT NULL DEFAULT '{}',
+          last_policy_decision_json TEXT NOT NULL DEFAULT '{}',
+          last_event_sequence INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(session_id) REFERENCES planning_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS harness_events (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          checkpoint_version INTEGER NOT NULL,
+          event_type TEXT NOT NULL,
+          agent_id TEXT NOT NULL DEFAULT '',
+          decision TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(session_id) REFERENCES planning_sessions(id) ON DELETE CASCADE,
+          UNIQUE(session_id, sequence)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_harness_events_session_sequence
+          ON harness_events(session_id, sequence);
+
+        CREATE INDEX IF NOT EXISTS idx_harness_events_session_checkpoint
+          ON harness_events(session_id, checkpoint_version);
+
         CREATE TABLE IF NOT EXISTS ai_settings (
           id TEXT PRIMARY KEY,
           provider TEXT NOT NULL DEFAULT 'deepseek',
@@ -446,6 +488,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "planning_sessions", "request_context_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_column(conn, "planning_sessions", "approved_strategy_id", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "planning_sessions", "repair_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "harness_states", "approvals_json", "TEXT NOT NULL DEFAULT '[]'")
+    ensure_column(conn, "harness_states", "last_policy_decision_json", "TEXT NOT NULL DEFAULT '{}'")
     if business_status_added:
         conn.execute(
             """

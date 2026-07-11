@@ -58,6 +58,7 @@ UserAction = Literal[
     "write_calendar",
     "restart",
     "continue_current_stage",
+    "skip_current_stage",
     "cancel",
 ]
 

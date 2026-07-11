@@ -7,6 +7,9 @@ type Translator = (key: string) => string;
 interface PlanningOverviewCardProps {
   messages: CommandThreadMessage[];
   status?: string;
+  sending?: boolean;
+  actionsEnabled?: boolean;
+  onSend?: (value: string) => void;
   t: Translator;
 }
 
@@ -147,6 +150,14 @@ function importantGoalUnknownLines(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function hasCriticalGoalBlocker(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  return value.some((item) => {
+    const raw = record(item);
+    return text(raw.priority) === 'blocking' && ['safety', 'feasibility'].includes(text(raw.impact));
+  });
+}
+
 function firstQuestion(value: unknown): string {
   if (!Array.isArray(value)) return '';
   for (const item of value) {
@@ -161,7 +172,14 @@ function nextActionKey(stage: PlanningStage): string {
   return `command.planningNext${suffix}`;
 }
 
-export function PlanningOverviewCard({ messages, status, t }: PlanningOverviewCardProps) {
+export function PlanningOverviewCard({
+  messages,
+  status,
+  sending = false,
+  actionsEnabled = true,
+  onSend,
+  t
+}: PlanningOverviewCardProps) {
   const understanding = latest(messages, 'goal_understanding');
   const completion = goalCompletionData(messages);
   const goal = latest(messages, 'goal_model_updated');
@@ -210,6 +228,9 @@ export function PlanningOverviewCard({ messages, status, t }: PlanningOverviewCa
       ? userUncertaintyLines(understanding.uncertainties, t)
       : importantGoalUnknownLines(goal.decisionRelevantUnknowns);
   const optionalUnknowns = completionAvailable ? listText(completion.optionalUnknowns) : [];
+  const criticalSkipBlocker = warnings.length > 0 || hasCriticalGoalBlocker(goal.decisionRelevantUnknowns);
+  const showSkipControl = completionAvailable && completion.complete === false && stage === 'understand_goal';
+  const skipDisabled = !actionsEnabled || !onSend || sending || modelBlocked || criticalSkipBlocker;
 
   const legacyNextQuestion = text(understanding.nextQuestion)
     || firstQuestion(goal.questions)
@@ -259,6 +280,20 @@ export function PlanningOverviewCard({ messages, status, t }: PlanningOverviewCa
       <section className="planning-next-action">
         <h3>{t('command.nextAction')}</h3>
         <p>{nextAction}</p>
+        {showSkipControl ? (
+          <div className="planning-skip-control">
+            <button
+              type="button"
+              disabled={skipDisabled}
+              onClick={() => onSend?.(t('command.skipCurrentStageMessage'))}
+            >
+              {t('command.skipCurrentStage')}
+            </button>
+            <small className={criticalSkipBlocker ? 'planning-skip-blocked' : undefined}>
+              {t(criticalSkipBlocker ? 'command.skipCurrentStageBlocked' : 'command.skipCurrentStageHint')}
+            </small>
+          </div>
+        ) : null}
       </section>
     </div>
   );

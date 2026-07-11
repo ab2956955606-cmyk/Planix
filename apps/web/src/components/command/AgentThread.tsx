@@ -485,12 +485,14 @@ function DeepPlanningCardGroup({
   messages,
   isLatest,
   advancedAgentTrace,
+  sending,
   onSend,
   t
 }: {
   messages: CommandThreadMessage[];
   isLatest: boolean;
   advancedAgentTrace: boolean;
+  sending: boolean;
   onSend: (value: string) => void;
   t: (key: string) => string;
 }) {
@@ -515,7 +517,16 @@ function DeepPlanningCardGroup({
   const summary = [status, labels.join(' / ')].filter(Boolean).join(' · ');
 
   if (!advancedAgentTrace) {
-    return <PlanningOverviewCard messages={messages} status={status} t={t} />;
+    return (
+      <PlanningOverviewCard
+        messages={messages}
+        status={status}
+        sending={sending}
+        actionsEnabled={isLatest}
+        onSend={onSend}
+        t={t}
+      />
+    );
   }
 
   if (isCognitiveWorkspace) {
@@ -647,6 +658,7 @@ export function AgentThread({ messages, sending, onApprove, onSend, advancedAgen
                 messages={planningMessages}
                 isLatest={!advancedAgentTrace || item.id === latestPlanningGroupId}
                 advancedAgentTrace={advancedAgentTrace}
+                sending={sending}
                 onSend={onSend}
                 t={t}
               />

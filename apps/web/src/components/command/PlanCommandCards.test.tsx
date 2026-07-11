@@ -37,6 +37,7 @@ import { NoteWriteResultCard } from './NoteWriteResultCard';
 import { PlanPatchPreviewCard } from './PlanPatchPreviewCard';
 import { PlanPatchResultCard } from './PlanPatchResultCard';
 import { PlanSearchResultsCard } from './PlanSearchResultsCard';
+import { PlanningOverviewCard } from './PlanningOverviewCard';
 
 const labels: Record<string, string> = {
   'command.title': 'Planix',
@@ -182,6 +183,10 @@ const labels: Record<string, string> = {
   'command.importantDecisions': 'Important Decisions',
   'command.importantUnknowns': 'Important Unknowns',
   'command.nextAction': 'Next Action',
+  'command.skipCurrentStage': 'Skip this step',
+  'command.skipCurrentStageMessage': 'Skip this step and continue with the information already provided',
+  'command.skipCurrentStageHint': 'Continue with saved information.',
+  'command.skipCurrentStageBlocked': 'Critical risks cannot be skipped.',
   'command.goalUnderstanding': 'Goal Understanding',
   'command.knownFacts': 'Known Facts',
   'command.optionalUnknowns': 'Optional context (does not block planning)',
@@ -926,6 +931,165 @@ describe('Plan command cards', () => {
     expect(html).toContain('Preferred Go framework');
     expect(html).not.toContain('Planning process');
     expect(html).not.toContain('Add the missing detail.');
+  });
+
+  it('offers a safe skip control only for ordinary incomplete goal clarification', () => {
+    const messages = [
+      {
+        id: 'goal-model-skip',
+        role: 'card' as const,
+        kind: 'goal_model_updated' as const,
+        content: '',
+        createdAt: 1,
+        payload: {
+          sessionId: 's-skip',
+          data: {
+            goalStatement: 'Learn Go',
+            knownFacts: [{ key: 'goal', statement: 'Learn Go' }],
+            decisionRelevantUnknowns: [{
+              key: 'purpose',
+              description: 'What the Go skill should support',
+              impact: 'strategy',
+              priority: 'blocking'
+            }]
+          }
+        }
+      },
+      {
+        id: 'goal-completion-skip',
+        role: 'card' as const,
+        kind: 'goal_completion_updated' as const,
+        content: '',
+        createdAt: 2,
+        payload: {
+          sessionId: 's-skip',
+          data: {
+            complete: false,
+            blockingUnknowns: [{ question: 'What should Go support?', impact: 'Changes strategy' }],
+            optionalUnknowns: [],
+            nextStage: 'goal_clarification'
+          }
+        }
+      },
+      {
+        id: 'goal-status-skip',
+        role: 'card' as const,
+        kind: 'planning_session_status' as const,
+        content: 'needs_goal_clarification',
+        createdAt: 3,
+        payload: {
+          sessionId: 's-skip',
+          status: 'needs_goal_clarification',
+          businessStatus: 'goal_clarification',
+          runtimeStatus: 'idle'
+        }
+      }
+    ];
+    const sent: string[] = [];
+    const card = PlanningOverviewCard({
+      messages,
+      status: 'needs_goal_clarification',
+      onSend: (value) => sent.push(value),
+      t
+    });
+    const skipButton = collectButtons(card).find((button) => button.props.children === 'Skip this step');
+    expect(skipButton).toBeDefined();
+    skipButton?.props.onClick();
+    expect(sent).toEqual(['Skip this step and continue with the information already provided']);
+
+    const sendingHtml = renderToStaticMarkup(PlanningOverviewCard({
+      messages,
+      status: 'needs_goal_clarification',
+      sending: true,
+      onSend: () => undefined,
+      t
+    }));
+    expect(sendingHtml).toContain('Skip this step');
+    expect(sendingHtml).toContain('disabled=""');
+
+    const modelBlockedMessages = messages.map((message) => (
+      message.kind === 'planning_session_status'
+        ? {
+            ...message,
+            content: 'MODEL_UNAVAILABLE',
+            payload: {
+              ...message.payload,
+              status: 'MODEL_UNAVAILABLE',
+              businessStatus: 'goal_clarification',
+              runtimeStatus: 'blocked_model'
+            }
+          }
+        : message
+    ));
+    const modelBlockedHtml = renderToStaticMarkup(PlanningOverviewCard({
+      messages: modelBlockedMessages,
+      status: 'MODEL_UNAVAILABLE',
+      onSend: () => undefined,
+      t
+    }));
+    expect(modelBlockedHtml).toContain('Skip this step');
+    expect(modelBlockedHtml).toContain('disabled=""');
+
+    const criticalMessages = messages.map((message) => (
+      message.id === 'goal-model-skip'
+        ? {
+            ...message,
+            payload: {
+              ...message.payload,
+              data: {
+                ...message.payload.data,
+                decisionRelevantUnknowns: [{
+                  key: 'safety',
+                  description: 'Safety boundary',
+                  impact: 'safety',
+                  priority: 'blocking'
+                }]
+              }
+            }
+          }
+        : message
+    ));
+    const criticalHtml = renderToStaticMarkup(PlanningOverviewCard({
+      messages: criticalMessages,
+      status: 'needs_goal_clarification',
+      onSend: () => undefined,
+      t
+    }));
+    expect(criticalHtml).toContain('Critical risks cannot be skipped.');
+    expect(criticalHtml).toContain('disabled=""');
+
+    const completeMessages = messages.map((message) => (
+      message.kind === 'goal_completion_updated'
+        ? {
+            ...message,
+            payload: {
+              ...message.payload,
+              data: {
+                complete: true,
+                blockingUnknowns: [],
+                optionalUnknowns: ['What should Go support?'],
+                nextStage: 'strategy'
+              }
+            }
+          }
+        : message
+    ));
+    const completeHtml = renderToStaticMarkup(PlanningOverviewCard({
+      messages: completeMessages,
+      status: 'waiting_design_approval',
+      onSend: () => undefined,
+      t
+    }));
+    expect(completeHtml).not.toContain('Skip this step');
+
+    const defaultThreadHtml = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
+    );
+    const advancedThreadHtml = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} advancedAgentTrace t={t} />
+    );
+    expect(defaultThreadHtml).toContain('Skip this step');
+    expect(advancedThreadHtml).not.toContain('Skip this step');
   });
 
   it('hides technical agent trace cards from the cognitive planning workspace', () => {

@@ -2,6 +2,8 @@ import json
 import sqlite3
 from types import SimpleNamespace
 
+import pytest
+
 from app.db import get_conn, init_db
 from app.schemas import CommandDecision, GoalUnderstandingResult, MemoryCreate, ModelUsage, RefinedTask
 from app.services.command_agent import CommandAgentService, detect_command_intent, resolve_command_intent
@@ -11,6 +13,21 @@ from app.services.memory_store import MemoryService
 def _events(response):
     lines = response.text.strip().splitlines()
     return [json.loads(line) for line in lines if line.strip()]
+
+
+def _approve_required_action(client, response, *, permission="low"):
+    events = _events(response)
+    approval = next(event for event in events if event["type"] == "approval_required")
+    thread_id = events[-1]["threadId"]
+    return client.post(
+        "/api/command/approve",
+        json={
+            "threadId": thread_id,
+            "actionId": approval["actionId"],
+            "decision": "approve",
+            "permission": permission,
+        },
+    )
 
 
 def _valid_structured_plan():
@@ -1517,7 +1534,8 @@ def test_calendar_write_error_uses_calendar_specific_message(client, monkeypatch
     )
 
     assert response.status_code == 200
-    events = _events(response)
+    approved = _approve_required_action(client, response, permission="medium")
+    events = _events(approved)
     error = next(event for event in events if event["type"] == "error")
     assert "写入日历失败" in error["error"]
     assert "计划草稿保存失败" not in error["error"]
@@ -1844,7 +1862,7 @@ def test_reject_patch_calendar_plan_does_not_update_plan(client):
         assert action["status"] == "rejected"
 
 
-def test_patch_calendar_plan_medium_permission_auto_updates_allowed_fields(client):
+def test_patch_calendar_plan_medium_permission_requires_approval(client):
     client.post(
         "/api/plans",
         json={
@@ -1868,11 +1886,12 @@ def test_patch_calendar_plan_medium_permission_auto_updates_allowed_fields(clien
 
     assert response.status_code == 200
     events = _events(response)
-    result = next(event for event in events if event["type"] == "plan_patch_result")
+    assert any(event["type"] == "approval_required" for event in events)
+    approved = _approve_required_action(client, response, permission="medium")
+    result = next(event for event in _events(approved) if event["type"] == "plan_patch_result")
     assert result["status"] == "success"
     assert result["after"]["date"] == "2026-07-07"
     assert result["after"]["estimatedMinutes"] == 30
-    assert not any(event["type"] == "approval_required" for event in events)
     with get_conn() as conn:
         plan = conn.execute("SELECT date, estimated_minutes, result, done FROM plans WHERE content = ?", (PY_STUDY,)).fetchone()
         assert plan["date"] == "2026-07-07"
@@ -1905,7 +1924,7 @@ def test_patch_calendar_delete_medium_permission_requires_approval(client):
         assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 1
 
 
-def test_patch_calendar_high_permission_deletes_ai_plan(client):
+def test_patch_calendar_high_permission_still_requires_delete_approval(client):
     client.post(
         "/api/plans",
         json={"date": "2026-07-06", "time": "09:00", "content": PY_STUDY, "source": "ai"},
@@ -1923,9 +1942,10 @@ def test_patch_calendar_high_permission_deletes_ai_plan(client):
 
     assert response.status_code == 200
     events = _events(response)
-    result = next(event for event in events if event["type"] == "plan_patch_result")
+    assert any(event["type"] == "approval_required" for event in events)
+    approved = _approve_required_action(client, response, permission="high")
+    result = next(event for event in _events(approved) if event["type"] == "plan_patch_result")
     assert result["status"] == "success"
-    assert not any(event["type"] == "approval_required" for event in events)
     with get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
 
@@ -2023,7 +2043,8 @@ def test_patch_calendar_uses_last_query_ordinal_reference(client):
     )
 
     assert response.status_code == 200
-    result = next(event for event in _events(response) if event["type"] == "plan_patch_result")
+    approved = _approve_required_action(client, response, permission="medium")
+    result = next(event for event in _events(approved) if event["type"] == "plan_patch_result")
     assert result["after"]["title"] == PY_STUDY
     assert result["after"]["estimatedMinutes"] == 30
     with get_conn() as conn:
@@ -2224,23 +2245,23 @@ def test_reject_calendar_write_does_not_create_plans(client, monkeypatch):
         assert conn.execute("SELECT status FROM command_actions WHERE id = ?", (action_id,)).fetchone()["status"] == "rejected"
 
 
-def test_medium_permission_auto_writes_calendar_without_approval(client, monkeypatch):
+@pytest.mark.parametrize("permission", ["medium", "high"])
+def test_elevated_permission_still_requires_calendar_approval(client, monkeypatch, permission):
     _patch_runtime(monkeypatch, lambda: FakeRuntime())
     first = _create_workbench_draft(client)
     thread_id = _events(first)[-1]["threadId"]
 
     response = client.post(
         "/api/command/chat",
-        json={"threadId": thread_id, "mode": "auto", "permission": "medium", "message": "把这个计划写进日历"},
+        json={"threadId": thread_id, "mode": "auto", "permission": permission, "message": "把这个计划写进日历"},
     )
 
     assert response.status_code == 200
     events = _events(response)
-    assert not any(event["type"] == "approval_required" for event in events)
-    result = next(event for event in events if event["type"] == "calendar_write_result")
-    assert result["created"] == 2
+    assert any(event["type"] == "approval_required" for event in events)
+    assert not any(event["type"] == "calendar_write_result" for event in events)
     with get_conn() as conn:
-        assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 2
+        assert conn.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"] == 0
 
 
 def test_refine_all_tasks_updates_current_draft_and_calendar_write_uses_refinements(client, monkeypatch):
@@ -2281,6 +2302,7 @@ def test_refine_all_tasks_updates_current_draft_and_calendar_write_uses_refineme
     )
 
     assert write.status_code == 200
+    _approve_required_action(client, write, permission="medium")
     with get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) AS count FROM plans WHERE refined_task_json != ''").fetchone()["count"] == 1
 
@@ -2346,6 +2368,7 @@ def test_calendar_write_does_not_overwrite_manual_plan(client, monkeypatch):
     )
 
     assert response.status_code == 200
+    _approve_required_action(client, response, permission="medium")
     with get_conn() as conn:
         manual = conn.execute("SELECT * FROM plans WHERE source = 'manual'").fetchone()
         assert manual["result"] == "keep me"
