@@ -617,6 +617,9 @@ export interface AiSavedProvider {
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
+  keyStatus?: 'unchecked' | 'valid' | 'invalid';
+  keyErrorType?: string;
+  lastValidatedAt?: string;
   updatedAt: string;
 }
 
@@ -625,6 +628,8 @@ export interface AiSettings {
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
+  keyStatus?: 'unchecked' | 'valid' | 'invalid';
+  keyErrorType?: string;
   temperature: number;
   timeoutSeconds: number;
   updatedAt: string;

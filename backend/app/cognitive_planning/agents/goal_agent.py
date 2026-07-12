@@ -16,6 +16,9 @@ would materially change the strategy, which one to three questions have the high
 whether asking more would improve the plan enough to justify interrupting the user. Preserve exact hard
 constraints and important user wording. Fill possibleIntents, currentKnowledge, and uncertainties with concise
 user-visible statements. Every question must explain why it matters and what decision its answer changes.
+When a question has a small honest answer space, provide two to four concise, mutually exclusive answerOptions in
+the user's language. Do not include "Other" because the interface adds it. Keep answerOptions empty when the answer
+must remain open-ended; never invent a fixed domain questionnaire merely to provide choices.
 Do not mark subject, purpose, duration, deadline, current level, or any other conventional form field as blocking
 merely because it is absent. A missing detail is blocking only when this user's answer would materially change
 safety, feasibility, or the strategy itself. Background experience, intended outcomes, and weekly time expressed
@@ -41,11 +44,13 @@ def _consistency_question(payload: GoalModelingInput) -> GoalQuestion:
             question="我注意到目标中的部分信息可能不一致。你最终希望实现的具体结果是什么？",
             whyThisQuestionMatters="先解决这处不一致，才能选择与真实目标匹配的规划策略。",
             expectedDecisionImpact="答案会改变目标解释、成功标准和规划方向。",
+            answerOptions=[],
         )
     return GoalQuestion(
         question="Some parts of the goal may be inconsistent. What specific result do you ultimately want?",
         whyThisQuestionMatters="Resolving the mismatch is necessary before choosing a strategy that fits the real goal.",
         expectedDecisionImpact="The answer changes the goal interpretation, success criteria, and planning direction.",
+        answerOptions=[],
     )
 
 

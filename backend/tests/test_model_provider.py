@@ -1,6 +1,7 @@
 import json
 
 import httpx
+import pytest
 
 from backend.app.db import get_conn
 from backend.app.services.ai_settings import EffectiveAiSettings
@@ -27,6 +28,8 @@ def _settings(
     base_url: str = "https://api.deepseek.com",
     model: str = "deepseek-v4-flash",
     api_key: str = "sk-test-local",
+    key_status: str = "unchecked",
+    key_error_type: str = "",
 ) -> EffectiveAiSettings:
     return EffectiveAiSettings(
         provider=provider,
@@ -36,7 +39,36 @@ def _settings(
         temperature=0.2,
         timeout_seconds=10,
         updated_at="",
+        key_status=key_status,
+        key_error_type=key_error_type,
     )
+
+
+def test_model_router_skips_a_saved_key_marked_invalid(monkeypatch):
+    invalid = _settings(key_status="invalid", key_error_type="auth_error")
+
+    monkeypatch.setattr(
+        model_provider,
+        "get_model_routing_rule",
+        lambda *_: ModelRoutingRuleConfig(
+            task_type="chat",
+            primary_provider="deepseek",
+            fallback_providers=(),
+            local_fallback_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(model_provider, "get_effective_ai_settings_for_provider", lambda *_: invalid)
+    monkeypatch.setattr(
+        ModelRouter,
+        "_complete_direct",
+        lambda *_: (_ for _ in ()).throw(AssertionError("invalid key must not be called")),
+    )
+
+    result, error = ModelRouter(invalid).complete(_request(task_type="chat"))
+
+    assert result is None
+    assert error is not None
+    assert [(attempt.status, attempt.error_type) for attempt in error.attempts] == [("skipped", "auth_error")]
 
 
 def _request(**overrides):
@@ -118,6 +150,36 @@ def test_provider_selection_and_mock_vs_missing_key(monkeypatch):
     assert error is not None
     assert error.error_type == "auth_error"
     assert error.provider == "kimi"
+
+
+def test_settings_save_validation_does_not_write_credential_status(monkeypatch):
+    writes = []
+
+    monkeypatch.setattr(model_provider, "mark_provider_key_valid", lambda *args: writes.append(("valid", args)))
+    monkeypatch.setattr(model_provider, "mark_provider_key_invalid", lambda *args: writes.append(("invalid", args)))
+    monkeypatch.setattr(
+        model_provider.OpenAICompatibleProvider,
+        "complete",
+        lambda self, request: (
+            ModelCallResult(
+                text="OK",
+                provider=self.settings.provider,
+                model=self.settings.model,
+                usage=None,
+                latency_ms=1,
+                mode="llm",
+            ),
+            None,
+        ),
+    )
+
+    result, error = ModelRouter(_settings(), routing_enabled=False).complete(
+        _request(feature="settings_save_validation")
+    )
+
+    assert error is None
+    assert result is not None
+    assert writes == []
 
 
 def test_openai_compatible_provider_posts_expected_payload(monkeypatch):
@@ -445,6 +507,292 @@ def test_model_router_primary_success_does_not_use_fallback(monkeypatch):
     assert result.fallback_used is False
     assert [attempt.status for attempt in result.attempts] == ["success"]
     assert calls == ["kimi"]
+
+
+@pytest.mark.parametrize(
+    ("task_type", "initial_budget", "hard_cap"),
+    [
+        ("planning_goal_model", 5400, 10800),
+        ("planning_reality", 5400, 10800),
+        ("planning_evidence", 6600, 13200),
+        ("planning_strategy", 7200, 14400),
+        ("planning_execution", 12000, 24000),
+        ("planning_critique", 6600, 13200),
+        ("planning_learning", 5400, 10800),
+    ],
+)
+def test_planning_truncation_retries_same_provider_once_with_larger_budget(
+    monkeypatch,
+    task_type,
+    initial_budget,
+    hard_cap,
+):
+    def fake_rule(task_type, active_provider):
+        return ModelRoutingRuleConfig(task_type, "kimi", ("deepseek",), False)
+
+    def fake_settings(provider, active_settings=None):
+        return _settings(
+            provider=provider,
+            base_url=provider_default_base_url(provider),
+            model=provider_default_model(provider),
+            api_key=f"{provider}-key",
+        )
+
+    calls = []
+
+    def fake_complete(self, request):
+        calls.append((self.settings.provider, request.max_tokens, request.max_token_cap))
+        if len(calls) == 1:
+            return (
+                None,
+                ModelCallError(
+                    "truncated",
+                    "model_output_truncated",
+                    detail="raw provider detail must not enter attempts",
+                    provider=self.settings.provider,
+                    model=self.settings.model,
+                ),
+            )
+        return (ModelCallResult(text="OK", provider=self.settings.provider, model=self.settings.model, latency_ms=4), None)
+
+    monkeypatch.setattr(model_provider, "get_model_routing_rule", fake_rule)
+    monkeypatch.setattr(model_provider, "get_effective_ai_settings_for_provider", fake_settings)
+    monkeypatch.setattr(model_provider.OpenAICompatibleProvider, "complete", fake_complete)
+
+    result, error = ModelRouter(_settings(provider="kimi", base_url="https://api.moonshot.ai/v1", model="kimi-k2.7-code")).complete(
+        _request(
+            task_type=task_type,
+            response_format_json=True,
+            max_tokens=initial_budget,
+            max_token_cap=hard_cap,
+        )
+    )
+
+    assert error is None
+    assert result is not None
+    assert result.provider == "kimi"
+    assert result.fallback_used is False
+    assert calls == [("kimi", initial_budget, hard_cap), ("kimi", hard_cap, hard_cap)]
+    assert [(attempt.status, attempt.error_type, attempt.automatic_retry) for attempt in result.attempts] == [
+        ("error", "model_output_truncated", False),
+        ("success", None, True),
+    ]
+    assert result.attempts[0].latency_ms is not None
+    assert result.attempts[0].latency_ms >= 1
+    assert result.attempts[1].to_dict()["automaticRetry"] is True
+    assert "detail" not in result.attempts[0].to_dict()
+
+
+def test_direct_planning_truncation_retries_same_provider_once(monkeypatch):
+    calls = []
+
+    def fake_complete(self, request):
+        calls.append((self.settings.provider, request.max_tokens, request.max_token_cap))
+        if len(calls) == 1:
+            return (
+                None,
+                ModelCallError(
+                    "truncated",
+                    "model_output_truncated",
+                    provider=self.settings.provider,
+                    model=self.settings.model,
+                ),
+            )
+        return (
+            ModelCallResult(
+                text="OK",
+                provider=self.settings.provider,
+                model=self.settings.model,
+                latency_ms=4,
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(model_provider.OpenAICompatibleProvider, "complete", fake_complete)
+
+    result, error = ModelRouter(
+        _settings(provider="kimi", base_url="https://api.moonshot.ai/v1", model="kimi-k2.7-code"),
+        routing_enabled=False,
+    ).complete(
+        _request(
+            task_type="planning_evidence",
+            response_format_json=True,
+            max_tokens=6600,
+            max_token_cap=13200,
+        )
+    )
+
+    assert error is None
+    assert result is not None and result.provider == "kimi"
+    assert calls == [("kimi", 6600, 13200), ("kimi", 13200, 13200)]
+    assert [(attempt.status, attempt.automatic_retry) for attempt in result.attempts] == [
+        ("error", False),
+        ("success", True),
+    ]
+    assert result.attempts[0].latency_ms is not None
+    assert result.attempts[0].latency_ms >= 1
+
+
+def test_planning_stage_uses_only_one_automatic_retry_then_continues_fallback(monkeypatch):
+    def fake_rule(task_type, active_provider):
+        return ModelRoutingRuleConfig(task_type, "kimi", ("deepseek", "zhipu_glm"), False)
+
+    def fake_settings(provider, active_settings=None):
+        return _settings(
+            provider=provider,
+            base_url=provider_default_base_url(provider),
+            model=provider_default_model(provider),
+            api_key=f"{provider}-key",
+        )
+
+    calls = []
+
+    def fake_complete(self, request):
+        calls.append((self.settings.provider, request.max_tokens))
+        if self.settings.provider != "zhipu_glm":
+            return (
+                None,
+                ModelCallError(
+                    "truncated",
+                    "model_output_truncated",
+                    provider=self.settings.provider,
+                    model=self.settings.model,
+                ),
+            )
+        return (ModelCallResult(text="OK", provider=self.settings.provider, model=self.settings.model, latency_ms=4), None)
+
+    monkeypatch.setattr(model_provider, "get_model_routing_rule", fake_rule)
+    monkeypatch.setattr(model_provider, "get_effective_ai_settings_for_provider", fake_settings)
+    monkeypatch.setattr(model_provider.OpenAICompatibleProvider, "complete", fake_complete)
+
+    result, error = ModelRouter(_settings(provider="kimi", base_url="https://api.moonshot.ai/v1", model="kimi-k2.7-code")).complete(
+        _request(
+            task_type="planning_evidence",
+            response_format_json=True,
+            max_tokens=6600,
+            max_token_cap=13200,
+        )
+    )
+
+    assert error is None
+    assert result is not None
+    assert result.provider == "zhipu_glm"
+    assert result.fallback_used is True
+    assert calls == [("kimi", 6600), ("kimi", 13200), ("deepseek", 6600), ("zhipu_glm", 6600)]
+    assert [(attempt.provider, attempt.status, attempt.automatic_retry) for attempt in result.attempts] == [
+        ("kimi", "error", False),
+        ("kimi", "error", True),
+        ("deepseek", "error", False),
+        ("zhipu_glm", "success", False),
+    ]
+
+
+def test_truncated_non_planning_task_does_not_use_planning_retry_budget(monkeypatch):
+    def fake_rule(task_type, active_provider):
+        return ModelRoutingRuleConfig(task_type, "kimi", ("deepseek",), False)
+
+    def fake_settings(provider, active_settings=None):
+        return _settings(
+            provider=provider,
+            base_url=provider_default_base_url(provider),
+            model=provider_default_model(provider),
+            api_key=f"{provider}-key",
+        )
+
+    calls = []
+
+    def fake_complete(self, request):
+        calls.append((self.settings.provider, request.max_tokens))
+        if self.settings.provider == "kimi":
+            return (
+                None,
+                ModelCallError(
+                    "truncated",
+                    "model_output_truncated",
+                    provider=self.settings.provider,
+                    model=self.settings.model,
+                ),
+            )
+        return (ModelCallResult(text="OK", provider=self.settings.provider, model=self.settings.model, latency_ms=4), None)
+
+    monkeypatch.setattr(model_provider, "get_model_routing_rule", fake_rule)
+    monkeypatch.setattr(model_provider, "get_effective_ai_settings_for_provider", fake_settings)
+    monkeypatch.setattr(model_provider.OpenAICompatibleProvider, "complete", fake_complete)
+
+    result, error = ModelRouter(_settings(provider="kimi", base_url="https://api.moonshot.ai/v1", model="kimi-k2.7-code")).complete(
+        _request(
+            task_type="memory_query",
+            response_format_json=True,
+            max_tokens=2200,
+            max_token_cap=4400,
+        )
+    )
+
+    assert error is None
+    assert result is not None and result.provider == "deepseek"
+    assert calls == [("kimi", 2200), ("deepseek", 2200)]
+    assert not any(attempt.automatic_retry for attempt in result.attempts)
+
+
+@pytest.mark.parametrize(
+    ("response_format_json", "error_type"),
+    [(False, "model_output_truncated"), (True, "timeout")],
+)
+def test_planning_retry_requires_json_truncation(monkeypatch, response_format_json, error_type):
+    def fake_rule(task_type, active_provider):
+        return ModelRoutingRuleConfig(task_type, "kimi", ("deepseek",), False)
+
+    def fake_settings(provider, active_settings=None):
+        return _settings(
+            provider=provider,
+            base_url=provider_default_base_url(provider),
+            model=provider_default_model(provider),
+            api_key=f"{provider}-key",
+        )
+
+    calls = []
+
+    def fake_complete(self, request):
+        calls.append((self.settings.provider, request.max_tokens))
+        if self.settings.provider == "kimi":
+            return (
+                None,
+                ModelCallError(
+                    "safe error",
+                    error_type,
+                    provider=self.settings.provider,
+                    model=self.settings.model,
+                ),
+            )
+        return (
+            ModelCallResult(
+                text="OK",
+                provider=self.settings.provider,
+                model=self.settings.model,
+                latency_ms=4,
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(model_provider, "get_model_routing_rule", fake_rule)
+    monkeypatch.setattr(model_provider, "get_effective_ai_settings_for_provider", fake_settings)
+    monkeypatch.setattr(model_provider.OpenAICompatibleProvider, "complete", fake_complete)
+
+    result, error = ModelRouter(
+        _settings(provider="kimi", base_url="https://api.moonshot.ai/v1", model="kimi-k2.7-code")
+    ).complete(
+        _request(
+            task_type="planning_evidence",
+            response_format_json=response_format_json,
+            max_tokens=6600,
+            max_token_cap=13200,
+        )
+    )
+
+    assert error is None
+    assert result is not None and result.provider == "deepseek"
+    assert calls == [("kimi", 6600), ("deepseek", 6600)]
+    assert not any(attempt.automatic_retry for attempt in result.attempts)
 
 
 def test_model_router_skips_missing_key_and_records_attempt(monkeypatch):

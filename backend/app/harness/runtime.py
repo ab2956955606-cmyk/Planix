@@ -373,7 +373,7 @@ class HarnessRuntime:
                     runtime_blocked=False,
                     blocking_unknowns=blocking,
                 )
-            else:
+            elif decision.reason_code.startswith("critic_"):
                 policy = PolicyDecision(
                     subject="critic_review",
                     action="wait_user",
@@ -382,6 +382,14 @@ class HarnessRuntime:
                     sessionId=persistent.session_id,
                     requiredGates=("critic",),
                     failedGates=("critic",),
+                )
+            else:
+                policy = PolicyDecision(
+                    subject="user_question",
+                    action="wait_user",
+                    allowed=False,
+                    reason=decision.reason_code,
+                    sessionId=persistent.session_id,
                 )
         elif decision.action == SchedulerAction.REPAIR:
             policy = PolicyDecision(

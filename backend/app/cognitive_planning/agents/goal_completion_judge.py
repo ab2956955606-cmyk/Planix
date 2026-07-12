@@ -101,22 +101,26 @@ class GoalCompletionJudge:
         blockers: list[GoalCompletionBlockingUnknown] = []
         for item in blocking_items:
             match = _matching_question(item, questions, used_question_indexes)
+            answer_options: list[str] = []
             if match:
                 question_index, matched_question = match
                 used_question_indexes.add(question_index)
                 question = matched_question.question
+                answer_options = matched_question.answer_options
             else:
                 question = item.description
             blockers.append(
                 GoalCompletionBlockingUnknown(
                     question=question,
                     impact=item.why_it_changes_the_plan,
+                    answerOptions=answer_options,
                 )
             )
 
         if goal.consistency_warnings and not blockers:
             for warning in goal.consistency_warnings:
                 warning_normalized = _normalized(warning)
+                answer_options = []
                 matches = [
                     (index, question)
                     for index, question in enumerate(questions)
@@ -133,10 +137,17 @@ class GoalCompletionJudge:
                     used_question_indexes.add(question_index)
                     question = matched_question.question
                     impact = matched_question.why_this_question_matters
+                    answer_options = matched_question.answer_options
                 else:
                     question = warning
                     impact = warning
-                blockers.append(GoalCompletionBlockingUnknown(question=question, impact=impact))
+                blockers.append(
+                    GoalCompletionBlockingUnknown(
+                        question=question,
+                        impact=impact,
+                        answerOptions=answer_options,
+                    )
+                )
 
         optional_unknowns = _dedupe(
             [

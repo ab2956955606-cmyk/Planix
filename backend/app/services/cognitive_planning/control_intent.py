@@ -18,7 +18,22 @@ def detect_planning_control_intent(text: str) -> PlanningControlIntent:
         "skipthisstepandcontinuewiththeinformationalreadyprovided",
     }:
         return "skip_current_stage"
-    if normalized in {"下一步", "继续", "开始规划", "next", "continue", "proceed", "startplanning"}:
+    if normalized in {
+        "下一步",
+        "继续",
+        "开始规划",
+        "请重试当前深度规划",
+        "重试深度规划",
+        "重试当前阶段",
+        "next",
+        "continue",
+        "proceed",
+        "startplanning",
+        "retrydeepplanning",
+        "retrythecurrentdeepplanningsession",
+        "retrycurrentdeepplanning",
+        "retrycurrentstage",
+    }:
         return "continue_current_stage"
     if normalized in {"确认", "确认方向", "确认执行计划", "approve", "confirm", "yes", "ok", "okay"}:
         return "approve_current_stage"

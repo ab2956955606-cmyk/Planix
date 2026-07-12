@@ -121,19 +121,7 @@ export type CommandChatEvent =
   | { type: 'learning_update'; sessionId: string; data: unknown }
   | { type: 'agent_decision'; sessionId: string; data: unknown }
   | { type: 'agent_message'; sessionId: string; data: unknown }
-  | {
-      type: 'planning_session_status';
-      sessionId: string;
-      status: string;
-      businessStatus?: string;
-      runtimeStatus?: string;
-      goalCompletion?: GoalCompletionResult;
-      data?: {
-        businessStatus?: string;
-        runtimeStatus?: string;
-        goalCompletion?: GoalCompletionResult;
-      };
-    }
+  | ({ type: 'planning_session_status' } & PlanningSessionResponse)
   | {
       type: 'goal_completion_updated';
       sessionId: string;
@@ -141,7 +129,7 @@ export type CommandChatEvent =
       businessStatus?: string;
       runtimeStatus?: string;
     }
-  | { type: 'goal_model_updated'; sessionId: string; data: unknown }
+  | { type: 'goal_model_updated'; sessionId: string; data: PlanningArtifactSnapshot; artifactState?: PlanningArtifactState }
   | { type: 'reality_assessment_ready'; sessionId: string; data: unknown }
   | { type: 'evidence_pack_ready'; sessionId: string; data: unknown }
   | { type: 'strategy_portfolio_ready'; sessionId: string; data: unknown }
@@ -158,6 +146,7 @@ export type CommandChatEvent =
       uncertainties?: unknown[];
       consistencyWarnings?: unknown[];
       nextQuestion?: string;
+      clarificationOptions?: string[];
       confidence?: number;
       source?: string;
       error?: unknown;
@@ -174,10 +163,62 @@ export type GoalCompletionResult = {
   blockingUnknowns: Array<{
     question: string;
     impact: string;
+    answerOptions?: string[];
   }>;
   optionalUnknowns: string[];
   nextStage: 'goal_clarification' | 'evidence' | 'strategy';
+  artifactState?: PlanningArtifactState;
 };
+
+export type PlanningArtifactState = 'current' | 'last_confirmed';
+
+export type PlanningLocalizedText = string | {
+  zh: string;
+  en: string;
+};
+
+export type PlanningModelFailureAttempt = {
+  provider: string;
+  status: 'success' | 'error' | 'skipped';
+  errorType?: string;
+};
+
+export type PlanningModelFailure = {
+  stage: string;
+  resumeNode: string;
+  retryable: boolean;
+  automaticRetryAttempted: boolean;
+  attempts: PlanningModelFailureAttempt[];
+  summary: PlanningLocalizedText;
+  action: PlanningLocalizedText;
+};
+
+export type PlanningPendingInput = {
+  text: string;
+  applied: false;
+};
+
+export type PlanningArtifactSnapshot = Record<string, unknown> & {
+  artifactState?: PlanningArtifactState;
+};
+
+/** Shared shape used by live planning_session_status events and replayed snapshots. */
+export interface PlanningSessionResponse {
+  sessionId: string;
+  status: string;
+  businessStatus?: string;
+  runtimeStatus?: string;
+  goalCompletion?: GoalCompletionResult;
+  modelFailure?: PlanningModelFailure | null;
+  pendingInput?: PlanningPendingInput | null;
+  data?: {
+    businessStatus?: string;
+    runtimeStatus?: string;
+    goalCompletion?: GoalCompletionResult;
+    modelFailure?: PlanningModelFailure | null;
+    pendingInput?: PlanningPendingInput | null;
+  };
+}
 
 export interface CommandChatPayload {
   threadId?: string;

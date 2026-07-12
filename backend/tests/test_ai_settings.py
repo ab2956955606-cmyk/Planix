@@ -32,7 +32,7 @@ def test_ai_settings_endpoint_returns_json(client):
     assert "note_write" not in {rule["taskType"] for rule in body["routingRules"]}
     assert all(rule["primaryProvider"] == "auto" for rule in body["routingRules"])
     assert all(rule["fallbackProviders"] == ["deepseek"] for rule in body["routingRules"])
-    assert body["autoModelPolicy"]["autoProviderOrder"][:3] == ["zhipu_glm", "deepseek", "kimi"]
+    assert body["autoModelPolicy"]["autoProviderOrder"][:3] == ["deepseek", "zhipu_glm", "kimi"]
     assert body["autoModelPolicy"]["taskStrategy"]["command_decision"] == "fast_low_cost"
     assert body["autoModelPolicy"]["taskStrategy"]["plan_generation"] == "structured_stable"
 
@@ -631,13 +631,14 @@ def test_missing_api_key_preserves_saved_user_key(client):
 
 
 def test_invalid_api_key_format_is_rejected(client):
+    rejected_key = "saved DeepSeek key"
     saved = client.put(
         "/api/ai/settings",
         json={
             "provider": "deepseek",
             "baseUrl": "https://api.deepseek.com",
             "model": "deepseek-v4-flash",
-            "apiKey": "saved DeepSeek key",
+            "apiKey": rejected_key,
             "temperature": 0.3,
             "timeoutSeconds": 20,
         },
@@ -645,6 +646,81 @@ def test_invalid_api_key_format_is_rejected(client):
     assert saved.status_code == 422
     detail = str(saved.json()["detail"])
     assert "plain ASCII without spaces" in detail
+    assert rejected_key not in saved.text
+    assert "[REDACTED]" in saved.text
+
+
+def test_settings_test_failure_does_not_expose_provider_detail(client, monkeypatch):
+    provider_detail = "Authorization: Bearer audit-secret-provider-detail"
+
+    class FailingClient:
+        settings = EffectiveAiSettings(
+            provider="deepseek",
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            api_key="sk-test-local",
+            temperature=0.1,
+            timeout_seconds=10,
+            updated_at="",
+        )
+
+        def is_enabled(self):
+            return True
+
+        def complete(self, *args, **kwargs):
+            return None, llm_module.LlmError(
+                "provider-specific message that must not be returned",
+                "auth_error",
+                401,
+                detail=provider_detail,
+            )
+
+    monkeypatch.setattr("app.routers.settings.LlmClient", FailingClient)
+
+    response = client.post("/api/ai/test", json={"prompt": "ping"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": False,
+        "mode": "error",
+        "message": "API key is invalid or expired.",
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "errorType": "auth_error",
+        "statusCode": 401,
+        "detail": None,
+    }
+    assert provider_detail not in response.text
+    assert "provider-specific message" not in response.text
+
+
+def test_settings_test_normalizes_unknown_error_type(client, monkeypatch):
+    class FailingClient:
+        settings = EffectiveAiSettings(
+            provider="deepseek",
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            api_key="sk-test-local",
+            temperature=0.1,
+            timeout_seconds=10,
+            updated_at="",
+        )
+
+        def is_enabled(self):
+            return True
+
+        def complete(self, *args, **kwargs):
+            return None, llm_module.LlmError("unsafe dynamic error", "provider_private_error", 500, detail="unsafe detail")
+
+    monkeypatch.setattr("app.routers.settings.LlmClient", FailingClient)
+
+    response = client.post("/api/ai/test", json={"prompt": "ping"})
+
+    assert response.status_code == 200
+    assert response.json()["errorType"] == "unknown"
+    assert response.json()["message"] == "The model test failed. Check the provider settings and try again."
+    assert response.json()["detail"] is None
+    assert "unsafe" not in response.text
 
 
 def test_saved_empty_key_does_not_fallback_to_env(client, monkeypatch):
@@ -890,3 +966,51 @@ def test_llm_rejects_invalid_key_format_before_request(monkeypatch):
     assert error is not None
     assert error.error_type == "invalid_key_format"
     assert "plain ASCII without spaces" in error.message
+
+
+def test_provider_key_status_becomes_invalid_and_can_be_replaced_without_delete(client):
+    saved = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "deepseek",
+            "baseUrl": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "apiKey": "sk-old-provider-key",
+            "temperature": 0.2,
+            "timeoutSeconds": 20,
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["keyStatus"] == "valid"
+
+    ai_settings_module.mark_provider_key_invalid("deepseek", "sk-old-provider-key", "auth_error")
+    invalid = client.get("/api/ai/settings").json()
+    assert invalid["hasApiKey"] is True
+    assert invalid["keyStatus"] == "invalid"
+    assert invalid["keyErrorType"] == "auth_error"
+    assert invalid["savedProviders"][0]["keyStatus"] == "invalid"
+    assert ai_settings_module.get_effective_ai_settings_for_provider("deepseek").has_usable_api_key is False
+
+    replaced = client.put(
+        "/api/ai/settings",
+        json={
+            "provider": "deepseek",
+            "baseUrl": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "apiKey": "sk-new-provider-key",
+            "temperature": 0.2,
+            "timeoutSeconds": 20,
+        },
+    )
+    assert replaced.status_code == 200
+    body = replaced.json()
+    assert body["hasApiKey"] is True
+    assert body["keyStatus"] == "valid"
+    assert body["keyErrorType"] == ""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT key_status, key_error_type, api_key_encrypted FROM ai_provider_configs WHERE provider = 'deepseek'"
+        ).fetchone()
+    assert row["key_status"] == "valid"
+    assert row["key_error_type"] == ""
+    assert row["api_key_encrypted"] == "sk-new-provider-key"

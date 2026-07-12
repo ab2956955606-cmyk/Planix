@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AgentThread } from './AgentThread';
 import { ApprovalCard } from './ApprovalCard';
 import { CommandDecisionCard } from './CommandDecisionCard';
@@ -37,7 +37,7 @@ import { NoteWriteResultCard } from './NoteWriteResultCard';
 import { PlanPatchPreviewCard } from './PlanPatchPreviewCard';
 import { PlanPatchResultCard } from './PlanPatchResultCard';
 import { PlanSearchResultsCard } from './PlanSearchResultsCard';
-import { PlanningOverviewCard } from './PlanningOverviewCard';
+import { ClarificationChoices, PlanningOverviewCard } from './PlanningOverviewCard';
 
 const labels: Record<string, string> = {
   'command.title': 'Planix',
@@ -115,6 +115,11 @@ const labels: Record<string, string> = {
   'command.approve': 'Confirm',
   'command.reject': 'Cancel',
   'command.running': 'Running',
+  'command.assistant': 'Planix',
+  'command.clarificationChoiceHint': 'Choose the option that best fits, or enter another answer.',
+  'command.clarificationOther': 'Other',
+  'command.clarificationOtherPlaceholder': 'Describe your situation',
+  'command.clarificationSubmit': 'Send',
   'command.quickActions': 'Quick actions',
   'command.quickWriteCalendar': '写入日历',
   'command.quickViewPlans': '查看计划',
@@ -189,9 +194,12 @@ const labels: Record<string, string> = {
   'command.skipCurrentStageBlocked': 'Critical risks cannot be skipped.',
   'command.goalUnderstanding': 'Goal Understanding',
   'command.knownFacts': 'Known Facts',
+  'command.lastConfirmedKnownFacts': 'Last Confirmed Facts',
   'command.optionalUnknowns': 'Optional context (does not block planning)',
   'command.noKnownFacts': 'No known facts have been saved yet.',
   'command.noBlockingUnknowns': 'No blocking unknowns. Planning can continue.',
+  'command.planningPendingModelInput': 'Waiting for model processing',
+  'command.planningPendingModelInputFallback': 'Model processing is blocked; the last confirmed information remains unchanged.',
   'command.uncertainties': 'Needs confirmation',
   'command.consistencyWarning': 'Goal consistency warning',
   'command.planningPossibleDirections': 'Possible directions',
@@ -205,7 +213,26 @@ const labels: Record<string, string> = {
   'command.planningDirectionRelocation': 'Relocation',
   'command.planningDirectionOther': 'Other',
   'command.planningUnderstandingPending': 'Understanding your goal',
-  'command.planningRuntimeWaitingModel': 'Goal model saved. Known facts saved. Waiting for the model to recover.',
+  'command.planningRuntimeWaitingModel': 'Your answer was saved but has not been applied as a confirmed fact.',
+  'command.planningFailureFallbackSummary': 'The model could not complete this stage.',
+  'command.planningFailureOutputTruncated': 'model output was truncated',
+  'command.planningFailureAuthError': 'authentication failed',
+  'command.planningFailureBadBaseUrl': 'service endpoint is unavailable',
+  'command.planningFailureBadModel': 'configured model is unavailable',
+  'command.planningFailureBadRequest': 'request configuration is unsupported',
+  'command.planningFailureInsufficientBalance': 'balance or quota is insufficient',
+  'command.planningFailureInvalidKeyFormat': 'API key format is invalid',
+  'command.planningFailureInvalidModelOutput': 'model output does not satisfy the structured contract',
+  'command.planningFailureMissingKey': 'API key is missing',
+  'command.planningFailureNetworkError': 'model service cannot be reached',
+  'command.planningFailureRateLimit': 'model service is rate-limited',
+  'command.planningFailureTimeout': 'model service timed out',
+  'command.planningFailureUnknown': 'model service did not return a usable result',
+  'command.planningFailureProviderUnavailable': 'provider is unavailable',
+  'command.planningFailureRequestFailed': 'model request failed',
+  'command.planningAutomaticRetryAttempted': 'Planix already attempted one automatic recovery.',
+  'command.retryCurrentPlanningStage': 'Retry current stage',
+  'command.retryDeepPlanningMessage': 'Retry the current deep planning session',
   'command.noImportantDecisions': 'No important decisions yet.',
   'command.planningStageUnderstandGoal': 'Understand Goal',
   'command.planningStageConfirmDirection': 'Confirm Direction',
@@ -360,7 +387,41 @@ function collectButtons(node: ReactNode): ReactElement[] {
   return buttons;
 }
 
+function collectForms(node: ReactNode): ReactElement[] {
+  const forms: ReactElement[] = [];
+  function visit(value: ReactNode) {
+    Children.forEach(value, (child) => {
+      if (!isValidElement(child)) return;
+      if (child.type === 'form') forms.push(child);
+      visit(child.props.children);
+    });
+  }
+  visit(node);
+  return forms;
+}
+
 describe('Plan command cards', () => {
+  it('removes the user role label while retaining the Planix assistant label', () => {
+    const html = renderToStaticMarkup(
+      <AgentThread
+        messages={[
+          { id: 'user-message', role: 'user', content: '我要学 Python', createdAt: 1 },
+          { id: 'assistant-message', role: 'assistant', content: '请告诉我你的学习目标。', createdAt: 2 }
+        ]}
+        sending={false}
+        onApprove={() => undefined}
+        onSend={() => undefined}
+        t={t}
+      />
+    );
+
+    expect(html).toContain('<article class="command-message user"><p>我要学 Python</p></article>');
+    expect(html).not.toContain('<span>你</span>');
+    expect(html).not.toContain('<span>You</span>');
+    expect(html).toContain('<span>Planix</span>');
+    expect(html).toContain('请告诉我你的学习目标。');
+  });
+
   it('maps model-unavailable to the latest completed planning stage', () => {
     expect(planningStageFromStatus('goal_understood', [])).toBe('design_plan');
     expect(planningStageFromStatus('strategy_pending', [])).toBe('design_plan');
@@ -1027,8 +1088,8 @@ describe('Plan command cards', () => {
       onSend: () => undefined,
       t
     }));
-    expect(modelBlockedHtml).toContain('Skip this step');
-    expect(modelBlockedHtml).toContain('disabled=""');
+    expect(modelBlockedHtml).not.toContain('Skip this step');
+    expect(modelBlockedHtml).toContain('Retry current stage');
 
     const criticalMessages = messages.map((message) => (
       message.id === 'goal-model-skip'
@@ -1090,6 +1151,366 @@ describe('Plan command cards', () => {
     );
     expect(defaultThreadHtml).toContain('Skip this step');
     expect(advancedThreadHtml).not.toContain('Skip this step');
+  });
+
+  it('renders a recoverable model failure without treating pending input as a confirmed fact', () => {
+    const messages = [
+      {
+        id: 'blocked-goal',
+        role: 'card' as const,
+        kind: 'goal_model_updated' as const,
+        content: '',
+        createdAt: 1,
+        payload: {
+          sessionId: 'blocked-session',
+          data: {
+            goalStatement: 'Learn Python',
+            knownFacts: [{ key: 'skill', statement: 'Python' }],
+            decisionRelevantUnknowns: [{
+              key: 'purpose',
+              description: 'What should Python support?',
+              impact: 'strategy',
+              priority: 'blocking'
+            }],
+            artifactState: 'last_confirmed'
+          }
+        }
+      },
+      {
+        id: 'blocked-completion',
+        role: 'card' as const,
+        kind: 'goal_completion_updated' as const,
+        content: '',
+        createdAt: 2,
+        payload: {
+          sessionId: 'blocked-session',
+          data: {
+            complete: false,
+            blockingUnknowns: [{
+              question: 'What should Python support?',
+              impact: 'Changes strategy',
+              answerOptions: ['Web development', 'Data analysis']
+            }],
+            optionalUnknowns: ['Preferred framework'],
+            nextStage: 'goal_clarification',
+            artifactState: 'last_confirmed'
+          }
+        }
+      },
+      {
+        id: 'blocked-understanding',
+        role: 'card' as const,
+        kind: 'goal_understanding' as const,
+        content: 'Web development was captured but not yet applied.',
+        createdAt: 2.5,
+        payload: {
+          understoodIntent: 'Learn Python for web development',
+          knownFacts: { skill: 'Python', purpose: 'web开发' },
+          uncertainties: []
+        }
+      },
+      {
+        id: 'blocked-status',
+        role: 'card' as const,
+        kind: 'planning_session_status' as const,
+        content: 'MODEL_UNAVAILABLE',
+        createdAt: 3,
+        payload: {
+          sessionId: 'blocked-session',
+          status: 'MODEL_UNAVAILABLE',
+          businessStatus: 'goal_clarification',
+          runtimeStatus: 'blocked_model',
+          pendingInput: { text: 'web开发', applied: false },
+          modelFailure: {
+            stage: 'goal_intelligence',
+            resumeNode: 'goal_intelligence',
+            retryable: true,
+            automaticRetryAttempted: true,
+            attempts: [
+              { provider: 'deepseek', status: 'error', errorType: 'model_output_truncated' },
+              { provider: 'kimi', status: 'success' },
+              { provider: 'zhipu_glm', status: 'error', errorType: 'auth_error' },
+              { provider: 'openai', status: 'skipped', errorType: 'missing_api_key' },
+              { provider: 'custom', status: 'error', errorType: 'bad_base_url' },
+              { provider: 'custom', status: 'error', errorType: 'bad_model' },
+              { provider: 'custom', status: 'error', errorType: 'bad_request' },
+              { provider: 'custom', status: 'error', errorType: 'insufficient_balance' },
+              { provider: 'custom', status: 'error', errorType: 'invalid_key_format' },
+              { provider: 'custom', status: 'error', errorType: 'invalid_model_output' },
+              { provider: 'custom', status: 'error', errorType: 'network_error' },
+              { provider: 'custom', status: 'error', errorType: 'rate_limit' },
+              { provider: 'custom', status: 'error', errorType: 'timeout' },
+              { provider: 'custom', status: 'error', errorType: 'unknown' }
+            ],
+            summary: {
+              zh: '模型路由未能完成目标理解。',
+              en: 'The model route could not complete goal understanding.'
+            },
+            action: {
+              zh: '请重试当前阶段。',
+              en: 'Retry this stage after checking provider settings.'
+            }
+          }
+        }
+      }
+    ];
+    const sent: string[] = [];
+    const card = PlanningOverviewCard({
+      messages,
+      status: 'MODEL_UNAVAILABLE',
+      onSend: (value) => sent.push(value),
+      t
+    });
+    const html = renderToStaticMarkup(card);
+
+    expect(html).toContain('Last Confirmed Facts');
+    expect(html).toContain('Target skill: Python');
+    expect(html).toContain('Waiting for model processing: web开发');
+    expect(html).not.toContain('Purpose: web开发');
+    expect(html).not.toContain('What should Python support?');
+    expect(html).not.toContain('Preferred framework');
+    expect(html).not.toContain('Web development');
+    expect(html).not.toContain('>Other<');
+    expect(html).not.toContain('Skip this step');
+    expect(html).toContain('The model route could not complete goal understanding.');
+    expect(html).toContain('DeepSeek: model output was truncated');
+    expect(html).not.toContain('Kimi: model request failed');
+    expect(html).toContain('GLM: authentication failed');
+    expect(html).toContain('OpenAI: API key is missing');
+    expect(html).toContain('Custom: service endpoint is unavailable');
+    expect(html).toContain('Custom: configured model is unavailable');
+    expect(html).toContain('Custom: request configuration is unsupported');
+    expect(html).toContain('Custom: balance or quota is insufficient');
+    expect(html).toContain('Custom: API key format is invalid');
+    expect(html).toContain('Custom: model output does not satisfy the structured contract');
+    expect(html).toContain('Custom: model service cannot be reached');
+    expect(html).toContain('Custom: model service is rate-limited');
+    expect(html).toContain('Custom: model service timed out');
+    expect(html).toContain('Custom: model service did not return a usable result');
+    expect(html).toContain('Planix already attempted one automatic recovery.');
+    expect(html).toContain('Retry this stage after checking provider settings.');
+
+    const retryButton = collectButtons(card).find((button) => button.props.children === 'Retry current stage');
+    retryButton?.props.onClick();
+    expect(sent).toEqual(['Retry the current deep planning session']);
+
+    const sendingHtml = renderToStaticMarkup(PlanningOverviewCard({
+      messages,
+      status: 'MODEL_UNAVAILABLE',
+      sending: true,
+      onSend: () => undefined,
+      t
+    }));
+    expect(sendingHtml).toContain('Retry current stage');
+    expect(sendingHtml).toContain('disabled=""');
+
+    const historicalHtml = renderToStaticMarkup(PlanningOverviewCard({
+      messages,
+      status: 'MODEL_UNAVAILABLE',
+      actionsEnabled: false,
+      onSend: () => undefined,
+      t
+    }));
+    expect(historicalHtml).not.toContain('Retry current stage');
+
+    const recoveredHtml = renderToStaticMarkup(PlanningOverviewCard({
+      messages: [
+        ...messages,
+        {
+          id: 'recovered-goal',
+          role: 'card' as const,
+          kind: 'goal_model_updated' as const,
+          content: '',
+          createdAt: 4,
+          payload: {
+            sessionId: 'blocked-session',
+            data: {
+              goalStatement: 'Learn Python for web development',
+              knownFacts: [
+                { key: 'skill', statement: 'Python' },
+                { key: 'purpose', statement: 'Web development' }
+              ],
+              artifactState: 'current'
+            }
+          }
+        },
+        {
+          id: 'recovered-completion',
+          role: 'card' as const,
+          kind: 'goal_completion_updated' as const,
+          content: '',
+          createdAt: 5,
+          payload: {
+            sessionId: 'blocked-session',
+            data: {
+              complete: true,
+              blockingUnknowns: [],
+              optionalUnknowns: [],
+              nextStage: 'strategy',
+              artifactState: 'current'
+            }
+          }
+        },
+        {
+          id: 'recovered-status',
+          role: 'card' as const,
+          kind: 'planning_session_status' as const,
+          content: 'waiting_design_approval',
+          createdAt: 6,
+          payload: {
+            sessionId: 'blocked-session',
+            status: 'waiting_design_approval',
+            businessStatus: 'strategy_pending',
+            runtimeStatus: 'idle'
+          }
+        }
+      ],
+      status: 'waiting_design_approval',
+      onSend: () => undefined,
+      t
+    }));
+    expect(recoveredHtml).toContain('<h3>Known Facts</h3>');
+    expect(recoveredHtml).toContain('Purpose: Web development');
+    expect(recoveredHtml).not.toContain('Last Confirmed Facts');
+    expect(recoveredHtml).not.toContain('Waiting for model processing');
+    expect(recoveredHtml).not.toContain('Retry current stage');
+  });
+
+  it('renders model-authored A-D clarification choices and submits choices or other text', () => {
+    const preRoutingHtml = renderToStaticMarkup(PlanningOverviewCard({
+      messages: [{
+        id: 'goal-understanding-options',
+        role: 'card',
+        kind: 'goal_understanding',
+        content: '你学习 Python 最主要想实现什么？',
+        createdAt: 0,
+        payload: {
+          intentState: 'ambiguous_goal',
+          understoodIntent: '你想学习 Python，但主要用途尚未确定。',
+          uncertainties: [{ field: 'purpose', impact: '用途会改变项目和知识重点。' }],
+          nextQuestion: '你学习 Python 最主要想实现什么？',
+          clarificationOptions: ['找工作或实习', '完成个人项目', '数据分析', '系统学习编程']
+        }
+      }],
+      onSend: () => undefined,
+      t
+    }));
+    expect(preRoutingHtml).toContain('A</span>找工作或实习');
+    expect(preRoutingHtml).toContain('<summary aria-disabled="false">Other</summary>');
+
+    const messages = [
+      {
+        id: 'goal-model-options',
+        role: 'card' as const,
+        kind: 'goal_model_updated' as const,
+        content: '',
+        createdAt: 1,
+        payload: {
+          sessionId: 's-options',
+          data: {
+            goalStatement: '学习 Python',
+            knownFacts: [{ key: 'skill', statement: 'Python' }],
+            decisionRelevantUnknowns: [{
+              key: 'purpose',
+              description: 'Python 学习用途',
+              whyItChangesThePlan: '用途会改变项目和知识重点。',
+              impact: 'strategy',
+              priority: 'blocking'
+            }]
+          }
+        }
+      },
+      {
+        id: 'goal-completion-options',
+        role: 'card' as const,
+        kind: 'goal_completion_updated' as const,
+        content: '',
+        createdAt: 2,
+        payload: {
+          sessionId: 's-options',
+          data: {
+            complete: false,
+            blockingUnknowns: [{
+              question: '你学习 Python 最主要想实现什么？',
+              impact: '用途会改变项目和知识重点。',
+              answerOptions: ['找工作或实习', '完成个人项目', '数据分析', '系统学习编程']
+            }],
+            optionalUnknowns: [],
+            nextStage: 'goal_clarification'
+          }
+        }
+      },
+      {
+        id: 'goal-status-options',
+        role: 'card' as const,
+        kind: 'planning_session_status' as const,
+        content: 'needs_goal_clarification',
+        createdAt: 3,
+        payload: {
+          sessionId: 's-options',
+          status: 'needs_goal_clarification',
+          businessStatus: 'goal_clarification',
+          runtimeStatus: 'idle'
+        }
+      }
+    ];
+    const sent: string[] = [];
+    const card = PlanningOverviewCard({
+      messages,
+      status: 'needs_goal_clarification',
+      onSend: (value) => sent.push(value),
+      t
+    });
+    const html = renderToStaticMarkup(card);
+    expect(html).toContain('A</span>找工作或实习');
+    expect(html).toContain('B</span>完成个人项目');
+    expect(html).toContain('C</span>数据分析');
+    expect(html).toContain('D</span>系统学习编程');
+    expect(html).toContain('<summary aria-disabled="false">Other</summary>');
+    expect(html).toContain('placeholder="Describe your situation"');
+
+    const interactiveChoices = ClarificationChoices({
+      options: ['找工作或实习', '完成个人项目', '数据分析', '系统学习编程'],
+      disabled: false,
+      onSend: (value) => sent.push(value),
+      t
+    });
+    const choiceButton = collectButtons(interactiveChoices).find((button) => (
+      renderToStaticMarkup(button).includes('完成个人项目')
+    ));
+    choiceButton?.props.onClick();
+    expect(sent).toEqual(['完成个人项目']);
+
+    const reset = vi.fn();
+    const removeAttribute = vi.fn();
+    const preventDefault = vi.fn();
+    vi.stubGlobal('FormData', class {
+      get() {
+        return '准备自动化办公';
+      }
+    });
+    const form = collectForms(interactiveChoices)[0];
+    form.props.onSubmit({
+      preventDefault,
+      currentTarget: { reset, closest: () => ({ removeAttribute }) }
+    });
+    vi.unstubAllGlobals();
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(reset).toHaveBeenCalledOnce();
+    expect(removeAttribute).toHaveBeenCalledWith('open');
+    expect(sent).toEqual(['完成个人项目', '准备自动化办公']);
+
+    const disabledHtml = renderToStaticMarkup(PlanningOverviewCard({
+      messages,
+      status: 'needs_goal_clarification',
+      sending: true,
+      actionsEnabled: false,
+      onSend: () => undefined,
+      t
+    }));
+    expect(disabledHtml).toContain('A</span>找工作或实习');
+    expect(disabledHtml).toContain('disabled=""');
+    expect(disabledHtml).toContain('aria-disabled="true"');
   });
 
   it('hides technical agent trace cards from the cognitive planning workspace', () => {
@@ -1242,7 +1663,7 @@ describe('Plan command cards', () => {
     expect(cardHtml).toContain('current deep planning');
     expect(threadHtml).toContain('Planning Workspace');
     expect(threadHtml).toContain('Design Plan');
-    expect(threadHtml).toContain('Goal model saved. Known facts saved. Waiting for the model to recover.');
+    expect(threadHtml).toContain('Your answer was saved but has not been applied as a confirmed fact.');
     expect(threadHtml).not.toContain('Deep planning unavailable');
     expect(threadHtml).not.toContain('MODEL_UNAVAILABLE');
     expect(threadHtml).not.toContain('Execution blueprint');

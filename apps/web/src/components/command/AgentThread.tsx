@@ -673,7 +673,7 @@ export function AgentThread({ messages, sending, onApprove, onSend, advancedAgen
         <article className={`command-message ${message.role}`} key={message.id}>
           {message.role !== 'card' && (
             <>
-              <span>{message.role === 'user' ? t('command.user') : t('command.assistant')}</span>
+              {message.role === 'assistant' ? <span>{t('command.assistant')}</span> : null}
               <p>{message.content || (message.streaming ? t('command.running') : '')}</p>
             </>
           )}

@@ -46,7 +46,7 @@ class ExecutionDesignerAgent:
     ) -> AgentResult[ExecutionBlueprint]:
         common = {
             "goalModel": goal.model_dump(by_alias=True),
-            "evidencePack": evidence.model_dump(by_alias=True),
+            "evidencePack": evidence.model_input_view(),
             "approvedStrategy": strategy.model_dump(by_alias=True),
             "repairInstructions": repair_instructions or [],
         }

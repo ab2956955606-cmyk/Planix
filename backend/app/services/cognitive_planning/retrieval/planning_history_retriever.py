@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ...memory_store import MemoryService
 from ..contracts import MemoryDocument, UserGoalModel
+from .memory_retriever import safe_provenance_metadata
 
 
 class PlanningHistoryRetriever:
@@ -23,8 +24,13 @@ class PlanningHistoryRetriever:
                 kind=item.kind,
                 title=item.title,
                 summary=item.summary,
-                content=item.content[:2000],
+                content="",
                 tags=item.tags,
+                contextRole="historical_context",
+                source=item.source,
+                sourceId=item.source_id,
+                sourceKey=item.source_key,
+                metadata=safe_provenance_metadata(item.metadata),
             )
             for item in items
         ]

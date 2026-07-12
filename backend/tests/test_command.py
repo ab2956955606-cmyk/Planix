@@ -5,7 +5,17 @@ from types import SimpleNamespace
 import pytest
 
 from app.db import get_conn, init_db
-from app.schemas import CommandDecision, GoalUnderstandingResult, MemoryCreate, ModelUsage, RefinedTask
+from app.schemas import (
+    AgentDecision,
+    AgentMessage,
+    CommandDecision,
+    GoalUnderstandingResult,
+    MemoryCreate,
+    ModelRouteAttempt,
+    ModelUsage,
+    PlanningSessionResponse,
+    RefinedTask,
+)
 from app.services.command_agent import CommandAgentService, detect_command_intent, resolve_command_intent
 from app.services.memory_store import MemoryService
 
@@ -259,7 +269,9 @@ def _assert_goal_understanding_stops_routing(client, response, *, location: str 
         if message.get("kind") == "goal_understanding"
     ]
     assert len(understanding_cards) == 1
-    assert _goal_understanding_payload(understanding_cards[0])["intentState"] == payload["intentState"]
+    replay_payload = _goal_understanding_payload(understanding_cards[0])
+    assert replay_payload["intentState"] == payload["intentState"]
+    assert replay_payload.get("clarificationOptions", []) == payload.get("clarificationOptions", [])
 
     with get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 0
@@ -282,6 +294,7 @@ def _ambiguous_destination_result(location: str) -> GoalUnderstandingResult:
             ],
             "consistencyWarnings": [],
             "nextQuestion": f"你去{location}主要是旅游、工作、学习、长期居住，还是其他目的？",
+            "clarificationOptions": ["旅游", "工作", "学习", "长期居住"],
             "confidence": 0.56,
         }
     )
@@ -461,6 +474,7 @@ def test_goal_understanding_beijing_asks_purpose_without_unknown_routing(client,
     ]
     assert "目的" in payload["nextQuestion"]
     assert "旅游" in payload["nextQuestion"]
+    assert payload["clarificationOptions"] == ["旅游", "工作", "学习", "长期居住"]
     assert len(service.calls) == 1
 
 
@@ -495,6 +509,29 @@ def test_failed_goal_understanding_does_not_fall_through_to_planning(client, mon
                     taskType="goal_understanding",
                     fallbackUsed=False,
                     localFallbackAllowed=False,
+                    attempts=[
+                        ModelRouteAttempt(
+                            provider="deepseek",
+                            model="deepseek-v4-flash",
+                            status="error",
+                            errorType="auth_error",
+                            latencyMs=1,
+                        ),
+                        ModelRouteAttempt(
+                            provider="kimi",
+                            model="kimi-k2.7-code",
+                            status="skipped",
+                            errorType="missing_api_key",
+                            latencyMs=0,
+                        ),
+                        ModelRouteAttempt(
+                            provider="zhipu_glm",
+                            model="glm-4-flash",
+                            status="error",
+                            errorType="auth_error",
+                            latencyMs=1,
+                        ),
+                    ],
                 ),
                 source="model_unavailable",
                 error="goal understanding model unavailable",
@@ -515,9 +552,14 @@ def test_failed_goal_understanding_does_not_fall_through_to_planning(client, mon
         and event["source"] == "model_unavailable"
         for event in events
     )
-    assert any(event["type"] == "assistant_delta" and "没有启动规划" in event["text"] for event in events)
+    assistant = next(event["text"] for event in events if event["type"] == "assistant_delta")
+    assert "没有启动规划" in assistant
+    assert "DeepSeek、GLM 的 API Key 无效或已过期" in assistant
+    assert "Kimi 尚未配置 Key" in assistant
+    assert "无法可靠理解" not in assistant
     assert not any(event["type"] == "command_decision" for event in events)
     assert not any(event["type"] == "planning_session_started" for event in events)
+    assert not any(event["type"] == "goal_understanding" for event in events)
     with get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) AS count FROM planning_sessions").fetchone()["count"] == 0
         assert conn.execute("SELECT COUNT(*) AS count FROM command_drafts").fetchone()["count"] == 0
@@ -1064,7 +1106,8 @@ def test_deep_planning_execution_confirmation_gate_and_ready_noop(client, monkey
     assert not any(event["type"] == "command_decision" for event in repeat_events)
     assert not any(event["type"] == "learning_update" for event in repeat_events)
     assert not any(event["type"] == "planning_session_started" for event in repeat_events)
-    assert "agent_decision" in repeat_types
+    assert "agent_decision" not in repeat_types
+    assert "agent_message" not in repeat_types
     assert "user_need_contract" not in repeat_types
     assert "memory_insight_brief" not in repeat_types
     assert "resource_brief" not in repeat_types
@@ -1081,6 +1124,125 @@ def test_deep_planning_execution_confirmation_gate_and_ready_noop(client, monkey
     )
     feedback_events = _events(positive_feedback)
     assert any(event["type"] == "learning_update" for event in feedback_events)
+
+
+def test_planning_trace_snapshot_is_incremental_after_model_recovery(client):
+    service = CommandAgentService()
+    thread_id = service.ensure_thread(title="incremental planning trace")
+    session_id = "trace-session"
+    timestamp = "2026-07-12T08:00:00Z"
+    failed_decision = AgentDecision(
+        id="decision-auth-failure",
+        sessionId=session_id,
+        agent="Evidence Agent",
+        decision="block",
+        reason="Provider authentication failed.",
+        userVisibleSummary="Evidence stopped while provider settings were unavailable.",
+        createdAt=timestamp,
+    )
+    failed_message = AgentMessage(
+        id="message-auth-failure",
+        sessionId=session_id,
+        fromAgent="Evidence Agent",
+        toAgent="Evidence Agent",
+        messageType="block",
+        reason="Provider authentication failed.",
+        payloadJson={"errorType": "auth_error"},
+        createdAt=timestamp,
+    )
+    failed = PlanningSessionResponse(
+        sessionId=session_id,
+        threadId=thread_id,
+        entryPoint="p_mode",
+        status="MODEL_UNAVAILABLE",
+        businessStatus="evidence_pending",
+        runtimeStatus="blocked_model",
+        userInput="Learn Python for data analysis",
+        decisions=[failed_decision],
+        messages=[failed_message],
+        version=1,
+        createdAt=timestamp,
+        updatedAt=timestamp,
+    )
+
+    first_events = [json.loads(line) for line in service._stream_planning_session_snapshot(thread_id, failed)]
+    assert [event["data"]["id"] for event in first_events if event["type"] == "agent_decision"] == [
+        failed_decision.id
+    ]
+    assert [event["data"]["id"] for event in first_events if event["type"] == "agent_message"] == [
+        failed_message.id
+    ]
+
+    success_decision = AgentDecision(
+        id="decision-evidence-success",
+        sessionId=session_id,
+        agent="Evidence Agent",
+        decision="approve",
+        reason="Current evidence is sufficient for strategy design.",
+        userVisibleSummary="Evidence recovered successfully.",
+        createdAt=timestamp,
+    )
+    success_message = AgentMessage(
+        id="message-evidence-handoff",
+        sessionId=session_id,
+        fromAgent="Evidence Agent",
+        toAgent="Strategy Agent",
+        messageType="handoff",
+        reason="Evidence is sufficient to compare strategies.",
+        resolved=True,
+        createdAt=timestamp,
+    )
+    recovered = failed.model_copy(
+        update={
+            "status": "waiting_design_approval",
+            "business_status": "strategy_pending",
+            "runtime_status": "idle",
+            "decisions": [failed_decision, success_decision],
+            "messages": [failed_message, success_message],
+            "version": 2,
+        }
+    )
+
+    recovered_events = [
+        json.loads(line) for line in service._stream_planning_session_snapshot(thread_id, recovered)
+    ]
+    assert [
+        event["data"]["id"] for event in recovered_events if event["type"] == "agent_decision"
+    ] == [success_decision.id]
+    assert [
+        event["data"]["id"] for event in recovered_events if event["type"] == "agent_message"
+    ] == [success_message.id]
+    recovered_payload = json.dumps(recovered_events)
+    assert "auth-failure" not in recovered_payload
+    assert "auth_error" not in recovered_payload
+    assert any(event["type"] == "planning_session_status" for event in recovered_events)
+
+    with get_conn() as conn:
+        trace_cards_after_recovery = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM command_messages
+            WHERE thread_id = ? AND kind IN ('agent_decision', 'agent_message')
+            """,
+            (thread_id,),
+        ).fetchone()["count"]
+    assert trace_cards_after_recovery == 4
+
+    repeated_events = [
+        json.loads(line) for line in service._stream_planning_session_snapshot(thread_id, recovered)
+    ]
+    assert not any(event["type"] in {"agent_decision", "agent_message"} for event in repeated_events)
+    assert any(event["type"] == "planning_session_status" for event in repeated_events)
+    with get_conn() as conn:
+        trace_cards_after_repeat = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM command_messages
+            WHERE thread_id = ? AND kind IN ('agent_decision', 'agent_message')
+            """,
+            (thread_id,),
+        ).fetchone()["count"]
+    assert trace_cards_after_repeat == trace_cards_after_recovery
 
 
 def test_deep_planning_topic_switch_requires_restart_confirmation(client, monkeypatch):

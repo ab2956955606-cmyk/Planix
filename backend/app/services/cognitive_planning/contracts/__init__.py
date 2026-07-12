@@ -1,9 +1,11 @@
 from .critique import CriticRepairRequest, CritiqueDimensions, CritiqueIssue, PlanCritiqueReport
 from .evidence import (
+    EVIDENCE_AUTHORITY_POLICY_VERSION,
     CalendarConstraint,
     CalendarReality,
     DomainEvidence,
     EvidenceGap,
+    EvidenceAuthorityPolicy,
     EvidenceInput,
     EvidencePack,
     EvidencePlanningRule,
@@ -12,6 +14,7 @@ from .evidence import (
     MemoryDocument,
     ResearchPolicy,
     UserEvidence,
+    apply_evidence_authority_policy,
 )
 from .execution import (
     ExecutionBlueprint,

@@ -72,6 +72,8 @@ class CognitivePlanningState(TypedDict, total=False):
     goal_model: UserGoalModel
     goal_completion: GoalCompletionResult
     evidence_pack: EvidencePack
+    legacy_evidence_pack: EvidencePack
+    evidence_requires_authority_refresh: bool
     reality_assessment: Any
     strategy_portfolio: StrategyPortfolio
     approved_strategy_id: str

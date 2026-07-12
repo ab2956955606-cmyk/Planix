@@ -16,13 +16,23 @@ ContractT = TypeVar("ContractT", bound=BaseModel)
 
 
 TOKEN_ENV_BY_TASK = {
-    "planning_goal_model": ("PLANIX_GOAL_MODEL_MAX_TOKENS", 1800),
-    "planning_reality": ("PLANIX_REALITY_MAX_TOKENS", 1800),
-    "planning_evidence": ("PLANIX_EVIDENCE_MAX_TOKENS", 2200),
-    "planning_strategy": ("PLANIX_STRATEGY_MAX_TOKENS", 2400),
-    "planning_execution": ("PLANIX_EXECUTION_MAX_TOKENS", 4000),
-    "planning_critique": ("PLANIX_CRITIQUE_MAX_TOKENS", 2200),
-    "planning_learning": ("PLANIX_LEARNING_MAX_TOKENS", 1800),
+    "planning_goal_model": ("PLANIX_GOAL_MODEL_MAX_TOKENS", 5400),
+    "planning_reality": ("PLANIX_REALITY_MAX_TOKENS", 5400),
+    "planning_evidence": ("PLANIX_EVIDENCE_MAX_TOKENS", 6600),
+    "planning_strategy": ("PLANIX_STRATEGY_MAX_TOKENS", 7200),
+    "planning_execution": ("PLANIX_EXECUTION_MAX_TOKENS", 12000),
+    "planning_critique": ("PLANIX_CRITIQUE_MAX_TOKENS", 6600),
+    "planning_learning": ("PLANIX_LEARNING_MAX_TOKENS", 5400),
+}
+
+TOKEN_CAP_BY_TASK = {
+    "planning_goal_model": 10800,
+    "planning_reality": 10800,
+    "planning_evidence": 13200,
+    "planning_strategy": 14400,
+    "planning_execution": 24000,
+    "planning_critique": 13200,
+    "planning_learning": 10800,
 }
 
 
@@ -88,8 +98,9 @@ class CognitiveModelClient:
         temperature: float = 0.2,
     ) -> AgentResult[ContractT]:
         env_name, default_tokens = TOKEN_ENV_BY_TASK[task_type]
+        task_token_cap = TOKEN_CAP_BY_TASK[task_type]
         try:
-            max_tokens = max(256, min(int(os.getenv(env_name, default_tokens)), 8000))
+            max_tokens = max(256, min(int(os.getenv(env_name, default_tokens)), task_token_cap))
         except ValueError:
             max_tokens = default_tokens
         schema = contract_type.model_json_schema(by_alias=True)
@@ -106,7 +117,7 @@ class CognitiveModelClient:
             system,
             user,
             max_tokens=max_tokens,
-            max_token_cap=max_tokens,
+            max_token_cap=task_token_cap,
             temperature=temperature,
             response_format_json=True,
             task_type=task_type,

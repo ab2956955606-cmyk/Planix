@@ -108,6 +108,59 @@ def test_scheduler_owns_resume_critic_and_repair_decisions() -> None:
     assert repair.next_node == "repair"
 
 
+@pytest.mark.parametrize("reason_code", ["reality_judgment", "evidence_judgment"])
+def test_non_critic_user_wait_never_records_a_critic_failure(runtime_db, reason_code: str) -> None:
+    session_id = _session(f"harness-{reason_code}")
+    harness = HarnessRuntime()
+
+    selected = harness.record_scheduler_decision(
+        {
+            "session_id": session_id,
+            "planning_mode": "model_backed",
+            "goal_completion": SimpleNamespace(complete=True, blocking_unknowns=[]),
+        },
+        SchedulerDecision(
+            action=SchedulerAction.WAIT_USER,
+            next_node="wait_for_goal_answer",
+            reason_code=reason_code,
+        ),
+    )
+
+    assert selected == "wait_for_goal_answer"
+    policy = HarnessStateRepository().recover(session_id).last_policy_decision
+    assert policy is not None
+    assert policy.subject == "user_question"
+    assert policy.action == "wait_user"
+    assert policy.required_gates == ()
+    assert policy.failed_gates == ()
+
+
+def test_critic_user_wait_keeps_the_critic_failure_gate(runtime_db) -> None:
+    session_id = _session("harness-critic-wait")
+    harness = HarnessRuntime()
+
+    selected = harness.record_scheduler_decision(
+        {
+            "session_id": session_id,
+            "planning_mode": "model_backed",
+            "goal_completion": SimpleNamespace(complete=True, blocking_unknowns=[]),
+        },
+        SchedulerDecision(
+            action=SchedulerAction.WAIT_USER,
+            next_node="wait_for_execution_approval",
+            reason_code="critic_blocked",
+        ),
+    )
+
+    assert selected == "wait_for_execution_approval"
+    policy = HarnessStateRepository().recover(session_id).last_policy_decision
+    assert policy is not None
+    assert policy.subject == "critic_review"
+    assert policy.action == "wait_user"
+    assert policy.required_gates == ("critic",)
+    assert policy.failed_gates == ("critic",)
+
+
 def test_every_harness_agent_declares_artifact_contract_permissions_and_failures() -> None:
     registry = build_cognitive_agent_registry()
     contracts = {item.agent_id: item for item in registry.list()}

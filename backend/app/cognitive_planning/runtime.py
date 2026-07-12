@@ -114,7 +114,15 @@ class CognitiveOSRuntime(Phase6Runtime):
             raw = json_object(row["reality_assessment_json"])
             if raw:
                 state["reality_assessment"] = RealityAssessment.model_validate(raw)
-        return self.harness.restore_graph_state(state)
+        state = self.harness.restore_graph_state(state)
+        # Authority migration is a safety gate, so it has higher priority than
+        # an older Harness checkpoint (for example pending_agent=strategy).
+        if state.get("evidence_requires_authority_refresh"):
+            state["user_action"] = "continue_current_stage"
+            state["business_status"] = "evidence_pending"
+            state["runtime_status"] = "running"
+            state["resume_node"] = "evidence"
+        return state
 
     def _invoke(self, state: CognitivePlanningState) -> PlanningSessionResponse:
         result = self.harness.invoke(
@@ -313,6 +321,7 @@ class CognitiveOSRuntime(Phase6Runtime):
                 "uncertainties",
                 "consistencyWarnings",
                 "nextQuestion",
+                "clarificationOptions",
                 "confidence",
             }
             pre_extracted_facts["goalUnderstanding"] = {

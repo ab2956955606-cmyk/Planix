@@ -31,6 +31,11 @@ by a noun. knownFacts must contain only information explicitly stated by the use
 uncertainties must name information whose answer changes strategy, feasibility, schedule, resources, safety, or
 success criteria.
 
+A direct desired change such as "我要学 Python" or "I want to learn Python" is clear enough to enter Goal
+Intelligence even when purpose, current level, schedule, or duration is not yet stated. Those details belong to the
+next planning stage unless the meaning of the desired change itself is genuinely ambiguous. Never describe a model
+or provider failure as if the user's wording were the problem.
+
 Check semantic consistency before accepting a stated purpose. If a supplied purpose, deliverable, or success signal
 does not fit the apparent activity or contradicts other facts, do not normalize it, silently reinterpret it, or
 blindly accept/store it. Put a concise user-visible explanation in consistencyWarnings, return ambiguous_goal, and
@@ -43,6 +48,11 @@ uncertain. Use intentState="normal_chat" for discussion or questions that are no
 goal. Use intentState="command" for operational requests such as querying, saving, modifying, deleting, navigating,
 approving, or executing existing Planix data. There is no unknown state. Use the user's language for understoodIntent,
 consistencyWarnings, uncertainty descriptions, and nextQuestion.
+
+For ambiguous_goal, state what is already understood and why the remaining distinction changes planning. When the
+question has a small honest answer space, return two to four concise, mutually exclusive clarificationOptions in the
+user's language. Do not include "Other"; the interface adds it. Leave clarificationOptions empty for open-ended
+questions and for clear_goal, normal_chat, or command.
 
 When priorGoalUnderstanding is present, treat it as the exact prior question, hypotheses, and known facts. Resolve
 short answers such as "第二个" against those prior options instead of guessing from the latest message alone.
@@ -302,6 +312,7 @@ def _useful_question(value: str | None) -> bool:
 def _normalize_result(result: GoalUnderstandingResult) -> GoalUnderstandingResult:
     possible_domains = _dedupe_strings(result.possible_domains)
     consistency_warnings = _dedupe_strings(result.consistency_warnings)
+    clarification_options = _dedupe_strings(result.clarification_options)[:4]
     uncertainties = [
         GoalUnderstandingUncertainty(field=item.field.strip(), impact=item.impact.strip())
         for item in result.uncertainties
@@ -321,6 +332,8 @@ def _normalize_result(result: GoalUnderstandingResult) -> GoalUnderstandingResul
     next_question = str(result.next_question or "").strip() or None
     if intent_state == "ambiguous_goal" and not _useful_question(next_question):
         raise ValueError("ambiguous goal understanding requires a model-authored next question")
+    if intent_state != "ambiguous_goal":
+        clarification_options = []
     if consistency_warnings and not uncertainties:
         raise ValueError("consistency warnings require a decision-relevant uncertainty")
 
@@ -362,6 +375,7 @@ def _normalize_result(result: GoalUnderstandingResult) -> GoalUnderstandingResul
         uncertainties=uncertainties,
         consistencyWarnings=consistency_warnings,
         nextQuestion=next_question,
+        clarificationOptions=clarification_options,
         confidence=result.confidence,
     )
 

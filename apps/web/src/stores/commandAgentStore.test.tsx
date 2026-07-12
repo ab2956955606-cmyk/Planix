@@ -38,6 +38,11 @@ function renderMessageKinds(): string {
   return renderToStaticMarkup(<MessageKindsProbe />);
 }
 
+function MessagePayloadsProbe(): ReactElement {
+  const command = useCommandAgent();
+  return <span>{JSON.stringify(command.messages.map((message) => message.payload))}</span>;
+}
+
 function AdvancedTraceProbe(): ReactElement {
   const command = useCommandAgent();
   return <span>{String(command.advancedAgentTrace)}</span>;
@@ -181,5 +186,58 @@ describe('commandAgentStore workbench mode', () => {
     expect(html).toContain('execution_plan_draft');
     expect(html).toContain('learning_update');
     expect(html).toContain('planning_session_status');
+  });
+
+  it('preserves recoverable planning failure and artifact state fields', async () => {
+    apiMocks.runCommandChat.mockImplementationOnce(async (_payload, handlers) => {
+      handlers.onEvent({
+        type: 'goal_model_updated',
+        sessionId: 'session-failure',
+        data: {
+          goalStatement: 'Learn Python',
+          artifactState: 'last_confirmed'
+        }
+      });
+      handlers.onEvent({
+        type: 'goal_completion_updated',
+        sessionId: 'session-failure',
+        data: {
+          complete: false,
+          blockingUnknowns: [],
+          optionalUnknowns: [],
+          nextStage: 'goal_clarification',
+          artifactState: 'last_confirmed'
+        }
+      });
+      handlers.onEvent({
+        type: 'planning_session_status',
+        sessionId: 'session-failure',
+        status: 'MODEL_UNAVAILABLE',
+        businessStatus: 'goal_clarification',
+        runtimeStatus: 'blocked_model',
+        pendingInput: { text: 'web开发', applied: false },
+        modelFailure: {
+          stage: 'goal_intelligence',
+          resumeNode: 'goal_intelligence',
+          retryable: true,
+          automaticRetryAttempted: true,
+          attempts: [{ provider: 'DeepSeek', status: 'error', errorType: 'model_output_truncated' }],
+          summary: { zh: '目标理解失败', en: 'Goal understanding failed' },
+          action: { zh: '重试当前阶段', en: 'Retry the current stage' }
+        }
+      });
+      handlers.onEvent({ type: 'done', threadId: 'thread-failure' });
+    });
+    apiMocks.listCommandThreads.mockResolvedValue([]);
+
+    commandAgentActions.newThread();
+    await commandAgentActions.sendCommand('web开发', (key) => key);
+
+    const html = renderToStaticMarkup(<MessagePayloadsProbe />);
+    expect(html).toContain('last_confirmed');
+    expect(html).toContain('web开发');
+    expect(html).toContain('goal_intelligence');
+    expect(html).toContain('model_output_truncated');
+    expect(html).toContain('automaticRetryAttempted');
   });
 });

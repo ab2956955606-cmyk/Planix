@@ -35,7 +35,7 @@ class StrategyArchitectAgent:
             system=STRATEGY_SYSTEM,
             payload=StrategyInput(
                 goalModel=goal,
-                evidencePack=evidence,
+                evidencePack=evidence.decision_view(),
                 previousStrategy=previous,
                 userFeedback=feedback,
             ).model_dump(by_alias=True),

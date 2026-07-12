@@ -145,7 +145,30 @@ class CognitivePlanningRuntime:
             stage = str(metadata.get("currentStage") or "")
             if stage in RESUME_NODE_BY_STAGE:
                 state["resume_node"] = RESUME_NODE_BY_STAGE[stage]
+        evidence = state.get("evidence_pack")
+        if evidence is not None and not evidence.is_authority_normalized:
+            state["legacy_evidence_pack"] = evidence
+            state["evidence_requires_authority_refresh"] = True
+            for key in (
+                "evidence_pack",
+                "strategy_portfolio",
+                "execution_blueprint",
+                "critique_report",
+                "approved_strategy_id",
+            ):
+                state.pop(key, None)
+            state["user_action"] = "continue_current_stage"
+            state["business_status"] = "evidence_pending"
+            state["runtime_status"] = "running"
+            state["resume_node"] = "evidence"
         return state
+
+    def _resume_if_legacy_evidence(self, row) -> PlanningSessionResponse | None:
+        state = self._state_from_row(row, action="continue_current_stage")
+        if not state.get("evidence_requires_authority_refresh"):
+            return None
+        self.persistence.update(row["id"], runtime_status="running", business_status="evidence_pending")
+        return self._invoke(state)
 
     def _invoke(self, state: CognitivePlanningState) -> PlanningSessionResponse:
         graph = build_cognitive_graph(self)
@@ -245,6 +268,20 @@ class CognitivePlanningRuntime:
 
     # LangGraph nodes
     def session_guard_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
+        if state.get("evidence_requires_authority_refresh"):
+            self.persistence.update(
+                state["session_id"],
+                business_status="evidence_pending",
+                runtime_status="running",
+                clear=(
+                    "evidence_pack",
+                    "strategy_portfolio",
+                    "execution_blueprint",
+                    "critique_report",
+                    "planning_learning_update",
+                    "approved_strategy_id",
+                ),
+            )
         return state
 
     def wait_for_goal_answer_node(self, state: CognitivePlanningState) -> CognitivePlanningState:
@@ -838,12 +875,16 @@ class CognitivePlanningRuntime:
         if row["status"] in {"cancelled", "written_to_calendar"}:
             return self.adapter.from_row(row)
         state = self._state_from_row(row, action="continue_current_stage")
-        if state.get("runtime_status") == "idle" and row["status"] in {
+        if (
+            not state.get("evidence_requires_authority_refresh")
+            and state.get("runtime_status") == "idle"
+            and row["status"] in {
             "waiting_design_approval",
             "waiting_execution_approval",
             "ready_to_write_calendar",
             "waiting_calendar_write_approval",
-        }:
+            }
+        ):
             return self.adapter.from_row(row)
         state["runtime_status"] = "running"
         state["planning_mode"] = "model_backed"
@@ -868,6 +909,9 @@ class CognitivePlanningRuntime:
         row = self.persistence.get_row(session_id)
         if not row:
             raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        resumed = self._resume_if_legacy_evidence(row)
+        if resumed is not None:
+            return resumed
         if row["status"] != "waiting_design_approval" or not json_object(row["strategy_portfolio_json"]):
             raise HTTPException(status_code=409, detail={"message": "strategy is not waiting for approval"})
         portfolio = StrategyPortfolio.model_validate(json_object(row["strategy_portfolio_json"]))
@@ -892,6 +936,9 @@ class CognitivePlanningRuntime:
         row = self.persistence.get_row(session_id)
         if not row:
             raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        resumed = self._resume_if_legacy_evidence(row)
+        if resumed is not None:
+            return resumed
         if row["status"] != "waiting_execution_approval":
             raise HTTPException(status_code=409, detail={"message": "execution plan is not waiting for approval"})
         state = self._state_from_row(row, action="approve_execution")
@@ -921,6 +968,9 @@ class CognitivePlanningRuntime:
         row = self.persistence.get_row(session_id)
         if not row:
             raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        resumed = self._resume_if_legacy_evidence(row)
+        if resumed is not None:
+            return resumed
         if row["status"] != "ready_to_write_calendar":
             raise HTTPException(
                 status_code=409,
@@ -937,6 +987,13 @@ class CognitivePlanningRuntime:
         row = self.persistence.get_row(session_id)
         if not row:
             raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        if self._state_from_row(row, action="continue_current_stage").get(
+            "evidence_requires_authority_refresh"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Evidence authority refresh is required before Calendar approval"},
+            )
         if row["status"] != "waiting_calendar_write_approval":
             raise HTTPException(status_code=409, detail={"message": "Calendar write is not waiting for approval"})
         if not execution_artifact_ref:
@@ -975,6 +1032,13 @@ class CognitivePlanningRuntime:
         row = self.persistence.get_row(session_id)
         if not row:
             raise HTTPException(status_code=404, detail={"message": "planning session not found"})
+        if self._state_from_row(row, action="continue_current_stage").get(
+            "evidence_requires_authority_refresh"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Evidence authority refresh is required before Calendar write"},
+            )
         if not execution_artifact_ref:
             raise HTTPException(status_code=409, detail={"message": "Calendar action is not bound to an Execution artifact"})
         try:

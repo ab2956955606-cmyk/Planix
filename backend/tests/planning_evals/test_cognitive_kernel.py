@@ -21,6 +21,7 @@ from app.services.cognitive_planning.agents import (
     StrategyArchitectAgent,
 )
 from app.services.cognitive_planning.contracts import (
+    EVIDENCE_AUTHORITY_POLICY_VERSION,
     CalendarReality,
     ConversationTurn,
     CritiqueDimensions,
@@ -29,6 +30,8 @@ from app.services.cognitive_planning.contracts import (
     DomainEvidence,
     EvidencePack,
     EvidenceGap,
+    EvidenceAuthorityPolicy,
+    EvidenceInput,
     EvidencePlanningRule,
     EvidenceResourceCandidate,
     EvidenceResourceNeed,
@@ -54,7 +57,9 @@ from app.services.cognitive_planning.contracts import (
     StrategyRationale,
     StrategyUserDecision,
     UserGoalModel,
+    UserEvidence,
     UserModelHypothesisDraft,
+    apply_evidence_authority_policy,
 )
 from app.services.cognitive_planning.orchestration.runtime import CognitivePlanningRuntime
 from app.services.cognitive_planning.orchestration.graph import build_cognitive_graph
@@ -63,13 +68,25 @@ from app.services.cognitive_planning.evaluation import (
     DeterministicGuardError,
     validate_execution_invariants,
 )
-from app.services.cognitive_planning.retrieval import PlanningHypothesisRepository, ResourceResearch
+from app.services.cognitive_planning.retrieval import (
+    CognitiveMemoryRetriever,
+    PlanningHistoryRetriever,
+    PlanningHypothesisRepository,
+    ResourceResearch,
+)
 from app.services.llm import LlmError, LlmResult
 from app.services.deep_planning import DeepPlanningService, LegacyTemplatePlanningService
 from app.services.planning_agent_runtime import PlanningAgentRuntime
 from app.services.memory_store import MemoryService
 from app.services.ai_settings import get_model_routing_rule
 from app.cognitive_planning import CognitiveOSRuntime
+from app.cognitive_planning.agents import (
+    CriticAgent as CognitiveCriticAgent,
+    EvidenceAgent as CognitiveEvidenceAgent,
+    ExecutionAgent as CognitiveExecutionAgent,
+    StrategyAgent as CognitiveStrategyAgent,
+)
+from app.cognitive_planning.agents.reality_agent import REALITY_SYSTEM
 from app.cognitive_planning.evaluation import CognitiveCriticRuleError, validate_execution_blueprint
 from app.cognitive_planning.memory import UserModelMemoryRepository
 
@@ -205,13 +222,16 @@ class StubCognitiveModel:
                     rule=learned[0] if learned else "Keep workload aligned with the user's stated time budget.",
                     strength="hard",
                     evidence=["user statement"],
+                    sourceIds=["current_goal:known_fact:input"],
+                    sourceContext="current_goal",
                     confidence=0.9,
                 )
             ],
             domainEvidence=[
                 DomainEvidence(
                     claim=f"{domain} requires domain-specific evidence and risk handling.",
-                    sourceType="reasoned_from_goal",
+                    sourceType="model_knowledge",
+                    sourceContext="model_knowledge",
                     relevance="Prevents cross-domain templates.",
                     credibility=0.85,
                 )
@@ -221,7 +241,8 @@ class StubCognitiveModel:
                 EvidenceResourceCandidate(
                     title=f"{domain} primary evidence source",
                     type="official_doc" if domain in {"python_career", "software_project"} else "coach_or_human",
-                    sourceRef="https://example.invalid/reference" if domain in {"python_career", "software_project"} else None,
+                    sourceRef=None,
+                    sourceContext="model_knowledge",
                     howItHelps="Supports the exact first action and its safety boundary.",
                     userFit="Matches the user's goal and current constraints.",
                     limitations=["Availability must be confirmed."],
@@ -546,6 +567,10 @@ class EvidenceBlockingModel(StubCognitiveModel):
                         description="A safety-critical prerequisite is unknown.",
                         consequence="A credible strategy cannot be selected yet.",
                         proposedResolution="ask_user",
+                        blockingBasis="new_evidence",
+                        impact="safety",
+                        sourceContext="new_evidence",
+                        supportingSourceIds=["current_goal:known_fact:input"],
                     )
                 ],
             }
@@ -688,8 +713,106 @@ def test_cognitive_stage_uses_its_configured_token_cap(monkeypatch):
         contract_type=UserGoalModel,
     )
     assert llm.calls[0]["max_tokens"] == 777
-    assert llm.calls[0]["max_token_cap"] == 777
+    assert llm.calls[0]["max_token_cap"] == 10800
     assert llm.calls[0]["task_type"] == "planning_goal_model"
+
+
+@pytest.mark.parametrize(("configured_tokens", "expected_tokens"), [(None, 5400), ("20000", 10800)])
+def test_goal_model_has_5400_default_and_independent_10800_hard_cap(monkeypatch, configured_tokens, expected_tokens):
+    artifact = StubCognitiveModel()._goal({"conversationHistory": [{"role": "user", "content": "30澶╁噯澶?Python AI 瀹炰範"}]})
+    llm = FakeLlm(result=LlmResult(content=artifact.model_dump_json(by_alias=True), provider="deepseek", model="stub"))
+    if configured_tokens is None:
+        monkeypatch.delenv("PLANIX_GOAL_MODEL_MAX_TOKENS", raising=False)
+    else:
+        monkeypatch.setenv("PLANIX_GOAL_MODEL_MAX_TOKENS", configured_tokens)
+
+    CognitiveModelClient(llm=llm).complete_contract(
+        stage="goal_modeling",
+        task_type="planning_goal_model",
+        feature="test_goal_token_budget",
+        system="Return JSON.",
+        payload={"conversationHistory": []},
+        contract_type=UserGoalModel,
+    )
+
+    assert llm.calls[0]["max_tokens"] == expected_tokens
+    assert llm.calls[0]["max_token_cap"] == 10800
+
+
+def test_strategy_cognitive_stage_uses_expanded_budget_and_cap(monkeypatch):
+    artifact = StubCognitiveModel()._strategy({"goalModel": {"domain": "python_career"}})
+    llm = FakeLlm(result=LlmResult(content=artifact.model_dump_json(by_alias=True), provider="deepseek", model="stub"))
+    monkeypatch.delenv("PLANIX_STRATEGY_MAX_TOKENS", raising=False)
+
+    CognitiveModelClient(llm=llm).complete_contract(
+        stage="strategy",
+        task_type="planning_strategy",
+        feature="test_strategy_token_budget",
+        system="Return JSON.",
+        payload={},
+        contract_type=StrategyPortfolio,
+    )
+
+    assert llm.calls[0]["max_tokens"] == 7200
+    assert llm.calls[0]["max_token_cap"] == 14400
+
+
+@pytest.mark.parametrize(
+    ("task_type", "env_name", "default_tokens", "hard_cap"),
+    [
+        ("planning_goal_model", "PLANIX_GOAL_MODEL_MAX_TOKENS", 5400, 10800),
+        ("planning_reality", "PLANIX_REALITY_MAX_TOKENS", 5400, 10800),
+        ("planning_evidence", "PLANIX_EVIDENCE_MAX_TOKENS", 6600, 13200),
+        ("planning_strategy", "PLANIX_STRATEGY_MAX_TOKENS", 7200, 14400),
+        ("planning_execution", "PLANIX_EXECUTION_MAX_TOKENS", 12000, 24000),
+        ("planning_critique", "PLANIX_CRITIQUE_MAX_TOKENS", 6600, 13200),
+        ("planning_learning", "PLANIX_LEARNING_MAX_TOKENS", 5400, 10800),
+    ],
+)
+def test_all_cognitive_stages_use_task_budget_env_override_and_hard_cap(
+    monkeypatch,
+    task_type,
+    env_name,
+    default_tokens,
+    hard_cap,
+):
+    artifact = StubCognitiveModel()._goal(
+        {"conversationHistory": [{"role": "user", "content": "Learn Python for data analysis"}]}
+    )
+    llm = FakeLlm(
+        result=LlmResult(
+            content=artifact.model_dump_json(by_alias=True),
+            provider="deepseek",
+            model="stub",
+        )
+    )
+    client = CognitiveModelClient(llm=llm)
+
+    def invoke(feature: str):
+        client.complete_contract(
+            stage="token_budget",
+            task_type=task_type,
+            feature=feature,
+            system="Return JSON.",
+            payload={"conversationHistory": []},
+            contract_type=UserGoalModel,
+        )
+
+    monkeypatch.delenv(env_name, raising=False)
+    invoke("test_default_token_budget")
+    assert llm.calls[-1]["max_tokens"] == default_tokens
+    assert llm.calls[-1]["max_token_cap"] == hard_cap
+    assert llm.calls[-1]["task_type"] == task_type
+
+    monkeypatch.setenv(env_name, "777")
+    invoke("test_env_token_budget")
+    assert llm.calls[-1]["max_tokens"] == 777
+    assert llm.calls[-1]["max_token_cap"] == hard_cap
+
+    monkeypatch.setenv(env_name, str(hard_cap + 1))
+    invoke("test_clamped_token_budget")
+    assert llm.calls[-1]["max_tokens"] == hard_cap
+    assert llm.calls[-1]["max_token_cap"] == hard_cap
 
 
 def test_all_cognitive_routing_tasks_default_to_no_local_content_fallback(isolated_db):
@@ -1267,6 +1390,569 @@ def test_five_cognitive_agents_run_as_independent_contract_boundaries(isolated_d
         "planning_execution",
         "planning_critique",
     ]
+
+
+def _evidence_authority_goal() -> UserGoalModel:
+    return UserGoalModel(
+        goalStatement="Learn Python for independent data-analysis projects",
+        desiredChange="Independently complete a data-analysis project",
+        domain="python_data_analysis",
+        knownFacts=[
+            KnownFact(
+                key="purpose",
+                statement="The current purpose is data analysis",
+                sourceText="数据分析",
+                confidence=1,
+            )
+        ],
+        decisionRelevantUnknowns=[
+            DecisionRelevantUnknown(
+                key="dataset_domain",
+                description="The preferred dataset domain is not specified",
+                whyItChangesThePlan="It can change the example project but not the learning strategy",
+                impact="strategy",
+                priority="important",
+            )
+        ],
+        successModel=GoalSuccessModel(
+            definition="Complete one reviewable data-analysis project independently",
+            measurableSignals=["A reproducible analysis and written findings exist"],
+        ),
+        confidence=0.95,
+        canProceedToEvidence=True,
+    )
+
+
+def _evidence_pack_with_gap(gap: EvidenceGap, *, can_proceed: bool = False) -> EvidencePack:
+    return EvidencePack(
+        gaps=[gap],
+        synthesis="The supplied context contains one unresolved item.",
+        confidence=0.8,
+        canProceedToStrategy=can_proceed,
+    )
+
+
+def test_evidence_authority_policy_is_backward_compatible_and_fails_closed_without_blocker_provenance():
+    goal = _evidence_authority_goal()
+    legacy_payload = EvidenceInput(goalModel=goal, memoryQueryContext="python data analysis")
+    assert legacy_payload.authority_policy.current_goal_is_authoritative is True
+    assert legacy_payload.authority_policy.blocking_unknown_priorities == ["blocking"]
+    assert legacy_payload.authority_policy.non_blocking_unknown_priorities == ["important", "optional"]
+
+    stale_gap = EvidenceGap(
+        description="Older planning history says the purpose may be web development",
+        consequence="The old context conflicts with the current Goal",
+        proposedResolution="ask_user",
+    )
+    normalized = apply_evidence_authority_policy(
+        goal,
+        _evidence_pack_with_gap(stale_gap),
+        EvidenceAuthorityPolicy(),
+    )
+    assert normalized.can_proceed_to_strategy is False
+    assert normalized.gaps[0].proposed_resolution == "make_explicit_assumption"
+
+
+def test_evidence_authority_moves_historical_conflicts_to_superseded_context():
+    goal = _evidence_authority_goal()
+    historical_gap = EvidenceGap(
+        description="A prior plan assumed web development",
+        consequence="It contradicts the current data-analysis Goal",
+        proposedResolution="ask_user",
+        sourceContext="historical_context",
+    )
+    normalized = apply_evidence_authority_policy(
+        goal,
+        _evidence_pack_with_gap(historical_gap),
+        EvidenceAuthorityPolicy(),
+    )
+    assert normalized.can_proceed_to_strategy is True
+    assert normalized.gaps == []
+    assert normalized.superseded_context == ["A prior plan assumed web development"]
+
+
+def test_evidence_authority_preserves_supported_new_safety_blockers():
+    goal = _evidence_authority_goal()
+    safety_gap = EvidenceGap(
+        description="The supplied runtime is executing untrusted notebooks without isolation",
+        consequence="Executing the project could expose local credentials",
+        proposedResolution="ask_user",
+        blockingBasis="new_evidence",
+        impact="safety",
+        sourceContext="new_evidence",
+        supportingSourceIds=["runtime:sandbox-inspection"],
+    )
+    normalized = apply_evidence_authority_policy(
+        goal,
+        _evidence_pack_with_gap(safety_gap, can_proceed=True),
+        EvidenceAuthorityPolicy(),
+        valid_evidence_source_ids={"runtime:sandbox-inspection"},
+    )
+    assert normalized.can_proceed_to_strategy is False
+    assert normalized.gaps[0].proposed_resolution == "ask_user"
+
+
+def test_evidence_authority_drops_every_unattributed_or_forged_decision_input():
+    goal = _evidence_authority_goal()
+    poison = "POISONED legacy recommendation"
+    evidence = EvidencePack(
+        userEvidence=[
+            UserEvidence(
+                kind="review",
+                statement=poison,
+                whyRelevant="No provenance",
+                confidence=0.9,
+            )
+        ],
+        planningRules=[
+            EvidencePlanningRule(
+                rule=poison,
+                strength="soft",
+                evidence=[],
+                confidence=0.9,
+            )
+        ],
+        domainEvidence=[
+            DomainEvidence(
+                claim=poison,
+                sourceType="unknown",
+                relevance="No provenance",
+                credibility=0.9,
+            )
+        ],
+        resourceCandidates=[
+            EvidenceResourceCandidate(
+                title=poison,
+                type="official_doc",
+                howItHelps="Claims to be external without a source",
+                userFit="Unknown",
+                credibility=0.9,
+                sourceContext="model_knowledge",
+            )
+        ],
+        gaps=[
+            EvidenceGap(
+                description=poison,
+                consequence="Unknown",
+                proposedResolution="make_explicit_assumption",
+                blockingBasis="new_evidence",
+                impact="safety",
+                sourceContext="new_evidence",
+                supportingSourceIds=["forged:source"],
+            )
+        ],
+        synthesis=poison,
+        confidence=0.8,
+        canProceedToStrategy=True,
+    )
+    normalized = apply_evidence_authority_policy(
+        goal,
+        evidence,
+        EvidenceAuthorityPolicy(),
+        valid_evidence_source_ids={"real:source"},
+    )
+    assert normalized.is_authority_normalized is True
+    assert all(item.source_context == "current_goal" for item in normalized.user_evidence)
+    assert normalized.planning_rules == []
+    assert normalized.domain_evidence == []
+    assert normalized.resource_candidates == []
+    assert normalized.gaps == []
+    assert poison not in json.dumps(normalized.decision_view().model_dump(by_alias=True))
+
+
+def _remove_evidence_authority_marker(session_id: str) -> None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT evidence_pack_json FROM planning_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        evidence = json.loads(row["evidence_pack_json"])
+        evidence.pop("authorityPolicyVersion", None)
+        conn.execute(
+            "UPDATE planning_sessions SET evidence_pack_json = ? WHERE id = ?",
+            (json.dumps(evidence, ensure_ascii=False), session_id),
+        )
+
+
+def test_legacy_evidence_projection_is_quarantined_and_continue_reruns_evidence(isolated_db):
+    model = StubCognitiveModel()
+    runtime = CognitiveOSRuntime(model_client=model)
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="legacy-evidence-resume",
+            userInput="Learn Python for data analysis with nine hours each week",
+        )
+    )
+    old_artifact_count = len(
+        [item for item in runtime.agent_runtime.list_artifacts(session.session_id) if item.artifact_type == "evidence_pack"]
+    )
+    _remove_evidence_authority_marker(session.session_id)
+
+    quarantined = runtime.get_session(session.session_id)
+    assert quarantined.status == "MODEL_UNAVAILABLE"
+    assert quarantined.model_failure is not None
+    assert quarantined.model_failure.resume_node == "evidence"
+    assert quarantined.evidence_pack is None
+    assert quarantined.strategy_portfolio is None
+
+    model.calls.clear()
+    resumed = runtime.continue_current_stage(session.session_id)
+    assert resumed.status == "waiting_design_approval"
+    assert resumed.evidence_pack["authorityPolicyVersion"] == EVIDENCE_AUTHORITY_POLICY_VERSION
+    assert resumed.approved_strategy_id is None
+    assert [task for task, _payload in model.calls] == ["planning_evidence", "planning_strategy"]
+    evidence_artifacts = [
+        item for item in runtime.agent_runtime.list_artifacts(session.session_id) if item.artifact_type == "evidence_pack"
+    ]
+    assert len(evidence_artifacts) == old_artifact_count + 1
+
+
+def test_legacy_evidence_approval_does_not_record_stale_strategy_approval(isolated_db):
+    runtime = CognitiveOSRuntime(model_client=StubCognitiveModel())
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="legacy-evidence-approval",
+            userInput="Learn Python for data analysis with nine hours each week",
+        )
+    )
+    _remove_evidence_authority_marker(session.session_id)
+
+    refreshed = runtime.approve_design(session.session_id)
+    assert refreshed.status == "waiting_design_approval"
+    assert refreshed.approved_strategy_id is None
+
+
+def test_legacy_refresh_strategy_failure_cannot_reexpose_old_downstream_artifacts(isolated_db):
+    class StrategyFailureModel(StubCognitiveModel):
+        def complete_contract(self, *, task_type: str, **kwargs: Any):
+            if task_type == "planning_strategy":
+                raise PlanningModelUnavailable(
+                    "strategy_design",
+                    SafePlanningError(
+                        stage="strategy_design",
+                        errorType="timeout",
+                        message="strategy model timed out",
+                        retryable=True,
+                        attempts=[],
+                    ),
+                )
+            return super().complete_contract(task_type=task_type, **kwargs)
+
+    runtime = CognitiveOSRuntime(model_client=StubCognitiveModel())
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="legacy-evidence-strategy-failure",
+            userInput="Learn Python for data analysis with nine hours each week",
+        )
+    )
+    _remove_evidence_authority_marker(session.session_id)
+    failure_model = StrategyFailureModel()
+    runtime.evidence_agent.model = failure_model
+    runtime.strategy_agent.model = failure_model
+
+    blocked = runtime.continue_current_stage(session.session_id)
+    assert blocked.model_failure is not None
+    assert blocked.model_failure.resume_node == "strategy"
+    assert blocked.evidence_pack is not None
+    assert blocked.strategy_portfolio is None
+    assert blocked.execution_blueprint is None
+    assert blocked.critique_report is None
+    assert blocked.approved_strategy_id is None
+
+
+def test_legacy_authority_refresh_overrides_pending_strategy_checkpoint(isolated_db):
+    class InitialStrategyFailureModel(StubCognitiveModel):
+        def complete_contract(self, *, task_type: str, **kwargs: Any):
+            if task_type == "planning_strategy":
+                raise PlanningModelUnavailable(
+                    "strategy_design",
+                    SafePlanningError(
+                        stage="strategy_design",
+                        errorType="timeout",
+                        message="strategy model timed out",
+                        retryable=True,
+                        attempts=[],
+                    ),
+                )
+            return super().complete_contract(task_type=task_type, **kwargs)
+
+    runtime = CognitiveOSRuntime(model_client=InitialStrategyFailureModel())
+    blocked = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="legacy-after-strategy-failure",
+            userInput="Learn Python for data analysis with nine hours each week",
+        )
+    )
+    assert blocked.model_failure is not None
+    assert blocked.model_failure.resume_node == "strategy"
+    assert runtime.harness.repository.recover(blocked.session_id).pending_agent == "strategy"
+
+    _remove_evidence_authority_marker(blocked.session_id)
+    healthy_model = StubCognitiveModel()
+    runtime.evidence_agent.model = healthy_model
+    runtime.strategy_agent.model = healthy_model
+
+    resumed = runtime.continue_current_stage(blocked.session_id)
+    assert [task for task, _payload in healthy_model.calls] == [
+        "planning_evidence",
+        "planning_strategy",
+    ]
+    assert resumed.status == "waiting_design_approval"
+    assert resumed.evidence_pack["authorityPolicyVersion"] == EVIDENCE_AUTHORITY_POLICY_VERSION
+
+
+def test_both_evidence_agents_apply_the_same_authority_gate(isolated_db):
+    class FixedEvidenceModel:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        def complete_contract(self, **kwargs: Any):
+            self.calls.append(kwargs)
+            return AgentResult(
+                _evidence_pack_with_gap(
+                    EvidenceGap(
+                        description="The important dataset preference is unanswered",
+                        consequence="Examples may need a different domain",
+                        proposedResolution="ask_user",
+                        blockingBasis="goal_unknown",
+                        relatedGoalUnknownKey="dataset_domain",
+                        sourceContext="current_goal",
+                    )
+                ),
+                _usage("planning_evidence"),
+            )
+
+    goal = _evidence_authority_goal()
+    reality = RealityAssessment(
+        goalRestatement=goal.goal_statement,
+        feasibilitySummary="Feasible",
+        timeAssessment="Adequate",
+        resourceAssessment="Adequate",
+        confidence=0.9,
+        canProceedToEvidence=True,
+    )
+    models = [FixedEvidenceModel(), FixedEvidenceModel()]
+    results = [
+        ContextEvidenceAgent(model=models[0]).run(goal),
+        CognitiveEvidenceAgent(model=models[1]).run(goal, reality),
+    ]
+
+    for model, result in zip(models, results, strict=True):
+        assert result.artifact.can_proceed_to_strategy is True
+        assert result.artifact.gaps[0].proposed_resolution == "make_explicit_assumption"
+        assert model.calls[0]["payload"]["authorityPolicy"]["currentGoalIsAuthoritative"] is True
+        assert "current goalModel is authoritative" in model.calls[0]["system"]
+
+    assert "current goalModel as authoritative" in REALITY_SYSTEM
+
+
+def test_memory_retrievers_preserve_provenance_and_minimize_historical_content(isolated_db):
+    memory = MemoryService()
+    review = memory.create_memory(
+        MemoryCreate(
+            kind="review",
+            title="Prior Python review",
+            content="A prior session assumed zero experience and seven hours per week.",
+            source="ai",
+            sourceId="prior-session",
+            sourceKey="review:prior-session",
+            metadata={
+                "planningSessionId": "prior-session",
+                "structuredPlan": {"tasks": ["must not enter model context"]},
+                "longTermLearning": "must not enter model context",
+            },
+        )
+    )
+    history = memory.create_memory(
+        MemoryCreate(
+            kind="planning_history",
+            title="Prior Python plan",
+            content="A prior plan used a different language and learning target.",
+            source="ai",
+            sourceId="prior-plan",
+            sourceKey="history:prior-plan",
+            metadata={
+                "planningSessionId": "prior-session",
+                "structuredPlan": {"tasks": ["must not enter model context"]},
+            },
+        )
+    )
+    goal = _evidence_authority_goal()
+
+    review_doc = next(item for item in CognitiveMemoryRetriever(memory).retrieve(goal) if item.id == review.id)
+    history_doc = next(item for item in PlanningHistoryRetriever(memory).retrieve(goal) if item.id == history.id)
+    for document in (review_doc, history_doc):
+        assert document.context_role == "historical_context"
+        assert document.content == ""
+        assert document.source == "ai"
+        assert document.source_key
+        assert document.metadata["planningSessionId"] == "prior-session"
+        assert "structuredPlan" not in document.metadata
+        assert "longTermLearning" not in document.metadata
+
+
+def test_historical_gap_sources_are_superseded_and_mixed_sources_cannot_authorize_blocker():
+    goal = _evidence_authority_goal()
+    historical_only = EvidenceGap(
+        description="An older session requested a different learning path",
+        consequence="It conflicts with the current Goal",
+        proposedResolution="ask_user",
+        blockingBasis="new_evidence",
+        impact="feasibility",
+        sourceContext="unspecified",
+        supportingSourceIds=["history:one"],
+    )
+    superseded = apply_evidence_authority_policy(
+        goal,
+        _evidence_pack_with_gap(historical_only),
+        EvidenceAuthorityPolicy(),
+        historical_source_ids={"history:one"},
+        valid_evidence_source_ids={"current:one"},
+    )
+    assert superseded.can_proceed_to_strategy is True
+    assert superseded.gaps == []
+
+    mixed = historical_only.model_copy(
+        update={
+            "source_context": "new_evidence",
+            "supporting_source_ids": ["history:one", "current:one"],
+        }
+    )
+    rejected = apply_evidence_authority_policy(
+        goal,
+        _evidence_pack_with_gap(mixed),
+        EvidenceAuthorityPolicy(),
+        historical_source_ids={"history:one"},
+        valid_evidence_source_ids={"current:one"},
+    )
+    assert rejected.can_proceed_to_strategy is True
+    assert rejected.gaps == []
+
+
+def test_stale_review_evidence_is_removed_before_strategy_payload():
+    goal = _evidence_authority_goal()
+    stale_source_id = "review:other-session"
+    evidence = EvidencePack(
+        userEvidence=[
+            UserEvidence(
+                sourceId=stale_source_id,
+                kind="review",
+                statement="The user has zero programming experience and seven hours per week",
+                whyRelevant="Copied from an older session",
+                confidence=0.9,
+                sourceContext="historical_context",
+            )
+        ],
+        planningRules=[
+            EvidencePlanningRule(
+                rule="Design for a zero-experience learner with seven hours per week",
+                strength="hard",
+                evidence=["older review"],
+                sourceIds=[stale_source_id],
+                sourceContext="historical_context",
+                confidence=0.9,
+            )
+        ],
+        domainEvidence=[
+            DomainEvidence(
+                claim="A prior Go plan should determine the project language",
+                sourceType="planning_history",
+                sourceRef=stale_source_id,
+                sourceContext="historical_context",
+                relevance="Copied from another session",
+                credibility=0.7,
+            )
+        ],
+        gaps=[
+            EvidenceGap(
+                description="The preferred dataset domain remains open",
+                consequence="Only the example branch changes",
+                proposedResolution="ask_user",
+                blockingBasis="goal_unknown",
+                relatedGoalUnknownKey="dataset_domain",
+                sourceContext="current_goal",
+            )
+        ],
+        synthesis="The user is a zero-experience Go learner with seven hours per week.",
+        confidence=0.8,
+        canProceedToStrategy=False,
+    )
+    normalized = apply_evidence_authority_policy(
+        goal,
+        evidence,
+        EvidenceAuthorityPolicy(),
+        historical_source_ids={stale_source_id},
+    )
+    assert normalized.can_proceed_to_strategy is True
+
+    model = StubCognitiveModel()
+    StrategyArchitectAgent(model).run(goal, normalized)
+    strategy_payload = next(payload for task, payload in model.calls if task == "planning_strategy")
+    visible = json.dumps(strategy_payload, ensure_ascii=False)
+    assert "zero programming experience" not in visible
+    assert "seven hours" not in visible
+    assert "prior Go plan" not in visible
+    assert "data analysis" in visible
+    assert stale_source_id not in visible
+
+
+def test_superseded_context_never_reenters_any_downstream_model_payload():
+    stale_text = "AUDIT-ONLY stale plan: zero experience, seven hours, Go project"
+    goal = _evidence_authority_goal()
+    evidence = EvidencePack(
+        synthesis="Current Goal evidence is authoritative.",
+        supersededContext=[stale_text],
+        confidence=0.9,
+        canProceedToStrategy=True,
+        authorityPolicyVersion=EVIDENCE_AUTHORITY_POLICY_VERSION,
+    )
+
+    compatibility_model = StubCognitiveModel()
+    strategy = StrategyArchitectAgent(compatibility_model).run(goal, evidence).artifact
+    execution = ExecutionDesignerAgent(compatibility_model).run(
+        goal, evidence, strategy.strategies[0]
+    ).artifact
+    critique = CriticLearningAgent(compatibility_model).critique(
+        goal, evidence, strategy, execution
+    ).artifact
+    CriticLearningAgent(compatibility_model).learn(
+        "Use a smaller example",
+        goal=goal,
+        evidence=evidence,
+        strategy=strategy,
+        execution=execution,
+        critique=critique,
+    )
+
+    cognitive_model = StubCognitiveModel()
+    cognitive_strategy = CognitiveStrategyAgent(cognitive_model).run(goal, evidence).artifact
+    cognitive_execution = CognitiveExecutionAgent(cognitive_model).run(
+        goal, evidence, cognitive_strategy.strategies[0]
+    ).artifact
+    cognitive_critique = CognitiveCriticAgent(cognitive_model).critique(
+        goal, evidence, cognitive_strategy, cognitive_execution
+    ).artifact
+    CognitiveCriticAgent(cognitive_model).learn(
+        "Use a smaller example",
+        goal=goal,
+        evidence=evidence,
+        strategy=cognitive_strategy,
+        execution=cognitive_execution,
+        critique=cognitive_critique,
+    )
+
+    for task, payload in [*compatibility_model.calls, *cognitive_model.calls]:
+        if task in {
+            "planning_strategy",
+            "planning_execution",
+            "planning_critique",
+            "planning_learning",
+        }:
+            assert stale_text not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_cognitive_graph_contains_all_human_wait_and_critic_nodes(isolated_db):

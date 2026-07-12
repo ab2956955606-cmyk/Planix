@@ -53,7 +53,7 @@ class CriticLearningAgent:
             system=CRITIC_SYSTEM,
             payload={
                 "goalModel": goal.model_dump(by_alias=True),
-                "evidencePack": evidence.model_dump(by_alias=True),
+                "evidencePack": evidence.model_input_view(),
                 "strategyPortfolio": strategy.model_dump(by_alias=True),
                 "executionBlueprint": execution.model_dump(by_alias=True),
             },
@@ -79,7 +79,7 @@ class CriticLearningAgent:
             payload={
                 "feedback": feedback,
                 "goalModel": goal.model_dump(by_alias=True) if goal else None,
-                "evidencePack": evidence.model_dump(by_alias=True) if evidence else None,
+                "evidencePack": evidence.model_input_view() if evidence else None,
                 "strategyPortfolio": strategy.model_dump(by_alias=True) if strategy else None,
                 "executionBlueprint": execution.model_dump(by_alias=True) if execution else None,
                 "critiqueReport": critique.model_dump(by_alias=True) if critique else None,

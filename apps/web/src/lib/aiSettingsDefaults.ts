@@ -1,5 +1,10 @@
 import type { AiProvider, AiSettings } from '../types';
 
+export function apiKeyDraftAfterProviderSwitch(currentDraft: string): string {
+  void currentDraft;
+  return '';
+}
+
 export const providerDefaultBaseUrls: Record<AiProvider, string> = {
   mock: 'https://api.deepseek.com',
   deepseek: 'https://api.deepseek.com',

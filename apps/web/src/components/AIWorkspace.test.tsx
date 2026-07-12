@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { providerModelRecommendations, upgradeLegacyKimiDefaults } from '../lib/aiSettingsDefaults';
+import { apiKeyDraftAfterProviderSwitch, providerModelRecommendations, upgradeLegacyKimiDefaults } from '../lib/aiSettingsDefaults';
 import { AIWorkspace } from './AIWorkspace';
 import type { AiSettings } from '../types';
 
@@ -100,6 +100,10 @@ function t(key: string): string {
 }
 
 describe('AIWorkspace settings', () => {
+  it('never carries an unsaved API key draft into another provider', () => {
+    expect(apiKeyDraftAfterProviderSwitch('sk-provider-specific-secret')).toBe('');
+  });
+
   it('uses the DeepSeek-specific API Key label for DeepSeek settings', () => {
     const html = renderToStaticMarkup(
       <AIWorkspace
@@ -128,6 +132,12 @@ describe('AIWorkspace settings', () => {
     expect(html).toContain('Understands ambiguity and consistency before routing');
     expect(html).toContain('No local semantic fallback for goal understanding');
     expect(html).toContain('Auto select');
+    const deepSeekOrder = html.indexOf('1. DeepSeek');
+    const glmOrder = html.indexOf('2. Zhipu GLM');
+    const kimiOrder = html.indexOf('3. Kimi');
+    expect(deepSeekOrder).toBeGreaterThan(-1);
+    expect(glmOrder).toBeGreaterThan(deepSeekOrder);
+    expect(kimiOrder).toBeGreaterThan(glmOrder);
     expect(html).toContain('Plan generation');
     expect(html).toContain('Memory query');
     expect(html).toContain('Searches memory');

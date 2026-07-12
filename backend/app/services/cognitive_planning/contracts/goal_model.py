@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .base import CognitiveContract
 
@@ -75,6 +75,25 @@ class GoalQuestion(CognitiveContract):
     question: str = Field(min_length=1)
     why_this_question_matters: str = Field(min_length=1)
     expected_decision_impact: str = Field(min_length=1)
+    answer_options: list[str] = Field(default_factory=list, max_length=4)
+
+    @field_validator("answer_options", mode="before")
+    @classmethod
+    def normalize_answer_options(cls, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            cleaned = str(item or "").strip()
+            key = cleaned.casefold()
+            if not cleaned or key in seen:
+                continue
+            seen.add(key)
+            result.append(cleaned)
+            if len(result) == 4:
+                break
+        return result
 
 
 class UserGoalModel(CognitiveContract):

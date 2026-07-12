@@ -13,6 +13,8 @@ from .ai_settings import (
     get_auto_model_provider_chain,
     get_effective_ai_settings_for_provider,
     get_model_routing_rule,
+    mark_provider_key_invalid,
+    mark_provider_key_valid,
 )
 
 
@@ -51,6 +53,15 @@ STANDARD_ERROR_TYPES = {
     "unknown",
 }
 DIRECT_ROUTING_TASK_TYPES = {"settings_test"}
+TRUNCATION_RETRY_TASK_TYPES = {
+    "planning_goal_model",
+    "planning_reality",
+    "planning_evidence",
+    "planning_strategy",
+    "planning_execution",
+    "planning_critique",
+    "planning_learning",
+}
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,7 @@ class ModelRouteAttempt:
     status: str = "error"
     error_type: str | None = None
     latency_ms: int | None = None
+    automatic_retry: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -69,6 +81,8 @@ class ModelRouteAttempt:
             "errorType": self.error_type,
             "latencyMs": self.latency_ms,
         }
+        if self.automatic_retry:
+            data["automaticRetry"] = True
         return {key: value for key, value in data.items() if value is not None}
 
 
@@ -484,11 +498,98 @@ class ModelRouter:
         settings: EffectiveAiSettings | None = None,
     ) -> tuple[ModelCallResult | None, ModelCallError | None]:
         selected = settings or self.settings
-        return self._provider(selected).complete(request)
+        result, error = self._provider(selected).complete(request)
+        should_track_credential = request.feature != "settings_save_validation"
+        if should_track_credential and result and result.mode == "llm":
+            mark_provider_key_valid(selected.provider, selected.api_key)
+        elif should_track_credential and error and error.error_type in {"auth_error", "invalid_key_format"}:
+            mark_provider_key_invalid(selected.provider, selected.api_key, error.error_type)
+        return result, error
+
+    @staticmethod
+    def _can_retry_planning_truncation(
+        request: ModelCallRequest,
+        error: ModelCallError | None,
+        *,
+        automatic_retry_attempted: bool,
+    ) -> bool:
+        return bool(
+            not automatic_retry_attempted
+            and request.task_type in TRUNCATION_RETRY_TASK_TYPES
+            and request.response_format_json
+            and error
+            and error.error_type == "model_output_truncated"
+        )
+
+    @staticmethod
+    def _planning_retry_request(request: ModelCallRequest) -> ModelCallRequest:
+        retry_tokens = min(request.max_token_cap, max(request.max_tokens, request.max_tokens * 2))
+        return replace(request, max_tokens=retry_tokens)
+
+    @staticmethod
+    def _route_attempt(
+        settings: EffectiveAiSettings,
+        result: ModelCallResult | None,
+        error: ModelCallError | None,
+        elapsed_ms: int,
+        *,
+        automatic_retry: bool = False,
+    ) -> ModelRouteAttempt:
+        if result and result.mode == "llm":
+            return ModelRouteAttempt(
+                provider=settings.provider,
+                model=settings.model,
+                status="success",
+                latency_ms=result.latency_ms or elapsed_ms,
+                automatic_retry=automatic_retry,
+            )
+        return ModelRouteAttempt(
+            provider=settings.provider,
+            model=settings.model,
+            status="error",
+            error_type=error.error_type if error else "unknown",
+            latency_ms=elapsed_ms,
+            automatic_retry=automatic_retry,
+        )
+
+    def _complete_direct_with_truncation_retry(
+        self,
+        request: ModelCallRequest,
+    ) -> tuple[ModelCallResult | None, ModelCallError | None]:
+        initial_start = time.perf_counter()
+        result, error = self._complete_direct(request)
+        initial_elapsed_ms = max(1, int((time.perf_counter() - initial_start) * 1000))
+        if not self._can_retry_planning_truncation(request, error, automatic_retry_attempted=False):
+            return result, error
+
+        initial_attempt = self._route_attempt(self.settings, result, error, initial_elapsed_ms)
+        retry_request = self._planning_retry_request(request)
+        start = time.perf_counter()
+        retry_result, retry_error = self._complete_direct(retry_request)
+        elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
+        retry_attempt = self._route_attempt(
+            self.settings,
+            retry_result,
+            retry_error,
+            elapsed_ms,
+            automatic_retry=True,
+        )
+        attempts = (initial_attempt, retry_attempt)
+        if retry_result and retry_result.mode == "llm":
+            return replace(retry_result, attempts=attempts), None
+        if retry_error:
+            return None, replace(retry_error, attempts=attempts)
+        return None, ModelCallError(
+            "Model call failed without a result.",
+            "unknown",
+            provider=self.settings.provider,
+            model=self.settings.model,
+            attempts=attempts,
+        )
 
     def complete(self, request: ModelCallRequest) -> tuple[ModelCallResult | None, ModelCallError | None]:
         if not self.routing_enabled or request.task_type in DIRECT_ROUTING_TASK_TYPES:
-            return self._complete_direct(request)
+            return self._complete_direct_with_truncation_retry(request)
 
         rule = get_model_routing_rule(request.task_type, self.settings.provider)
         if rule.primary_provider == "auto":
@@ -503,9 +604,21 @@ class ModelRouter:
 
         attempts: list[ModelRouteAttempt] = []
         last_error: ModelCallError | None = None
+        automatic_retry_attempted = False
         primary_provider = configured_primary if configured_primary in KEYED_PROVIDERS else (chain[0] if chain else "deepseek")
         for provider in chain:
             routed_settings = get_effective_ai_settings_for_provider(provider, self.settings)
+            if routed_settings.has_api_key and not routed_settings.has_usable_api_key:
+                attempts.append(
+                    ModelRouteAttempt(
+                        provider=provider,
+                        model=routed_settings.model,
+                        status="skipped",
+                        error_type=routed_settings.key_error_type or "auth_error",
+                        latency_ms=0,
+                    )
+                )
+                continue
             if not routed_settings.has_api_key:
                 attempts.append(
                     ModelRouteAttempt(
@@ -522,12 +635,7 @@ class ModelRouter:
             result, error = self._complete_direct(request, routed_settings)
             elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
             if result and result.mode == "llm":
-                attempt = ModelRouteAttempt(
-                    provider=routed_settings.provider,
-                    model=routed_settings.model,
-                    status="success",
-                    latency_ms=result.latency_ms or elapsed_ms,
-                )
+                attempt = self._route_attempt(routed_settings, result, error, elapsed_ms)
                 all_attempts = tuple([*attempts, attempt])
                 return (
                     replace(
@@ -540,16 +648,38 @@ class ModelRouter:
                 )
 
             if error:
-                attempts.append(
-                    ModelRouteAttempt(
-                        provider=routed_settings.provider,
-                        model=routed_settings.model,
-                        status="error",
-                        error_type=error.error_type,
-                        latency_ms=elapsed_ms,
-                    )
-                )
+                attempts.append(self._route_attempt(routed_settings, result, error, elapsed_ms))
                 last_error = error
+                if self._can_retry_planning_truncation(
+                    request,
+                    error,
+                    automatic_retry_attempted=automatic_retry_attempted,
+                ):
+                    automatic_retry_attempted = True
+                    retry_request = self._planning_retry_request(request)
+                    retry_start = time.perf_counter()
+                    retry_result, retry_error = self._complete_direct(retry_request, routed_settings)
+                    retry_elapsed_ms = max(1, int((time.perf_counter() - retry_start) * 1000))
+                    retry_attempt = self._route_attempt(
+                        routed_settings,
+                        retry_result,
+                        retry_error,
+                        retry_elapsed_ms,
+                        automatic_retry=True,
+                    )
+                    attempts.append(retry_attempt)
+                    if retry_result and retry_result.mode == "llm":
+                        return (
+                            replace(
+                                retry_result,
+                                attempts=tuple(attempts),
+                                fallback_used=routed_settings.provider != primary_provider,
+                                local_fallback_allowed=rule.local_fallback_enabled,
+                            ),
+                            None,
+                        )
+                    if retry_error:
+                        last_error = retry_error
                 continue
 
             attempts.append(

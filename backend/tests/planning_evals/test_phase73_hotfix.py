@@ -12,9 +12,12 @@ from app.cognitive_planning.agents import CognitiveModelClient, PlanningModelUna
 from app.db import get_conn
 from app.harness.persistence import HarnessStateRepository
 from app.schemas import CreatePlanningSessionRequest, PlanningSessionTextRequest
+from app.services import model_provider
+from app.services.ai_settings import EffectiveAiSettings, ModelRoutingRuleConfig
 from app.services.cognitive_planning.contracts import (
     Constraint,
     DecisionRelevantUnknown,
+    EvidencePack,
     FeasibilityJudgment,
     GoalQuestion,
     GoalSuccessModel,
@@ -23,6 +26,8 @@ from app.services.cognitive_planning.contracts import (
     StrategyPortfolio,
     UserGoalModel,
 )
+from app.services.llm import LlmClient
+from app.services.model_provider import ModelCallError, ModelCallResult
 
 from .test_cognitive_kernel import StubCognitiveModel
 
@@ -253,6 +258,73 @@ class CriticalGoalProgressionModel(SemanticGoProgressionModel):
         return goal.model_copy(update={"decision_relevant_unknowns": unknowns})
 
 
+class EvidenceTruncationRecoveryModel(SemanticGoProgressionModel):
+    """Blocks once at Evidence, then delegates recovery to the real routed client."""
+
+    def __init__(self):
+        super().__init__()
+        self.block_evidence = True
+        self.routed_evidence_client: CognitiveModelClient | None = None
+        self.routed_evidence_json = ""
+
+    def complete_contract(
+        self,
+        *,
+        task_type: str,
+        payload: dict[str, Any],
+        contract_type,
+        stage: str = "",
+        **kwargs: Any,
+    ):
+        if contract_type is not EvidencePack:
+            return super().complete_contract(
+                task_type=task_type,
+                payload=payload,
+                contract_type=contract_type,
+                stage=stage,
+                **kwargs,
+            )
+
+        self.attempts_by_task[task_type] += 1
+        if self.block_evidence:
+            raise PlanningModelUnavailable(
+                stage,
+                SafePlanningError(
+                    stage=stage,
+                    errorType="model_output_truncated",
+                    message="The Evidence output was truncated twice.",
+                    retryable=True,
+                    attempts=[
+                        {
+                            "provider": "deepseek",
+                            "model": "deepseek-test",
+                            "status": "error",
+                            "errorType": "model_output_truncated",
+                            "latencyMs": 2,
+                        },
+                        {
+                            "provider": "deepseek",
+                            "model": "deepseek-test",
+                            "status": "error",
+                            "errorType": "model_output_truncated",
+                            "latencyMs": 3,
+                            "automaticRetry": True,
+                        },
+                    ],
+                ),
+            )
+
+        assert self.routed_evidence_client is not None
+        self.routed_evidence_json = self._evidence(payload).model_dump_json(by_alias=True)
+        return self.routed_evidence_client.complete_contract(
+            task_type=task_type,
+            payload=payload,
+            contract_type=contract_type,
+            stage=stage,
+            **kwargs,
+        )
+
+
 def _full_go_request() -> str:
     return "\n".join(
         [
@@ -338,6 +410,9 @@ def test_phase73_strategy_auth_failure_preserves_state_and_resumes_only_strategy
     assert blocked.pending_question is None
     assert blocked.cognitive_metadata
     assert blocked.cognitive_metadata.planning_mode == "blocked_model_unavailable"
+    assert blocked.model_failure
+    assert blocked.model_failure.resume_node == "strategy"
+    assert blocked.pending_input is None
     assert blocked.strategy_portfolio is None
     assert blocked.execution_blueprint is None
     assert blocked.critique_report is None
@@ -396,6 +471,197 @@ def test_phase73_strategy_auth_failure_preserves_state_and_resumes_only_strategy
     assert any(item.decision == "checkpoint_resume" for item in recovery_events)
 
 
+def test_phase73_evidence_double_truncation_preserves_artifacts_then_retry_control_auto_recovers(
+    isolated_db,
+    monkeypatch,
+) -> None:
+    model = EvidenceTruncationRecoveryModel()
+    runtime = CognitiveOSRuntime(model_client=model)
+
+    blocked = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="phase73-evidence-truncation-recovery",
+            userInput=_full_go_request(),
+        )
+    )
+
+    assert blocked.status == "MODEL_UNAVAILABLE"
+    assert blocked.business_status == "evidence_pending"
+    assert blocked.runtime_status == "blocked_model"
+    assert blocked.model_failure
+    assert blocked.model_failure.stage == "evidence_synthesis"
+    assert blocked.model_failure.resume_node == "evidence"
+    assert blocked.model_failure.retryable is True
+    assert blocked.model_failure.automatic_retry_attempted is True
+    assert [
+        (item.provider, item.status, item.error_type)
+        for item in blocked.model_failure.attempts
+    ] == [
+        ("deepseek", "error", "model_output_truncated"),
+        ("deepseek", "error", "model_output_truncated"),
+    ]
+    assert blocked.pending_input is None
+    assert blocked.goal_model is not None
+    assert blocked.goal_completion and blocked.goal_completion["complete"] is True
+    assert blocked.reality_assessment is not None
+    assert blocked.evidence_pack is None
+    assert blocked.strategy_portfolio is None
+    assert blocked.execution_blueprint is None
+
+    stable_types = ("user_goal_model", "goal_completion", "reality_assessment")
+    stable_artifacts = {
+        kind: [(item.id, item.version) for item in blocked.artifacts if item.artifact_type == kind]
+        for kind in stable_types
+    }
+    assert all(stable_artifacts.values())
+    assert _artifact_ids(blocked, "evidence_pack") == []
+    assert _artifact_ids(blocked, "strategy_portfolio") == []
+    calls_before = Counter(model.attempts_by_task)
+    assert calls_before["planning_goal_model"] == 1
+    assert calls_before["planning_reality"] == 1
+    assert calls_before["planning_evidence"] == 1
+    assert calls_before["planning_strategy"] == 0
+
+    blocked_harness = HarnessStateRepository().recover(blocked.session_id)
+    assert blocked_harness.pending_agent == "evidence"
+    assert blocked_harness.waiting_state == "model_recovery"
+    assert blocked_harness.artifact_versions["user_goal_model"] == 1
+    assert blocked_harness.artifact_versions["goal_completion"] == 1
+    assert blocked_harness.artifact_versions["reality_assessment"] == 1
+    assert "evidence_pack" not in blocked_harness.artifact_versions
+    assert "strategy_portfolio" not in blocked_harness.artifact_versions
+
+    with get_conn() as conn:
+        row_before = conn.execute(
+            "SELECT user_input, conversation_history_json FROM planning_sessions WHERE id = ?",
+            (blocked.session_id,),
+        ).fetchone()
+    assert row_before is not None
+
+    routed_settings = EffectiveAiSettings(
+        provider="deepseek",
+        base_url="https://api.deepseek.com",
+        model="deepseek-test",
+        api_key="sk-test-local",
+        temperature=0.2,
+        timeout_seconds=10,
+        updated_at="",
+    )
+    provider_calls: list[tuple[str, int, int]] = []
+
+    def fake_rule(task_type: str, _active_provider: str) -> ModelRoutingRuleConfig:
+        return ModelRoutingRuleConfig(task_type, "deepseek", (), False)
+
+    def fake_settings(
+        provider: str,
+        _active_settings: EffectiveAiSettings | None = None,
+    ) -> EffectiveAiSettings:
+        assert provider == "deepseek"
+        return routed_settings
+
+    def fake_complete(self, request):
+        provider_calls.append((self.settings.provider, request.max_tokens, request.max_token_cap))
+        if len(provider_calls) == 1:
+            return (
+                None,
+                ModelCallError(
+                    "truncated",
+                    "model_output_truncated",
+                    detail="raw provider detail must remain private",
+                    provider=self.settings.provider,
+                    model=self.settings.model,
+                ),
+            )
+        return (
+            ModelCallResult(
+                text=model.routed_evidence_json,
+                provider=self.settings.provider,
+                model=self.settings.model,
+                latency_ms=4,
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(model_provider, "get_model_routing_rule", fake_rule)
+    monkeypatch.setattr(model_provider, "get_effective_ai_settings_for_provider", fake_settings)
+    monkeypatch.setattr(model_provider.OpenAICompatibleProvider, "complete", fake_complete)
+    llm = LlmClient()
+    llm.settings = routed_settings
+    model.routed_evidence_client = CognitiveModelClient(llm=llm)
+    model.block_evidence = False
+
+    recovered = runtime.clarify(
+        blocked.session_id,
+        PlanningSessionTextRequest(text="请重试当前深度规划"),
+    )
+
+    assert recovered.session_id == blocked.session_id
+    assert recovered.status == "waiting_design_approval"
+    assert recovered.business_status == "strategy_pending"
+    assert recovered.runtime_status == "idle"
+    assert recovered.model_failure is None
+    assert recovered.pending_input is None
+    assert recovered.evidence_pack is not None
+    assert recovered.strategy_portfolio is not None
+    assert recovered.execution_blueprint is None
+    assert recovered.critique_report is None
+    assert provider_calls == [
+        ("deepseek", 6600, 13200),
+        ("deepseek", 13200, 13200),
+    ]
+
+    for kind, refs in stable_artifacts.items():
+        assert [
+            (item.id, item.version)
+            for item in recovered.artifacts
+            if item.artifact_type == kind
+        ] == refs
+    assert len(_artifact_ids(recovered, "evidence_pack")) == 1
+    assert len(_artifact_ids(recovered, "strategy_portfolio")) == 1
+    assert model.attempts_by_task["planning_goal_model"] == calls_before["planning_goal_model"]
+    assert model.attempts_by_task["planning_reality"] == calls_before["planning_reality"]
+    assert model.attempts_by_task["planning_evidence"] == calls_before["planning_evidence"] + 1
+    assert model.attempts_by_task["planning_strategy"] == 1
+
+    evidence_decision = next(
+        item
+        for item in reversed(recovered.decisions)
+        if item.agent == "Evidence Agent" and item.model_usage is not None
+    )
+    assert evidence_decision.model_usage.task_type == "planning_evidence"
+    assert [
+        (item.provider, item.status, item.error_type, bool(item.automatic_retry))
+        for item in evidence_decision.model_usage.attempts
+    ] == [
+        ("deepseek", "error", "model_output_truncated", False),
+        ("deepseek", "success", None, True),
+    ]
+    evidence_usage = evidence_decision.model_usage.model_dump(by_alias=True, exclude_none=True)
+    assert "detail" not in json.dumps(evidence_usage)
+    assert "raw provider detail" not in json.dumps(evidence_usage)
+
+    with get_conn() as conn:
+        row_after = conn.execute(
+            "SELECT user_input, conversation_history_json FROM planning_sessions WHERE id = ?",
+            (blocked.session_id,),
+        ).fetchone()
+    assert row_after is not None
+    assert row_after["user_input"] == row_before["user_input"]
+    assert row_after["conversation_history_json"] == row_before["conversation_history_json"]
+    assert "请重试当前深度规划" not in row_after["user_input"]
+    assert "请重试当前深度规划" not in row_after["conversation_history_json"]
+
+    resumed_harness = HarnessStateRepository().recover(blocked.session_id)
+    assert resumed_harness.pending_agent is None
+    assert resumed_harness.waiting_state == "strategy_approval"
+    assert resumed_harness.artifact_versions["user_goal_model"] == 1
+    assert resumed_harness.artifact_versions["goal_completion"] == 1
+    assert resumed_harness.artifact_versions["reality_assessment"] == 1
+    assert resumed_harness.artifact_versions["evidence_pack"] == 1
+    assert resumed_harness.artifact_versions["strategy_portfolio"] == 1
+
+
 def test_phase73_goal_auth_failure_after_new_information_retries_goal_stage(isolated_db) -> None:
     model = SemanticGoProgressionModel()
     runtime = CognitiveOSRuntime(model_client=model)
@@ -423,6 +689,23 @@ def test_phase73_goal_auth_failure_after_new_information_retries_goal_stage(isol
     assert blocked.goal_completion == initial_completion
     assert blocked.cognitive_metadata
     assert blocked.cognitive_metadata.current_stage == "goal_intelligence"
+    assert blocked.model_failure
+    assert blocked.model_failure.stage == "goal_intelligence"
+    assert blocked.model_failure.resume_node == "goal_intelligence"
+    assert blocked.model_failure.retryable is True
+    assert blocked.model_failure.attempts[0].model_dump(by_alias=True, exclude_none=True) == {
+        "provider": "deepseek",
+        "status": "error",
+        "errorType": "auth_error",
+    }
+    failure_payload = blocked.model_failure.model_dump(by_alias=True, exclude_none=True)
+    assert "model" not in failure_payload["attempts"][0]
+    assert "credentials are unavailable" not in json.dumps(failure_payload)
+    assert blocked.pending_input
+    assert blocked.pending_input.model_dump(by_alias=True) == {
+        "text": "为了web开发",
+        "applied": False,
+    }
     assert model.attempts_by_task["planning_goal_model"] == 2
     assert model.attempts_by_task["planning_strategy"] == 0
 
@@ -437,10 +720,59 @@ def test_phase73_goal_auth_failure_after_new_information_retries_goal_stage(isol
     assert recovered.goal_model and recovered.goal_model != initial_goal
     assert recovered.goal_model["goalStatement"] == "Go Web development"
     assert recovered.goal_model["decisionRelevantUnknowns"][0]["key"] == "desired_outcomes"
+    assert recovered.model_failure is None
+    assert recovered.pending_input is None
     assert model.attempts_by_task["planning_goal_model"] == 3
     assert model.attempts_by_task["planning_reality"] == 0
     assert model.attempts_by_task["planning_evidence"] == 0
     assert model.attempts_by_task["planning_strategy"] == 0
+
+
+def test_phase73_retry_deep_planning_control_resumes_without_entering_goal_history(isolated_db) -> None:
+    model = SemanticGoProgressionModel()
+    runtime = CognitiveOSRuntime(model_client=model)
+    initial = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="phase73-retry-control",
+            userInput="Learn Go",
+        )
+    )
+    model.fail_goal = True
+    blocked = runtime.clarify(
+        initial.session_id,
+        PlanningSessionTextRequest(text="为了web开发"),
+    )
+    input_before = blocked.user_input
+    with get_conn() as conn:
+        history_before = conn.execute(
+            "SELECT conversation_history_json FROM planning_sessions WHERE id = ?",
+            (blocked.session_id,),
+        ).fetchone()["conversation_history_json"]
+
+    model.fail_goal = False
+    recovered = runtime.clarify(
+        blocked.session_id,
+        PlanningSessionTextRequest(text="请重试当前深度规划"),
+    )
+
+    assert recovered.session_id == blocked.session_id
+    assert recovered.user_input == input_before
+    assert "请重试当前深度规划" not in recovered.user_input
+    with get_conn() as conn:
+        history_after = conn.execute(
+            "SELECT conversation_history_json FROM planning_sessions WHERE id = ?",
+            (blocked.session_id,),
+        ).fetchone()["conversation_history_json"]
+    user_turns_before = [
+        item for item in json.loads(history_before) if item.get("role") == "user"
+    ]
+    user_turns_after = [
+        item for item in json.loads(history_after) if item.get("role") == "user"
+    ]
+    assert user_turns_after == user_turns_before
+    assert "请重试当前深度规划" not in history_after
+    assert recovered.goal_model and recovered.goal_model["goalStatement"] == "Go Web development"
 
 
 def test_phase73_next_step_control_does_not_become_goal_evidence(isolated_db) -> None:
@@ -786,3 +1118,114 @@ def test_phase73_stream_exposes_goal_completion_and_separate_statuses(client, mo
     assert "goal_completion_updated" in {
         item.get("kind") for item in replay.json()["messages"]
     }
+
+
+def test_phase73_command_goal_failure_stream_replay_and_retry_preserve_pending_answer(client, monkeypatch) -> None:
+    model = SemanticGoProgressionModel()
+
+    def complete_contract(_self, **kwargs):
+        return model.complete_contract(**kwargs)
+
+    monkeypatch.setenv("PLANIX_COGNITIVE_MODE", "true")
+    monkeypatch.setattr(CognitiveModelClient, "complete_contract", complete_contract)
+    started = client.post(
+        "/api/command/chat",
+        json={"message": "Learn Go", "mode": "auto", "permission": "low"},
+    )
+    assert started.status_code == 200
+    started_events = [json.loads(line) for line in started.text.splitlines() if line.strip()]
+    thread_id = started_events[-1]["threadId"]
+    session_id = next(
+        item["sessionId"] for item in started_events if item.get("type") == "planning_session_started"
+    )
+    initial_goal = next(
+        dict(item["data"]) for item in started_events if item.get("type") == "goal_model_updated"
+    )
+    initial_completion = next(
+        dict(item["data"]) for item in started_events if item.get("type") == "goal_completion_updated"
+    )
+    assert initial_goal.pop("artifactState") == "current"
+    assert initial_completion.pop("artifactState") == "current"
+
+    model.fail_goal = True
+    blocked = client.post(
+        "/api/command/chat",
+        json={
+            "message": "为了web开发",
+            "mode": "auto",
+            "threadId": thread_id,
+            "permission": "low",
+        },
+    )
+    assert blocked.status_code == 200
+    blocked_events = [json.loads(line) for line in blocked.text.splitlines() if line.strip()]
+    blocked_status = next(
+        item for item in blocked_events if item.get("type") == "planning_session_status"
+    )
+    assert blocked_status["sessionId"] == session_id
+    assert blocked_status["status"] == "MODEL_UNAVAILABLE"
+    assert blocked_status["modelFailure"]["stage"] == "goal_intelligence"
+    assert blocked_status["modelFailure"]["resumeNode"] == "goal_intelligence"
+    assert blocked_status["modelFailure"]["attempts"] == [
+        {"provider": "deepseek", "status": "error", "errorType": "auth_error"}
+    ]
+    assert "reason" not in blocked_status["modelFailure"]
+    assert "detail" not in blocked_status["modelFailure"]
+    assert blocked_status["pendingInput"] == {"text": "为了web开发", "applied": False}
+    stale_goal = next(
+        dict(item["data"]) for item in blocked_events if item.get("type") == "goal_model_updated"
+    )
+    stale_completion = next(
+        dict(item["data"])
+        for item in blocked_events
+        if item.get("type") == "goal_completion_updated"
+    )
+    assert stale_goal.pop("artifactState") == "last_confirmed"
+    assert stale_completion.pop("artifactState") == "last_confirmed"
+    assert stale_goal == initial_goal
+    assert stale_completion == initial_completion
+    assert not any(item.get("type") == "strategy_portfolio_ready" for item in blocked_events)
+
+    replay = client.get(f"/api/command/thread/{thread_id}")
+    assert replay.status_code == 200
+    replay_status = next(
+        item["payload"]
+        for item in reversed(replay.json()["messages"])
+        if item.get("kind") == "planning_session_status"
+        and item.get("payload", {}).get("status") == "MODEL_UNAVAILABLE"
+    )
+    assert replay_status["modelFailure"] == blocked_status["modelFailure"]
+    assert replay_status["pendingInput"] == blocked_status["pendingInput"]
+
+    model.fail_goal = False
+    recovered = client.post(
+        "/api/command/chat",
+        json={
+            "message": "请重试当前深度规划",
+            "mode": "auto",
+            "threadId": thread_id,
+            "permission": "low",
+        },
+    )
+    assert recovered.status_code == 200
+    recovered_events = [json.loads(line) for line in recovered.text.splitlines() if line.strip()]
+    recovered_status = next(
+        item for item in recovered_events if item.get("type") == "planning_session_status"
+    )
+    assert recovered_status["sessionId"] == session_id
+    assert "modelFailure" not in recovered_status
+    assert "pendingInput" not in recovered_status
+    recovered_goal = next(
+        item["data"] for item in recovered_events if item.get("type") == "goal_model_updated"
+    )
+    assert recovered_goal["artifactState"] == "current"
+    assert recovered_goal["goalStatement"] == "Go Web development"
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT user_input, conversation_history_json FROM planning_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    assert row is not None
+    assert "为了web开发" in row["user_input"]
+    assert "请重试当前深度规划" not in row["user_input"]
+    assert "请重试当前深度规划" not in row["conversation_history_json"]

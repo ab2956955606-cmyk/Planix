@@ -72,6 +72,7 @@ import {
   uploadRagDocument
 } from '../lib/api';
 import {
+  apiKeyDraftAfterProviderSwitch,
   normalizeBaseUrlForCompare,
   providerDefaultBaseUrls,
   providerDefaultModels,
@@ -115,7 +116,7 @@ type AiProvider = AiSettings['provider'];
 type RoutedProvider = Exclude<AiProvider, 'mock'>;
 
 const routableProviders: RoutedProvider[] = ['deepseek', 'kimi', 'zhipu_glm', 'openai', 'custom'];
-const defaultAutoProviderOrder: RoutedProvider[] = ['zhipu_glm', 'deepseek', 'kimi', 'openai', 'custom'];
+const defaultAutoProviderOrder: RoutedProvider[] = ['deepseek', 'zhipu_glm', 'kimi', 'openai', 'custom'];
 const routingTaskTypes: ModelRoutingTaskType[] = [
   'goal_understanding',
   'command_decision',
@@ -244,7 +245,7 @@ function normalizeRoutingTaskType(taskType: ModelRoutingTaskType): ModelRoutingT
 }
 
 function normalizeAutoModelPolicy(settings: AiSettings): AiAutoModelPolicy {
-  const savedKeyProviders = new Set((settings.savedProviders || []).filter((item) => item.hasApiKey).map((item) => item.provider));
+  const savedKeyProviders = new Set((settings.savedProviders || []).filter((item) => item.hasApiKey && item.keyStatus !== 'invalid').map((item) => item.provider));
   const sourceOrder = settings.autoModelPolicy?.autoProviderOrder?.length
     ? settings.autoModelPolicy.autoProviderOrder
     : [
@@ -1692,11 +1693,14 @@ function ModelSettings(props: {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [backendHealth, setBackendHealth] = useState<Awaited<ReturnType<typeof fetchBackendHealth>> | null>(null);
   const hasConfiguredKey = settings.provider !== 'mock' && settings.hasApiKey;
+  const activeKeyLabel = settings.keyStatus === 'invalid'
+    ? t('legacy.invalidKey')
+    : hasConfiguredKey ? t('legacy.hasKey') : t('legacy.noKey');
   const savedProviderConfigs = settings.savedProviders || [];
   const savedKeyProviders = savedProviderConfigs.filter((item) => item.hasApiKey);
   const recommendedModels = providerModelRecommendations[settings.provider] || providerModelRecommendations.custom;
   const routingRules = normalizedRoutingRules(settings);
-  const savedKeyByProvider = new Map(savedProviderConfigs.map((item) => [item.provider, item.hasApiKey]));
+  const savedKeyByProvider = new Map(savedProviderConfigs.map((item) => [item.provider, item.hasApiKey && item.keyStatus !== 'invalid']));
   const autoModelPolicy = normalizeAutoModelPolicy(settings);
   const apiKeyLabel = (() => {
     if (settings.provider === 'kimi') return t('legacy.kimiApiKey');
@@ -1727,6 +1731,7 @@ function ModelSettings(props: {
     setApiKey(value);
   };
   const switchProvider = (provider: AiProvider) => {
+    setApiKey(apiKeyDraftAfterProviderSwitch(apiKey));
     updateSettings((current) => {
       const savedConfig = (current.savedProviders || []).find((item) => item.provider === provider);
       const currentBaseUrl = normalizeBaseUrlForCompare(current.baseUrl);
@@ -1740,12 +1745,16 @@ function ModelSettings(props: {
         provider,
         baseUrl: savedConfig?.baseUrl || (shouldUseProviderDefault ? nextDefaultBaseUrl : current.baseUrl),
         model: savedConfig?.model || (shouldUseModelDefault ? providerDefaultModels[provider] : current.model),
-        hasApiKey: Boolean(savedConfig?.hasApiKey)
+        hasApiKey: Boolean(savedConfig?.hasApiKey),
+        keyStatus: savedConfig?.keyStatus || 'unchecked',
+        keyErrorType: savedConfig?.keyErrorType || ''
       };
     });
   };
   const providerKeyHint = (provider: AiProvider): string => {
     if (provider === 'mock') return t('legacy.routingLocalFallback');
+    const savedConfig = savedProviderConfigs.find((item) => item.provider === provider);
+    if (savedConfig?.keyStatus === 'invalid') return t('legacy.invalidKey');
     return savedKeyByProvider.get(provider) ? t('legacy.hasKey') : t('legacy.routingMissingKey');
   };
   const providerHasSavedKey = (provider: AiProvider | RoutingPrimaryProvider | ''): boolean => {
@@ -1811,11 +1820,11 @@ function ModelSettings(props: {
     <div className="model-settings">
       <div className="settings-title">
         <span><Settings size={15} />{t('legacy.aiSettings')}</span>
-        <strong>{hasConfiguredKey ? t('legacy.hasKey') : t('legacy.noKey')}</strong>
+        <strong>{activeKeyLabel}</strong>
       </div>
       <div className="provider-current">
         <span>{t('legacy.currentProvider')}</span>
-        <strong>{providerLabel(settings.provider, t)} / {settings.model} / {hasConfiguredKey ? t('legacy.hasKey') : t('legacy.noKey')}</strong>
+        <strong>{providerLabel(settings.provider, t)} / {settings.model} / {activeKeyLabel}</strong>
       </div>
       <div className="settings-title">
         <span><PlugZap size={15} />{t('legacy.apiHealth')}</span>
@@ -1916,10 +1925,13 @@ function ModelSettings(props: {
               type="button"
               className="saved-provider-key"
               disabled={Boolean(settingsBusy)}
-              title={`${providerLabel(item.provider, t)} / ${item.model}`}
+              title={`${providerLabel(item.provider, t)} / ${item.model} / ${item.keyStatus === 'invalid' ? t('legacy.invalidKeyReplaceHint') : item.keyStatus === 'valid' ? t('legacy.validKey') : t('legacy.uncheckedKey')}`}
               onClick={() => clearSavedApiKey(item.provider)}
             >
               <span>{providerLabel(item.provider, t)}</span>
+              <small className={`saved-provider-key-status ${item.keyStatus || 'unchecked'}`}>
+                {item.keyStatus === 'invalid' ? t('legacy.invalidKey') : item.keyStatus === 'valid' ? t('legacy.validKey') : t('legacy.uncheckedKey')}
+              </small>
               <X size={13} aria-label={t('legacy.removeProviderKey')} />
             </button>
           )) : <em>{t('legacy.noSavedApiKeys')}</em>}

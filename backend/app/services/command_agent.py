@@ -323,10 +323,129 @@ def _fallback_reply(message: str) -> str:
     return "模型暂时不可用。我可以先用本地回复继续讨论，但不会执行操作或写入数据。"
 
 
-def _goal_understanding_unavailable_reply(message: str) -> str:
-    if _looks_english(message):
-        return "I could not understand your goal reliably, so I did not start planning. Please retry or rephrase your request."
-    return "我暂时无法可靠理解你的目标，因此没有启动规划。请稍后重试，或换一种方式描述你的目标。"
+_PROVIDER_LABELS = {
+    "deepseek": "DeepSeek",
+    "zhipu_glm": "GLM",
+    "kimi": "Kimi",
+    "openai": "OpenAI",
+    "custom": "Custom",
+    "mock": "Mock",
+}
+
+
+def _goal_failure_providers(outcome: GoalUnderstandingOutcome | None, error_types: set[str]) -> list[str]:
+    usage = outcome.usage if outcome else None
+    result: list[str] = []
+    for attempt in (usage.attempts if usage else []):
+        if attempt.error_type not in error_types:
+            continue
+        label = _PROVIDER_LABELS.get(attempt.provider, attempt.provider)
+        if label and label not in result:
+            result.append(label)
+    return result
+
+
+def _joined_providers(providers: list[str], *, english: bool) -> str:
+    if not providers:
+        return "the configured providers" if english else "已配置的模型服务"
+    if english and len(providers) > 1:
+        return f"{', '.join(providers[:-1])} and {providers[-1]}"
+    return (", " if english else "、").join(providers)
+
+
+def _goal_understanding_unavailable_reply(
+    message: str,
+    outcome: GoalUnderstandingOutcome | None = None,
+) -> str:
+    english = _looks_english(message)
+    usage = outcome.usage if outcome else None
+    error_types = {
+        attempt.error_type or "unknown"
+        for attempt in (usage.attempts if usage else [])
+    }
+    if outcome and outcome.source == "invalid_model_output":
+        error_types.add("invalid_model_output")
+
+    auth = _goal_failure_providers(outcome, {"auth_error", "invalid_key_format"})
+    missing = _goal_failure_providers(outcome, {"missing_api_key"})
+    primary_missing = [provider for provider in missing if provider in {"DeepSeek", "GLM", "Kimi"}]
+    balance = _goal_failure_providers(outcome, {"insufficient_balance"})
+    limited = _goal_failure_providers(outcome, {"rate_limit"})
+    timed_out = _goal_failure_providers(outcome, {"timeout"})
+    network = _goal_failure_providers(outcome, {"network_error", "bad_base_url"})
+    bad_model = _goal_failure_providers(outcome, {"bad_model"})
+    bad_request = _goal_failure_providers(outcome, {"bad_request"})
+
+    if english:
+        prefix = "I received your goal, but the Goal Understanding model could not complete its check, so planning did not start."
+        if auth:
+            reason = f" {_joined_providers(auth, english=True)} rejected the saved API Key as invalid or expired."
+            if primary_missing:
+                reason += f" {_joined_providers(primary_missing, english=True)} does not have a saved Key."
+            action = " Update at least one valid model Key in Settings, then retry."
+        elif balance:
+            reason = f" {_joined_providers(balance, english=True)} reported insufficient balance or quota."
+            action = " Add quota or select another configured provider, then retry."
+        elif limited:
+            reason = f" {_joined_providers(limited, english=True)} is currently rate-limited."
+            action = " Wait briefly or select another configured provider, then retry."
+        elif timed_out:
+            reason = f" {_joined_providers(timed_out, english=True)} timed out before returning a result."
+            action = " Check the network or timeout setting, then retry."
+        elif network:
+            reason = f" {_joined_providers(network, english=True)} could not be reached with the configured endpoint."
+            action = " Check the Base URL and network in Settings, then retry."
+        elif bad_model:
+            reason = f" {_joined_providers(bad_model, english=True)} rejected the configured model name."
+            action = " Select a model available to that account, then retry."
+        elif {"invalid_model_output", "model_output_truncated"} & error_types:
+            reason = " The model response was truncated or did not satisfy the Goal Understanding structured contract."
+            action = " Retry or select another configured model in Settings."
+        elif bad_request:
+            reason = f" {_joined_providers(bad_request, english=True)} rejected the Goal Understanding request."
+            action = " Check the provider configuration or select another model, then retry."
+        elif missing:
+            reason = f" No usable API Key is saved; {_joined_providers(missing, english=True)} was skipped."
+            action = " Save at least one model Key in Settings, then retry."
+        else:
+            reason = " The configured model service did not return a usable result."
+            action = " Check model Settings and retry."
+        return f"{prefix}{reason}{action} This is not caused by how you phrased the goal; your original input was saved."
+
+    prefix = "我已经收到你的目标，但目标理解模型未能完成判断，因此没有启动规划。"
+    if auth:
+        reason = f"原因：{_joined_providers(auth, english=False)} 的 API Key 无效或已过期。"
+        if primary_missing:
+            reason += f"{_joined_providers(primary_missing, english=False)} 尚未配置 Key。"
+        action = "请在设置中更新至少一个有效的模型 Key，然后重试。"
+    elif balance:
+        reason = f"原因：{_joined_providers(balance, english=False)} 返回余额或额度不足。"
+        action = "请补充额度或选择其他已配置 Provider，然后重试。"
+    elif limited:
+        reason = f"原因：{_joined_providers(limited, english=False)} 当前触发频率限制。"
+        action = "请稍后重试，或选择其他已配置 Provider。"
+    elif timed_out:
+        reason = f"原因：{_joined_providers(timed_out, english=False)} 在返回结果前超时。"
+        action = "请检查网络或超时设置，然后重试。"
+    elif network:
+        reason = f"原因：无法通过当前地址连接 {_joined_providers(network, english=False)}。"
+        action = "请在设置中检查 Base URL 与网络，然后重试。"
+    elif bad_model:
+        reason = f"原因：{_joined_providers(bad_model, english=False)} 不接受当前模型名称。"
+        action = "请选择该账号可用的模型，然后重试。"
+    elif {"invalid_model_output", "model_output_truncated"} & error_types:
+        reason = "原因：模型返回内容被截断或不符合 Goal Understanding 结构化协议。"
+        action = "请重试，或在设置中切换到其他已配置模型。"
+    elif bad_request:
+        reason = f"原因：{_joined_providers(bad_request, english=False)} 拒绝了本次目标理解请求。"
+        action = "请检查 Provider 配置或切换模型，然后重试。"
+    elif missing:
+        reason = f"原因：没有可用的 API Key，{_joined_providers(missing, english=False)} 已被跳过。"
+        action = "请在设置中至少保存一个模型 Key，然后重试。"
+    else:
+        reason = "原因：已配置的模型服务没有返回可用结果。"
+        action = "请检查模型设置后重试。"
+    return f"{prefix}{reason}{action}这不是你的目标表达有问题；原始输入已经保留。"
 
 
 def _stream_failure_message(payload: CommandChatRequest, intent: CommandIntent | None = None) -> str:
@@ -1335,6 +1454,39 @@ class CommandAgentService:
     ) -> None:
         self.add_message(thread_id, "card", content, kind=kind, payload=payload)
 
+    def _seen_planning_trace_ids(self, thread_id: str, session_id: str) -> set[tuple[str, str]]:
+        """Return Agent trace records already projected into this Command thread.
+
+        Planning session snapshots contain the complete immutable decision and
+        message logs. Command cards are an incremental projection of those
+        logs, so their stable trace ids must be emitted only once per
+        thread/session pair.
+        """
+
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT kind, payload_json
+                FROM command_messages
+                WHERE thread_id = ?
+                  AND role = 'card'
+                  AND kind IN ('agent_decision', 'agent_message')
+                """,
+                (thread_id,),
+            ).fetchall()
+        seen: set[tuple[str, str]] = set()
+        for row in rows:
+            payload = _json_object(row["payload_json"])
+            if str(payload.get("sessionId") or "") != session_id:
+                continue
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                continue
+            trace_id = str(data.get("id") or "").strip()
+            if trace_id:
+                seen.add((str(row["kind"]), trace_id))
+        return seen
+
     def _planning_event(
         self,
         thread_id: str,
@@ -1346,6 +1498,8 @@ class CommandAgentService:
         business_status: str | None = None,
         runtime_status: str | None = None,
         goal_completion: dict[str, Any] | None = None,
+        model_failure: dict[str, Any] | None = None,
+        pending_input: dict[str, Any] | None = None,
         content: str = "",
     ) -> str:
         payload: dict[str, Any] = {"sessionId": session_id}
@@ -1357,6 +1511,10 @@ class CommandAgentService:
             payload["runtimeStatus"] = runtime_status
         if goal_completion is not None:
             payload["goalCompletion"] = goal_completion
+        if model_failure is not None:
+            payload["modelFailure"] = model_failure
+        if pending_input is not None:
+            payload["pendingInput"] = pending_input
         if data is not None:
             payload["data"] = data
         self._add_planning_session_card(thread_id, kind, content or status or session_id, payload)
@@ -1411,7 +1569,11 @@ class CommandAgentService:
             session.cognitive_metadata
             and session.cognitive_metadata.engine_version == "cognitive-os-v1"
         )
+        seen_trace_ids = self._seen_planning_trace_ids(thread_id, session.session_id)
         for decision in session.decisions:
+            trace_key = ("agent_decision", decision.id)
+            if trace_key in seen_trace_ids:
+                continue
             data = decision.model_dump(by_alias=True, exclude_none=True)
             yield self._planning_event(
                 thread_id,
@@ -1420,7 +1582,11 @@ class CommandAgentService:
                 data=data,
                 content=decision.user_visible_summary or decision.reason or decision.decision,
             )
+            seen_trace_ids.add(trace_key)
         for message in session.messages:
+            trace_key = ("agent_message", message.id)
+            if trace_key in seen_trace_ids:
+                continue
             data = message.model_dump(by_alias=True)
             yield self._planning_event(
                 thread_id,
@@ -1429,7 +1595,13 @@ class CommandAgentService:
                 data=data,
                 content=message.reason or message.message_type,
             )
+            seen_trace_ids.add(trace_key)
         for event_type, data in cognitive_events(session):
+            data = dict(data)
+            if event_type in {"goal_model_updated", "goal_completion_updated"}:
+                data["artifactState"] = (
+                    "last_confirmed" if session.status == "MODEL_UNAVAILABLE" else "current"
+                )
             summary_keys = {
                 "goal_model_updated": "goalStatement",
                 "goal_completion_updated": "nextStage",
@@ -1468,6 +1640,16 @@ class CommandAgentService:
             business_status=session.business_status,
             runtime_status=session.runtime_status,
             goal_completion=session.goal_completion,
+            model_failure=(
+                session.model_failure.model_dump(by_alias=True, exclude_none=True)
+                if session.model_failure
+                else None
+            ),
+            pending_input=(
+                session.pending_input.model_dump(by_alias=True)
+                if session.pending_input
+                else None
+            ),
             content=session.status,
         )
 
@@ -1624,22 +1806,6 @@ class CommandAgentService:
             yield from self._stream_planning_session_snapshot(thread_id, updated)
             return
         if action == "ready_to_write_status":
-            summary = "Execution plan is already confirmed and ready for Calendar write."
-            yield self._planning_event(
-                thread_id,
-                "agent_decision",
-                session.session_id,
-                data={
-                    "agent": "Execution Planner Agent",
-                    "decision": "approve",
-                    "reason": summary,
-                    "confidence": 1,
-                    "inputArtifactIds": [],
-                    "outputArtifactIds": [],
-                    "userVisibleSummary": summary,
-                },
-                content=summary,
-            )
             yield self._planning_event(thread_id, "planning_session_status", session.session_id, status=session.status, content=session.status)
             return
         if action == "execution_revision_status":
@@ -1773,6 +1939,7 @@ class CommandAgentService:
             "uncertainties",
             "consistencyWarnings",
             "nextQuestion",
+            "clarificationOptions",
             "confidence",
         }
         result = {key: payload[key] for key in allowed if key in payload}
@@ -2077,7 +2244,7 @@ class CommandAgentService:
             return
 
         if payload.mode == "auto" and intent == "goal_understanding_unavailable":
-            reply = _goal_understanding_unavailable_reply(payload.message)
+            reply = _goal_understanding_unavailable_reply(payload.message, goal_understanding)
             self.add_message(thread_id, "assistant", reply)
             yield _ndjson({"type": "assistant_delta", "text": reply})
             yield _ndjson({"type": "done", "threadId": thread_id})

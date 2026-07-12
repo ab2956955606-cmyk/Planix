@@ -13,6 +13,7 @@ GoalCompletionNextStage = Literal["goal_clarification", "evidence", "strategy"]
 class GoalCompletionBlockingUnknown(CognitiveContract):
     question: str = Field(min_length=1)
     impact: str = Field(min_length=1)
+    answer_options: list[str] = Field(default_factory=list, max_length=4)
 
 
 class GoalCompletionResult(CognitiveContract):

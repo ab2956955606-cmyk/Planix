@@ -224,6 +224,9 @@ def init_db(conn: sqlite3.Connection) -> None:
           model TEXT NOT NULL DEFAULT '',
           api_key_encrypted TEXT NOT NULL DEFAULT '',
           api_key_source TEXT NOT NULL DEFAULT '',
+          key_status TEXT NOT NULL DEFAULT 'unchecked',
+          key_error_type TEXT NOT NULL DEFAULT '',
+          last_validated_at TEXT NOT NULL DEFAULT '',
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -621,6 +624,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "ai_settings", "temperature", "REAL NOT NULL DEFAULT 0.3")
     ensure_column(conn, "ai_settings", "timeout_seconds", "INTEGER NOT NULL DEFAULT 40")
     ensure_column(conn, "ai_settings", "api_key_source", "TEXT NOT NULL DEFAULT 'legacy'")
+    ensure_column(conn, "ai_provider_configs", "key_status", "TEXT NOT NULL DEFAULT 'unchecked'")
+    ensure_column(conn, "ai_provider_configs", "key_error_type", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "ai_provider_configs", "last_validated_at", "TEXT NOT NULL DEFAULT ''")
     conn.execute(
         """
         INSERT OR IGNORE INTO ai_provider_configs(

@@ -17,6 +17,26 @@ from ..services.llm import LlmClient
 logger = logging.getLogger("planix.api.settings")
 router = APIRouter(prefix="/api/ai", tags=["ai-settings"])
 
+_SAFE_SETTINGS_TEST_ERRORS = {
+    "auth_error": "API key is invalid or expired.",
+    "bad_model": "The model name does not exist or is not supported.",
+    "bad_base_url": "The Base URL endpoint is unavailable or invalid.",
+    "bad_request": "The model service rejected the test request.",
+    "network_error": "The model service cannot be reached. Check the network or service availability.",
+    "timeout": "The model request timed out. Check the network or increase the timeout.",
+    "rate_limit": "The model service rate limit was reached. Try again later.",
+    "insufficient_balance": "The model account has insufficient balance.",
+    "invalid_key_format": "The API key format is invalid.",
+    "invalid_model_output": "The model returned an invalid response.",
+    "model_output_truncated": "The model output was truncated before the test completed.",
+    "unknown": "The model test failed. Check the provider settings and try again.",
+}
+
+
+def _safe_settings_test_error(error_type: str | None) -> tuple[str, str]:
+    safe_type = error_type if error_type in _SAFE_SETTINGS_TEST_ERRORS else "unknown"
+    return safe_type, _SAFE_SETTINGS_TEST_ERRORS[safe_type]
+
 
 def _sanitize_base_url(value: str) -> str:
     try:
@@ -131,13 +151,14 @@ def test_ai_settings(payload: AiSettingsTestPayload) -> AiSettingsTestOut:
             provider=result.provider,
             model=result.model,
         )
+    safe_error_type, safe_message = _safe_settings_test_error(err.error_type if err else None)
     return AiSettingsTestOut(
         ok=False,
         mode="error",
-        message=err.message if err else "Model call failed. Check the settings.",
+        message=safe_message,
         provider=client.settings.provider,
         model=client.settings.model,
-        error_type=err.error_type if err else "unknown",
+        error_type=safe_error_type,
         status_code=err.status_code if err else 0,
-        detail=err.detail if err else "",
+        detail=None,
     )

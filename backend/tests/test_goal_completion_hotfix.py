@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -8,7 +10,9 @@ from pydantic import ValidationError
 from app.cognitive_planning.agents import GoalCompletionJudge
 from app.cognitive_planning.graph.planning_graph import _from_guard
 from app.db import init_db
+from app.schemas import CognitivePlanningMetadata
 from app.services.command_agent import detect_planning_control_intent
+from app.services.cognitive_planning.compatibility.session_api_adapter import _model_failure
 from app.services.cognitive_planning.contracts import (
     DecisionRelevantUnknown,
     FeasibilityJudgment,
@@ -134,6 +138,7 @@ def test_goal_completion_judge_never_labels_a_blocker_as_optional() -> None:
             question="你希望 Go 最终用于什么结果？",
             whyThisQuestionMatters="用途会改变整个策略。",
             expectedDecisionImpact="strategy",
+            answerOptions=["找工作", "个人项目", "后端服务", "系统学习"],
         ),
     )
 
@@ -142,6 +147,7 @@ def test_goal_completion_judge_never_labels_a_blocker_as_optional() -> None:
     assert result.complete is False
     assert result.next_stage == "goal_clarification"
     assert result.blocking_unknowns[0].question == "你希望 Go 最终用于什么结果？"
+    assert result.blocking_unknowns[0].answer_options == ["找工作", "个人项目", "后端服务", "系统学习"]
     assert result.optional_unknowns == []
 
 
@@ -202,6 +208,10 @@ def test_goal_completion_judge_matches_questions_by_semantics_not_list_position(
         ("下一步", "continue_current_stage"),
         ("继续", "continue_current_stage"),
         ("开始规划", "continue_current_stage"),
+        ("请重试当前深度规划", "continue_current_stage"),
+        ("重试深度规划", "continue_current_stage"),
+        ("Retry the current deep planning session", "continue_current_stage"),
+        ("Retry deep planning", "continue_current_stage"),
         ("确认", "approve_current_stage"),
         ("修改", "modify_current_stage"),
         ("重新开始", "restart_planning"),
@@ -211,6 +221,149 @@ def test_goal_completion_judge_matches_questions_by_semantics_not_list_position(
 )
 def test_planning_control_intent_is_detected_before_goal_modeling(text: str, expected: str) -> None:
     assert detect_planning_control_intent(text) == expected
+
+
+def test_model_failure_projection_sanitizes_attempts_and_marks_automatic_retry() -> None:
+    failure = _model_failure(
+        status="MODEL_UNAVAILABLE",
+        metadata=CognitivePlanningMetadata(
+            engineVersion="cognitive-os-v1",
+            planningMode="blocked_model_unavailable",
+            currentStage="goal_intelligence",
+        ),
+        messages=[
+            SimpleNamespace(
+                message_type="block",
+                resolved=False,
+                payload_json={
+                    "errorType": "auth_error",
+                    "retryable": True,
+                    "resumeNode": "goal_intelligence",
+                    "detail": "secret provider response",
+                    "apiKey": "sk-secret",
+                    "attempts": [
+                        {
+                            "provider": "deepseek",
+                            "model": "private-model-name",
+                            "status": "error",
+                            "errorType": "model_output_truncated",
+                            "detail": "raw response",
+                        },
+                        {
+                            "provider": "deepseek",
+                            "model": "private-model-name",
+                            "status": "error",
+                            "errorType": "model_output_truncated",
+                            "automaticRetry": True,
+                        },
+                        {
+                            "provider": "zhipu_glm",
+                            "status": "error",
+                            "errorType": "auth_error",
+                        },
+                        {
+                            "provider": "kimi",
+                            "status": "skipped",
+                            "errorType": "missing_api_key",
+                        },
+                        {
+                            "provider": "untrusted-provider",
+                            "status": "error",
+                            "errorType": "internal_exception",
+                        },
+                    ],
+                },
+            )
+        ],
+    )
+
+    assert failure is not None
+    payload = failure.model_dump(by_alias=True, exclude_none=True)
+    assert payload["automaticRetryAttempted"] is True
+    assert payload["attempts"] == [
+        {"provider": "deepseek", "status": "error", "errorType": "model_output_truncated"},
+        {"provider": "deepseek", "status": "error", "errorType": "model_output_truncated"},
+        {"provider": "zhipu_glm", "status": "error", "errorType": "auth_error"},
+        {"provider": "kimi", "status": "skipped", "errorType": "missing_api_key"},
+    ]
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "private-model-name" not in serialized
+    assert "secret provider response" not in serialized
+    assert "raw response" not in serialized
+    assert "sk-secret" not in serialized
+    assert "untrusted-provider" not in serialized
+    assert "系统已自动重试一次" in payload["action"]["zh"]
+    assert "already retried once automatically" in payload["action"]["en"]
+
+
+def test_model_failure_projection_keeps_post_route_contract_error_provider_neutral() -> None:
+    failure = _model_failure(
+        status="MODEL_UNAVAILABLE",
+        metadata=CognitivePlanningMetadata(
+            engineVersion="cognitive-os-v1",
+            planningMode="blocked_model_unavailable",
+            currentStage="goal_intelligence",
+        ),
+        messages=[
+            SimpleNamespace(
+                message_type="block",
+                resolved=False,
+                payload_json={
+                    "errorType": "invalid_model_output",
+                    "resumeNode": "goal_intelligence",
+                    "attempts": [
+                        {
+                            "provider": "deepseek",
+                            "status": "error",
+                            "errorType": "model_output_truncated",
+                        },
+                        {
+                            "provider": "deepseek",
+                            "status": "success",
+                            "automaticRetry": True,
+                        },
+                    ],
+                },
+            )
+        ],
+    )
+
+    assert failure is not None
+    summary = failure.summary.en
+    assert "DeepSeek: the model output was truncated" in summary
+    assert "the output did not satisfy the structured contract" in summary
+    assert "DeepSeek: the output did not satisfy the structured contract" not in summary
+
+
+def test_model_failure_projection_does_not_append_unknown_for_unsupported_fallback() -> None:
+    failure = _model_failure(
+        status="MODEL_UNAVAILABLE",
+        metadata=CognitivePlanningMetadata(
+            engineVersion="cognitive-os-v1",
+            planningMode="blocked_model_unavailable",
+            currentStage="goal_intelligence",
+        ),
+        messages=[
+            SimpleNamespace(
+                message_type="block",
+                resolved=False,
+                payload_json={
+                    "errorType": "model_unavailable",
+                    "attempts": [
+                        {
+                            "provider": "deepseek",
+                            "status": "error",
+                            "errorType": "auth_error",
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+
+    assert failure is not None
+    assert "DeepSeek: the API Key was invalid or expired" in failure.summary.en
+    assert "did not return a usable result" not in failure.summary.en
 
 
 @pytest.mark.parametrize("resume_node", ["goal_intelligence", "goal_completion"])

@@ -11,7 +11,7 @@ SETTINGS_ID = "local-default"
 SUPPORTED_PROVIDERS = {"mock", "deepseek", "kimi", "zhipu_glm", "openai", "custom"}
 KEYED_PROVIDERS = {"deepseek", "kimi", "zhipu_glm", "openai", "custom"}
 PROVIDER_ORDER = ["deepseek", "kimi", "zhipu_glm", "openai", "custom"]
-AUTO_PROVIDER_DEFAULT_ORDER = ["zhipu_glm", "deepseek", "kimi", "openai", "custom"]
+AUTO_PROVIDER_DEFAULT_ORDER = ["deepseek", "zhipu_glm", "kimi", "openai", "custom"]
 ROUTABLE_TASK_TYPES = [
     "goal_understanding",
     "command_decision",
@@ -35,6 +35,8 @@ LEGACY_ROUTING_TASK_ALIASES = {
     "note_write": "memory_write",
 }
 AUTO_MODEL_POLICY_KEY = "ai.autoModelPolicy"
+KEY_STATUS_VALUES = {"unchecked", "valid", "invalid"}
+KEY_INVALIDATING_ERRORS = {"auth_error", "invalid_key_format"}
 DEFAULT_TASK_STRATEGIES = {
     "goal_understanding": "knowledge_reasoning",
     "command_decision": "fast_low_cost",
@@ -89,10 +91,16 @@ class EffectiveAiSettings:
     temperature: float
     timeout_seconds: int
     updated_at: str
+    key_status: str = "unchecked"
+    key_error_type: str = ""
 
     @property
     def has_api_key(self) -> bool:
         return bool(self.api_key.strip())
+
+    @property
+    def has_usable_api_key(self) -> bool:
+        return self.has_api_key and self.key_status != "invalid"
 
 
 @dataclass(frozen=True)
@@ -103,6 +111,9 @@ class ProviderConfig:
     api_key: str
     api_key_source: str
     updated_at: str
+    key_status: str = "unchecked"
+    key_error_type: str = ""
+    last_validated_at: str = ""
 
     @property
     def has_api_key(self) -> bool:
@@ -117,6 +128,9 @@ class PendingProviderConfig:
     api_key: str
     api_key_source: str
     should_validate: bool
+    key_status: str = "unchecked"
+    key_error_type: str = ""
+    last_validated_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -208,6 +222,9 @@ def _row_to_provider_config(row) -> ProviderConfig | None:
         api_key=row["api_key_encrypted"] if row["api_key_source"] == "user" else "",
         api_key_source=row["api_key_source"],
         updated_at=row["updated_at"],
+        key_status=row["key_status"] if row["key_status"] in KEY_STATUS_VALUES else "unchecked",
+        key_error_type=row["key_error_type"] or "",
+        last_validated_at=row["last_validated_at"] or "",
     )
 
 
@@ -228,6 +245,9 @@ def _saved_provider_rows(conn) -> list[AiSavedProvider]:
             baseUrl=config.base_url,
             model=config.model,
             hasApiKey=config.has_api_key,
+            keyStatus=config.key_status,
+            keyErrorType=config.key_error_type,
+            lastValidatedAt=config.last_validated_at,
             updatedAt=config.updated_at,
         )
         for config in configs
@@ -257,13 +277,14 @@ def _normalize_task_strategies(value: object) -> dict[str, str]:
 
 
 def _saved_key_provider_order(conn) -> list[str]:
-    rows = conn.execute("SELECT provider, api_key_encrypted, api_key_source FROM ai_provider_configs").fetchall()
+    rows = conn.execute("SELECT provider, api_key_encrypted, api_key_source, key_status FROM ai_provider_configs").fetchall()
     saved = {
         row["provider"]
         for row in rows
         if row["provider"] in KEYED_PROVIDERS
         and row["api_key_source"] == "user"
         and (row["api_key_encrypted"] or "").strip()
+        and row["key_status"] != "invalid"
     }
     ordered = [provider for provider in AUTO_PROVIDER_DEFAULT_ORDER if provider in saved]
     ordered.extend(provider for provider in AUTO_PROVIDER_DEFAULT_ORDER if provider not in ordered)
@@ -429,10 +450,14 @@ def _effective_from_rows(settings_row, config: ProviderConfig | None) -> Effecti
     base_url = settings_row["base_url"] or _default_base_url(provider)
     model = settings_row["model"] or _default_model(provider)
     api_key = ""
+    key_status = "unchecked"
+    key_error_type = ""
     if config:
         base_url = config.base_url
         model = config.model
         api_key = config.api_key if config.has_api_key else ""
+        key_status = config.key_status
+        key_error_type = config.key_error_type
     elif settings_row["api_key_source"] == "user":
         api_key = settings_row["api_key_encrypted"]
     return EffectiveAiSettings(
@@ -443,6 +468,8 @@ def _effective_from_rows(settings_row, config: ProviderConfig | None) -> Effecti
         temperature=float(settings_row["temperature"]),
         timeout_seconds=int(settings_row["timeout_seconds"]),
         updated_at=settings_row["updated_at"],
+        key_status=key_status,
+        key_error_type=key_error_type,
     )
 
 
@@ -457,6 +484,8 @@ def _to_public(
         baseUrl=settings.base_url,
         model=settings.model,
         hasApiKey=settings.has_api_key,
+        keyStatus=settings.key_status,
+        keyErrorType=settings.key_error_type,
         temperature=settings.temperature,
         timeoutSeconds=settings.timeout_seconds,
         updatedAt=settings.updated_at,
@@ -490,6 +519,8 @@ def get_effective_ai_settings_for_provider(provider: str, active_settings: Effec
                 temperature=active.temperature,
                 timeout_seconds=active.timeout_seconds,
                 updated_at=active.updated_at,
+                key_status="unchecked",
+                key_error_type="",
             )
         config = _config_for_provider(conn, provider)
         return EffectiveAiSettings(
@@ -500,6 +531,39 @@ def get_effective_ai_settings_for_provider(provider: str, active_settings: Effec
             temperature=active.temperature,
             timeout_seconds=active.timeout_seconds,
             updated_at=config.updated_at if config else active.updated_at,
+            key_status=config.key_status if config else "unchecked",
+            key_error_type=config.key_error_type if config else "",
+        )
+
+
+def mark_provider_key_valid(provider: str, attempted_api_key: str) -> None:
+    if provider not in KEYED_PROVIDERS or not attempted_api_key.strip():
+        return
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ai_provider_configs
+            SET key_status = 'valid', key_error_type = '',
+                last_validated_at = CURRENT_TIMESTAMP
+            WHERE provider = ? AND api_key_source = 'user' AND api_key_encrypted = ?
+              AND key_status != 'valid'
+            """,
+            (provider, attempted_api_key),
+        )
+
+
+def mark_provider_key_invalid(provider: str, attempted_api_key: str, error_type: str) -> None:
+    if provider not in KEYED_PROVIDERS or not attempted_api_key.strip() or error_type not in KEY_INVALIDATING_ERRORS:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE ai_provider_configs
+            SET key_status = 'invalid', key_error_type = ?,
+                last_validated_at = CURRENT_TIMESTAMP
+            WHERE provider = ? AND api_key_source = 'user' AND api_key_encrypted = ?
+            """,
+            (error_type, provider, attempted_api_key),
         )
 
 
@@ -583,10 +647,16 @@ def _candidate_provider_config(conn, payload: AiSettingsUpdate) -> PendingProvid
             and existing
             and (base_url != existing.base_url or model != existing.model)
         )
+        key_status = existing.key_status if api_key and existing else "unchecked"
+        key_error_type = existing.key_error_type if api_key and existing else ""
+        last_validated_at = existing.last_validated_at if api_key and existing else ""
     else:
         api_key = payload.api_key.strip()
         api_key_source = "user" if api_key else ""
         should_validate = bool(api_key)
+        key_status = "valid" if api_key else "unchecked"
+        key_error_type = ""
+        last_validated_at = ""
     return PendingProviderConfig(
         provider=provider,
         base_url=base_url,
@@ -594,6 +664,9 @@ def _candidate_provider_config(conn, payload: AiSettingsUpdate) -> PendingProvid
         api_key=api_key,
         api_key_source=api_key_source,
         should_validate=should_validate,
+        key_status=key_status,
+        key_error_type=key_error_type,
+        last_validated_at=last_validated_at,
     )
 
 
@@ -644,18 +717,32 @@ def _upsert_provider_config(conn, candidate: PendingProviderConfig) -> tuple[str
     conn.execute(
         """
         INSERT INTO ai_provider_configs(
-          provider, base_url, model, api_key_encrypted, api_key_source, updated_at
+          provider, base_url, model, api_key_encrypted, api_key_source,
+          key_status, key_error_type, last_validated_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE ? END, CURRENT_TIMESTAMP)
         ON CONFLICT(provider)
         DO UPDATE SET
           base_url = excluded.base_url,
           model = excluded.model,
           api_key_encrypted = excluded.api_key_encrypted,
           api_key_source = excluded.api_key_source,
+          key_status = excluded.key_status,
+          key_error_type = excluded.key_error_type,
+          last_validated_at = excluded.last_validated_at,
           updated_at = CURRENT_TIMESTAMP
         """,
-        (candidate.provider, candidate.base_url, candidate.model, candidate.api_key, candidate.api_key_source),
+        (
+            candidate.provider,
+            candidate.base_url,
+            candidate.model,
+            candidate.api_key,
+            candidate.api_key_source,
+            "valid" if candidate.should_validate else candidate.key_status,
+            "" if candidate.should_validate else candidate.key_error_type,
+            int(candidate.should_validate),
+            candidate.last_validated_at,
+        ),
     )
     return candidate.api_key, candidate.api_key_source
 
@@ -775,7 +862,8 @@ def delete_provider_api_key(provider: AiProvider | str) -> AiSettingsOut:
                 conn.execute(
                     """
                     UPDATE ai_provider_configs
-                    SET api_key_encrypted = '', api_key_source = '', updated_at = CURRENT_TIMESTAMP
+                    SET api_key_encrypted = '', api_key_source = '', key_status = 'unchecked',
+                        key_error_type = '', last_validated_at = '', updated_at = CURRENT_TIMESTAMP
                     WHERE provider = ?
                     """,
                     (provider,),

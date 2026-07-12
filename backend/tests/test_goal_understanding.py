@@ -62,6 +62,7 @@ def test_goal_understanding_result_parses_public_aliases():
             ],
             "consistencyWarnings": [],
             "nextQuestion": "你去北京主要想实现什么目标？",
+            "clarificationOptions": ["工作", "学习", "旅行", "探亲或其他安排"],
             "confidence": 0.55,
         }
     )
@@ -70,6 +71,31 @@ def test_goal_understanding_result_parses_public_aliases():
     assert result.known_facts == {"location": "北京"}
     assert result.uncertainties[0].field == "purpose"
     assert result.model_dump(by_alias=True)["nextQuestion"] == "你去北京主要想实现什么目标？"
+    assert result.clarification_options == ["工作", "学习", "旅行", "探亲或其他安排"]
+
+
+def test_direct_learning_goal_is_preserved_as_clear_goal_for_goal_intelligence():
+    client = StaticGoalModel(
+        {
+            "intentState": "clear_goal",
+            "understoodIntent": "用户想学习 Python。",
+            "possibleDomains": ["programming"],
+            "knownFacts": {"skill": "Python"},
+            "uncertainties": [],
+            "consistencyWarnings": [],
+            "nextQuestion": None,
+            "clarificationOptions": ["找工作", "做项目"],
+            "confidence": 0.92,
+        }
+    )
+
+    outcome = GoalUnderstandingService(client=client).understand("我要学 Python")
+
+    assert outcome.result is not None
+    assert outcome.result.intent_state == "clear_goal"
+    assert outcome.result.understood_intent == "用户想学习 Python。"
+    assert outcome.result.known_facts == {"skill": "Python"}
+    assert outcome.result.clarification_options == []
 
 
 @pytest.mark.parametrize(
@@ -102,6 +128,7 @@ def test_consistency_warning_quarantines_the_rejected_known_fact():
             "uncertainties": [{"field": "purpose", "impact": "不同用途会改变训练路线。"}],
             "consistencyWarnings": ["做项目与滑雪技能目标并不直接一致。"],
             "nextQuestion": "你想提升滑雪技能、记录学习过程，还是参加比赛挑战？",
+            "clarificationOptions": ["提升滑雪技能", "记录学习过程", "参加比赛挑战", "提升滑雪技能"],
             "confidence": 0.9,
         }
     )
@@ -112,6 +139,7 @@ def test_consistency_warning_quarantines_the_rejected_known_fact():
     assert outcome.result.intent_state == "ambiguous_goal"
     assert outcome.result.known_facts == {"skill": "滑雪"}
     assert outcome.result.consistency_warnings
+    assert outcome.result.clarification_options == ["提升滑雪技能", "记录学习过程", "参加比赛挑战"]
 
 
 def test_consistency_warning_rejects_an_understood_intent_that_accepts_the_bad_purpose():
@@ -153,6 +181,7 @@ def test_prior_goal_understanding_is_passed_as_structured_followup_context():
         "possibleDomains": ["travel", "career", "relocation", "other"],
         "knownFacts": {"location": "北京"},
         "nextQuestion": "你去北京主要是旅游、工作、学习、长期居住，还是其他目的？",
+        "clarificationOptions": ["旅游", "工作", "学习", "长期居住"],
     }
 
     GoalUnderstandingService(client=client).understand(

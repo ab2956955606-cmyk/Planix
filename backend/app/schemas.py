@@ -8,6 +8,7 @@ from .api_key import INVALID_API_KEY_MESSAGE, validate_api_key_format
 PlanPriority = Literal["low", "medium", "high"]
 PlanSource = Literal["manual", "ai"]
 AiProvider = Literal["mock", "deepseek", "kimi", "zhipu_glm", "openai", "custom"]
+AiKeyStatus = Literal["unchecked", "valid", "invalid"]
 RoutingPrimaryProvider = Literal["auto", "deepseek", "kimi", "zhipu_glm", "openai", "custom"]
 AutoModelStrategy = Literal[
     "fast_low_cost",
@@ -130,6 +131,7 @@ class ModelRouteAttempt(BaseModel):
     status: ModelRouteAttemptStatus
     error_type: str | None = Field(default=None, alias="errorType")
     latency_ms: int | None = Field(default=None, alias="latencyMs")
+    automatic_retry: bool | None = Field(default=None, alias="automaticRetry")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -616,6 +618,9 @@ class AiSavedProvider(BaseModel):
     base_url: str = Field(alias="baseUrl")
     model: str
     has_api_key: bool = Field(alias="hasApiKey")
+    key_status: AiKeyStatus = Field(default="unchecked", alias="keyStatus")
+    key_error_type: str = Field(default="", alias="keyErrorType")
+    last_validated_at: str = Field(default="", alias="lastValidatedAt")
     updated_at: str = Field(alias="updatedAt")
 
     model_config = ConfigDict(populate_by_name=True)
@@ -683,6 +688,8 @@ class AiSettingsOut(BaseModel):
     base_url: str = Field(alias="baseUrl")
     model: str
     has_api_key: bool = Field(alias="hasApiKey")
+    key_status: AiKeyStatus = Field(default="unchecked", alias="keyStatus")
+    key_error_type: str = Field(default="", alias="keyErrorType")
     temperature: float
     timeout_seconds: int = Field(alias="timeoutSeconds")
     updated_at: str = Field(alias="updatedAt")
@@ -1459,6 +1466,36 @@ class CognitivePlanningMetadata(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class PlanningModelFailureAttempt(BaseModel):
+    provider: str
+    status: Literal["success", "error", "skipped"]
+    error_type: str | None = Field(default=None, alias="errorType")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PlanningLocalizedText(BaseModel):
+    zh: str
+    en: str
+
+
+class PlanningModelFailure(BaseModel):
+    stage: str
+    resume_node: str = Field(alias="resumeNode")
+    retryable: bool = True
+    automatic_retry_attempted: bool = Field(default=False, alias="automaticRetryAttempted")
+    attempts: list[PlanningModelFailureAttempt] = Field(default_factory=list)
+    summary: PlanningLocalizedText
+    action: PlanningLocalizedText
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PendingPlanningInput(BaseModel):
+    text: str
+    applied: Literal[False] = False
+
+
 class PlanningSessionResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
     thread_id: str = Field(default="", alias="threadId")
@@ -1485,6 +1522,8 @@ class PlanningSessionResponse(BaseModel):
     critique_report: dict[str, Any] | None = Field(default=None, alias="critiqueReport")
     planning_learning_update: dict[str, Any] | None = Field(default=None, alias="planningLearningUpdate")
     approved_strategy_id: str | None = Field(default=None, alias="approvedStrategyId")
+    model_failure: PlanningModelFailure | None = Field(default=None, alias="modelFailure")
+    pending_input: PendingPlanningInput | None = Field(default=None, alias="pendingInput")
     artifacts: list[PlanningArtifact] = Field(default_factory=list)
     decisions: list[AgentDecision] = Field(default_factory=list)
     messages: list[AgentMessage] = Field(default_factory=list)
@@ -1649,7 +1688,26 @@ class GoalUnderstandingResult(BaseModel):
     uncertainties: list[GoalUnderstandingUncertainty] = Field(default_factory=list)
     consistency_warnings: list[str] = Field(default_factory=list, alias="consistencyWarnings")
     next_question: str | None = Field(default=None, alias="nextQuestion")
+    clarification_options: list[str] = Field(default_factory=list, alias="clarificationOptions", max_length=4)
     confidence: float = Field(default=0, ge=0, le=1)
+
+    @field_validator("clarification_options", mode="before")
+    @classmethod
+    def normalize_clarification_options(cls, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            cleaned = str(item or "").strip()
+            key = cleaned.casefold()
+            if not cleaned or key in seen:
+                continue
+            seen.add(key)
+            result.append(cleaned)
+            if len(result) == 4:
+                break
+        return result
 
     model_config = ConfigDict(populate_by_name=True)
 

@@ -54,7 +54,7 @@ class CriticAgent:
             payload={
                 "goalUnderstanding": goal.model_dump(by_alias=True),
                 "realityAssessment": reality.model_dump(by_alias=True) if reality else None,
-                "evidencePack": evidence.model_dump(by_alias=True),
+                "evidencePack": evidence.model_input_view(),
                 "strategyProposal": strategy.model_dump(by_alias=True),
                 "executionPlan": execution.model_dump(by_alias=True),
             },
@@ -82,7 +82,7 @@ class CriticAgent:
                 "feedback": feedback,
                 "goalUnderstanding": goal.model_dump(by_alias=True) if goal else None,
                 "realityAssessment": reality.model_dump(by_alias=True) if reality else None,
-                "evidencePack": evidence.model_dump(by_alias=True) if evidence else None,
+                "evidencePack": evidence.model_input_view() if evidence else None,
                 "strategyProposal": strategy.model_dump(by_alias=True) if strategy else None,
                 "executionPlan": execution.model_dump(by_alias=True) if execution else None,
                 "criticReport": critique.model_dump(by_alias=True) if critique else None,

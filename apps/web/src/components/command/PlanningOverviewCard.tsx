@@ -1,3 +1,4 @@
+import type { FormEvent } from 'react';
 import type { CommandThreadMessage } from '../../stores/commandAgentStore';
 import { planningStageFromStatus, planningStageTranslationKey, type PlanningStage } from './deepPlanningStatus';
 import { ModelUsageBadge } from './ModelUsageBadge';
@@ -21,6 +22,16 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function localizedText(value: unknown, t: Translator): string {
+  const direct = text(value);
+  if (direct) return direct;
+  const localized = record(value);
+  const preferChinese = t('command.knownFacts') === '已知事实';
+  return preferChinese
+    ? text(localized.zh) || text(localized.en)
+    : text(localized.en) || text(localized.zh);
+}
+
 function messageData(message: CommandThreadMessage | undefined): Record<string, unknown> {
   const payload = message?.payload ?? {};
   const data = record(payload.data);
@@ -39,6 +50,18 @@ function latestPayloadField(messages: CommandThreadMessage[], field: string): un
     if (data[field] !== undefined) return data[field];
   }
   return undefined;
+}
+
+function latestKindPayloadField(
+  messages: CommandThreadMessage[],
+  kind: CommandThreadMessage['kind'],
+  field: string
+): unknown {
+  const message = [...messages].reverse().find((item) => item.kind === kind);
+  if (!message) return undefined;
+  const payload = message.payload ?? {};
+  const data = record(payload.data);
+  return payload[field] !== undefined ? payload[field] : data[field];
 }
 
 function goalCompletionData(messages: CommandThreadMessage[]): Record<string, unknown> {
@@ -167,6 +190,120 @@ function firstQuestion(value: unknown): string {
   return '';
 }
 
+function firstAnswerOptions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  for (const item of value) {
+    const options = listText(record(item).answerOptions);
+    if (options.length) return options.slice(0, 4);
+  }
+  return [];
+}
+
+function modelFailureAttemptLines(value: unknown, t: Translator): string[] {
+  if (!Array.isArray(value)) return [];
+  const errorKeys: Record<string, string> = {
+    model_output_truncated: 'command.planningFailureOutputTruncated',
+    auth_error: 'command.planningFailureAuthError',
+    authentication_error: 'command.planningFailureAuthError',
+    bad_base_url: 'command.planningFailureBadBaseUrl',
+    bad_model: 'command.planningFailureBadModel',
+    bad_request: 'command.planningFailureBadRequest',
+    insufficient_balance: 'command.planningFailureInsufficientBalance',
+    invalid_key_format: 'command.planningFailureInvalidKeyFormat',
+    invalid_model_output: 'command.planningFailureInvalidModelOutput',
+    missing_api_key: 'command.planningFailureMissingKey',
+    missing_key: 'command.planningFailureMissingKey',
+    network_error: 'command.planningFailureNetworkError',
+    rate_limit: 'command.planningFailureRateLimit',
+    timeout: 'command.planningFailureTimeout',
+    unknown: 'command.planningFailureUnknown',
+    provider_unavailable: 'command.planningFailureProviderUnavailable',
+    unavailable: 'command.planningFailureProviderUnavailable'
+  };
+  const providerLabels: Record<string, string> = {
+    deepseek: 'DeepSeek',
+    zhipu_glm: 'GLM',
+    kimi: 'Kimi',
+    openai: 'OpenAI',
+    custom: 'Custom',
+    mock: 'Mock'
+  };
+  return value.flatMap((attempt) => {
+    const raw = record(attempt);
+    const status = text(raw.status);
+    if (status === 'success') return [];
+    const rawProvider = text(raw.provider).slice(0, 80);
+    if (!rawProvider) return [];
+    const provider = providerLabels[rawProvider.toLowerCase()] || rawProvider;
+    const errorType = text(raw.errorType) || status;
+    const key = errorKeys[errorType] || 'command.planningFailureRequestFailed';
+    return [`${provider}: ${t(key)}`];
+  });
+}
+
+export function ClarificationChoices({
+  options,
+  disabled,
+  onSend,
+  t
+}: {
+  options: string[];
+  disabled: boolean;
+  onSend?: (value: string) => void;
+  t: Translator;
+}) {
+  const submitOther = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const answer = String(new FormData(form).get('otherAnswer') || '').trim();
+    if (!answer || disabled || !onSend) return;
+    onSend(answer);
+    form.reset();
+    form.closest('details')?.removeAttribute('open');
+  };
+
+  return (
+    <div className="planning-clarification-choices">
+      <small>{t('command.clarificationChoiceHint')}</small>
+      <div className="planning-clarification-buttons">
+        {options.map((option, index) => (
+          <button
+            type="button"
+            disabled={disabled}
+            key={`${option}-${index}`}
+            onClick={() => onSend?.(option)}
+          >
+            <span>{String.fromCharCode(65 + index)}</span>
+            {option}
+          </button>
+        ))}
+      </div>
+      <details className="planning-clarification-details">
+        <summary
+          aria-disabled={disabled}
+          onClick={(event) => {
+            if (disabled) event.preventDefault();
+          }}
+        >
+          {t('command.clarificationOther')}
+        </summary>
+        <form className="planning-clarification-other" onSubmit={submitOther}>
+          <input
+            name="otherAnswer"
+            disabled={disabled}
+            maxLength={500}
+            aria-label={t('command.clarificationOtherPlaceholder')}
+            placeholder={t('command.clarificationOtherPlaceholder')}
+          />
+          <button type="submit" disabled={disabled}>
+            {t('command.clarificationSubmit')}
+          </button>
+        </form>
+      </details>
+    </div>
+  );
+}
+
 function nextActionKey(stage: PlanningStage): string {
   const suffix = stage.split('_').map((part) => part[0].toUpperCase() + part.slice(1)).join('');
   return `command.planningNext${suffix}`;
@@ -186,8 +323,11 @@ export function PlanningOverviewCard({
   const legacyGoal = latest(messages, 'user_need_contract');
   const reality = latest(messages, 'reality_assessment_ready');
   const strategy = latest(messages, 'strategy_portfolio_ready');
-  const businessStatus = text(latestPayloadField(messages, 'businessStatus'));
-  const runtimeStatus = text(latestPayloadField(messages, 'runtimeStatus'));
+  const businessStatus = text(latestKindPayloadField(messages, 'planning_session_status', 'businessStatus'));
+  const runtimeStatus = text(latestKindPayloadField(messages, 'planning_session_status', 'runtimeStatus'));
+  const modelFailure = record(latestKindPayloadField(messages, 'planning_session_status', 'modelFailure'));
+  const pendingInput = record(latestKindPayloadField(messages, 'planning_session_status', 'pendingInput'));
+  const artifactState = text(latestPayloadField(messages, 'artifactState'));
   const nextStage = text(completion.nextStage);
   const stableStatus = status && status !== 'MODEL_UNAVAILABLE' ? status : businessStatus;
   const stage: PlanningStage = stableStatus
@@ -197,7 +337,8 @@ export function PlanningOverviewCard({
       : nextStage === 'evidence' || nextStage === 'strategy'
         ? 'design_plan'
         : planningStageFromStatus(status, messages);
-  const modelBlocked = status === 'MODEL_UNAVAILABLE'
+  const modelBlocked = Object.keys(modelFailure).length > 0
+    || status === 'MODEL_UNAVAILABLE'
     || runtimeStatus === 'blocked_model'
     || runtimeStatus === 'blocked_model_unavailable'
     || runtimeStatus === 'retry_required';
@@ -211,7 +352,7 @@ export function PlanningOverviewCard({
     || text(reality.goalRestatement)
     || t('command.planningUnderstandingPending');
   const facts = Array.from(new Set([
-    ...userFactLines(understanding.knownFacts, t),
+    ...(modelBlocked ? [] : userFactLines(understanding.knownFacts, t)),
     ...semanticFactLines(goal.knownFacts, t),
     ...listText(goal.currentKnowledge).map((item) => `${t('command.planningFactBackground')}: ${item}`),
     ...listText(goal.hardConstraints).map((item) => `${t('command.planningFactConstraints')}: ${item}`),
@@ -228,9 +369,35 @@ export function PlanningOverviewCard({
       ? userUncertaintyLines(understanding.uncertainties, t)
       : importantGoalUnknownLines(goal.decisionRelevantUnknowns);
   const optionalUnknowns = completionAvailable ? listText(completion.optionalUnknowns) : [];
+  const pendingInputText = pendingInput.applied === false ? text(pendingInput.text) : '';
+  const visibleBlockingUnknowns = modelBlocked
+    ? [pendingInputText
+        ? `${t('command.planningPendingModelInput')}: ${pendingInputText}`
+        : t('command.planningPendingModelInputFallback')]
+    : blockingUnknowns;
   const criticalSkipBlocker = warnings.length > 0 || hasCriticalGoalBlocker(goal.decisionRelevantUnknowns);
-  const showSkipControl = completionAvailable && completion.complete === false && stage === 'understand_goal';
+  const showSkipControl = !modelBlocked
+    && completionAvailable
+    && completion.complete === false
+    && stage === 'understand_goal';
   const skipDisabled = !actionsEnabled || !onSend || sending || modelBlocked || criticalSkipBlocker;
+  const clarificationOptions = (
+    completionAvailable
+      ? firstAnswerOptions(completion.blockingUnknowns)
+      : listText(understanding.clarificationOptions)
+  ).slice(0, 4);
+  const showClarificationChoices = stage === 'understand_goal'
+    && !modelBlocked
+    && clarificationOptions.length >= 2;
+  const clarificationDisabled = !actionsEnabled || !onSend || sending;
+  const modelFailureSummary = localizedText(modelFailure.summary, t)
+    || t('command.planningFailureFallbackSummary');
+  const modelFailureAction = localizedText(modelFailure.action, t)
+    || t('command.planningRuntimeWaitingModel');
+  const modelFailureAttempts = modelFailureAttemptLines(modelFailure.attempts, t);
+  const modelRetryable = typeof modelFailure.retryable === 'boolean' ? modelFailure.retryable : true;
+  const showRetryControl = modelBlocked && modelRetryable && actionsEnabled;
+  const retryDisabled = sending || !onSend;
 
   const legacyNextQuestion = text(understanding.nextQuestion)
     || firstQuestion(goal.questions)
@@ -238,7 +405,7 @@ export function PlanningOverviewCard({
     || firstQuestion(reality.importantQuestions)
     || text(record(strategy.userDecision).question);
   const nextAction = modelBlocked
-    ? t('command.planningRuntimeWaitingModel')
+    ? modelFailureAction
     : completionAvailable
       ? completion.complete === true
         ? t(nextActionKey(stage))
@@ -257,29 +424,62 @@ export function PlanningOverviewCard({
         <p className="planning-overview-goal">{goalStatement}</p>
       </section>
       <section>
-        <h3>{t('command.knownFacts')}</h3>
+        <h3>{t(modelBlocked || artifactState === 'last_confirmed'
+          ? 'command.lastConfirmedKnownFacts'
+          : 'command.knownFacts')}</h3>
         {facts.length
           ? <ul>{facts.slice(0, 8).map((fact, index) => <li key={`${fact}-${index}`}>{fact}</li>)}</ul>
           : <p>{t('command.noKnownFacts')}</p>}
       </section>
       <section>
         <h3>{t('command.importantUnknowns')}</h3>
-        {warnings.length ? (
+        {!modelBlocked && warnings.length ? (
           <div className="planning-consistency-warning" role="alert">
             <strong>{t('command.consistencyWarning')}</strong>
             <ul>{warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul>
           </div>
         ) : null}
-        {blockingUnknowns.length
-          ? <ul>{blockingUnknowns.map((unknown, index) => <li key={`${unknown}-${index}`}>{unknown}</li>)}</ul>
+        {visibleBlockingUnknowns.length
+          ? <ul>{visibleBlockingUnknowns.map((unknown, index) => <li key={`${unknown}-${index}`}>{unknown}</li>)}</ul>
           : <p>{t('command.noBlockingUnknowns')}</p>}
-        {optionalUnknowns.length
+        {!modelBlocked && optionalUnknowns.length
           ? <p className="planning-optional-unknowns">{t('command.optionalUnknowns')}: {optionalUnknowns.join(' / ')}</p>
           : null}
       </section>
       <section className="planning-next-action">
         <h3>{t('command.nextAction')}</h3>
+        {modelBlocked ? (
+          <div className="planning-model-failure" role="alert">
+            <p>{modelFailureSummary}</p>
+            {modelFailureAttempts.length ? (
+              <ul>{modelFailureAttempts.map((attempt, index) => <li key={`${attempt}-${index}`}>{attempt}</li>)}</ul>
+            ) : null}
+            {modelFailure.automaticRetryAttempted === true
+              ? <small>{t('command.planningAutomaticRetryAttempted')}</small>
+              : null}
+          </div>
+        ) : null}
         <p>{nextAction}</p>
+        {showClarificationChoices ? (
+          <ClarificationChoices
+            key={nextAction}
+            options={clarificationOptions}
+            disabled={clarificationDisabled}
+            onSend={onSend}
+            t={t}
+          />
+        ) : null}
+        {showRetryControl ? (
+          <div className="planning-retry-control">
+            <button
+              type="button"
+              disabled={retryDisabled}
+              onClick={() => onSend?.(t('command.retryDeepPlanningMessage'))}
+            >
+              {t('command.retryCurrentPlanningStage')}
+            </button>
+          </div>
+        ) : null}
         {showSkipControl ? (
           <div className="planning-skip-control">
             <button
