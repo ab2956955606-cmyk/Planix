@@ -124,6 +124,30 @@ def test_goal_completion_judge_allows_optional_unknowns_even_when_legacy_flag_is
     assert "你希望何时完成第一版？" in result.optional_unknowns
 
 
+def test_goal_completion_judge_fails_closed_when_a_proceeding_goal_still_asks() -> None:
+    important = DecisionRelevantUnknown(
+        key="purpose",
+        description="Which outcome should determine the recommended direction",
+        whyItChangesThePlan="The answer selects a materially different strategy.",
+        impact="strategy",
+        priority="important",
+    )
+    question = GoalQuestion(
+        question="Which outcome should this plan optimize for?",
+        whyThisQuestionMatters="The answer changes the recommended strategy.",
+        expectedDecisionImpact="strategy selection",
+        answerOptions=["Outcome A", "Outcome B"],
+    )
+    goal = _goal_with_unknown(important, question, can_proceed=True)
+
+    result = GoalCompletionJudge().evaluate(goal)
+
+    assert result.complete is False
+    assert result.next_stage == "goal_clarification"
+    assert result.blocking_unknowns[0].question == question.question
+    assert result.blocking_unknowns[0].answer_options == question.answer_options
+
+
 def test_goal_completion_judge_never_labels_a_blocker_as_optional() -> None:
     blocker = DecisionRelevantUnknown(
         key="purpose",

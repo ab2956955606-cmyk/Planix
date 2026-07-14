@@ -45,7 +45,7 @@ def _approved(
 
 def _passed_critic(execution: ArtifactRef):
     return CriticController().assess(
-        report={"status": "passed", "calendarWritable": True, "issues": [], "repairRequests": []},
+        report={"status": "passed", "score": 95, "calendarWritable": True, "issues": [], "repairRequests": []},
         critique_artifact=_artifact("critique_report", version=execution.version),
         execution_artifact=execution,
         evaluated_execution_artifact=execution,
@@ -161,13 +161,48 @@ def test_critic_controller_returns_execution_repair_and_rejects_stale_review() -
     assert decision.repair_target == "execution_blueprint"
 
     stale = controller.assess(
-        report={"status": "passed", "calendarWritable": True},
+        report={"status": "passed", "score": 95, "calendarWritable": True},
         critique_artifact=_artifact("critique_report", version=2),
         execution_artifact=_artifact("execution_blueprint", version=2),
         evaluated_execution_artifact=execution_v1,
     )
     assert stale.passed is False
     assert controller.policy_decision(stale).action == "deny"
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        {
+            "status": "passed",
+            "score": 95,
+            "calendarWritable": True,
+            "issues": [{"severity": "major"}],
+            "repairRequests": [],
+        },
+        {
+            "status": "passed",
+            "score": 95,
+            "calendarWritable": True,
+            "issues": [],
+            "repairRequests": [{"targetAgent": "execution_designer"}],
+        },
+    ],
+    ids=["major-issue", "repair-request"],
+)
+def test_critic_controller_rejects_inconsistent_passed_reports(report) -> None:
+    controller = CriticController()
+    execution = _artifact("execution_blueprint")
+
+    gate = controller.assess(
+        report=report,
+        critique_artifact=_artifact("critique_report"),
+        execution_artifact=execution,
+        evaluated_execution_artifact=execution,
+    )
+
+    assert gate.passed is False
+    assert controller.policy_decision(gate).allowed is False
 
 
 def test_calendar_write_requires_strategy_execution_critic_and_calendar_gates() -> None:

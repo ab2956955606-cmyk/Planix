@@ -8,10 +8,11 @@ import { WorkbenchToggle } from './WorkbenchToggle';
 
 interface CommandComposerProps {
   sending: boolean;
+  disabled?: boolean;
   messages: CommandThreadMessage[];
   mode: CommandMode;
   permission: CommandPermission;
-  onSend: (value: string) => void;
+  onSend: (value: string) => boolean | void | Promise<boolean | void>;
   onChatToggle: () => void;
   onWorkbenchToggle: () => void;
   onPermissionChange: (permission: CommandPermission) => void;
@@ -21,6 +22,7 @@ interface CommandComposerProps {
 export function CommandComposer(props: CommandComposerProps) {
   const {
     sending,
+    disabled = false,
     messages,
     mode,
     permission,
@@ -55,9 +57,9 @@ export function CommandComposer(props: CommandComposerProps) {
 
   function submit() {
     const trimmed = value.trim();
-    if (!trimmed || sending) return;
-    onSend(trimmed);
-    setValue('');
+    if (!trimmed || sending || disabled) return;
+    const accepted = onSend(trimmed);
+    if (accepted !== false) setValue('');
   }
 
   return (
@@ -99,19 +101,20 @@ export function CommandComposer(props: CommandComposerProps) {
             }
           }}
           placeholder={t('command.placeholder')}
+          disabled={disabled && !sending}
           rows={2}
         />
         <button
           className={`command-send ${value.trim() ? 'ready' : ''}`}
           type="button"
           onClick={submit}
-          disabled={!value.trim() || sending}
+          disabled={!value.trim() || sending || disabled}
           title={t('command.send')}
         >
           <ArrowUp size={18} />
         </button>
       </div>
-      <DeepPlanningActionBar disabled={sending} messages={messages} onSend={onSend} t={t} />
+      <DeepPlanningActionBar disabled={sending || disabled} messages={messages} onSend={onSend} t={t} />
     </div>
   );
 }

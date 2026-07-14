@@ -28,7 +28,37 @@ export interface CommandThreadMessage {
   streaming?: boolean;
 }
 
+export type CommandWorkspaceStatus =
+  | 'idle'
+  | 'running'
+  | 'waiting_clarification'
+  | 'waiting_strategy_approval'
+  | 'blocked_model'
+  | 'accepted'
+  | 'unconfirmed'
+  | 'failed';
+
+export interface CommandWorkspaceSummary {
+  id: string;
+  threadId?: string;
+  title: string;
+  messageCount: number;
+  status: CommandWorkspaceStatus;
+  sending: boolean;
+  updatedAt: number;
+  error?: string;
+}
+
+type CommandWorkspace = CommandWorkspaceSummary & {
+  messages: CommandThreadMessage[];
+  loading: boolean;
+};
+
 type CommandAgentState = {
+  activeWorkspaceId: string;
+  workspaces: Record<string, CommandWorkspace>;
+  workspaceOrder: string[];
+  workspaceList: CommandWorkspaceSummary[];
   threadId?: string;
   messages: CommandThreadMessage[];
   threads: CommandThreadSummary[];
@@ -36,29 +66,72 @@ type CommandAgentState = {
   mode: CommandMode;
   advancedAgentTrace: boolean;
   sending: boolean;
+  canSend: boolean;
+  runningWorkspaceCount: number;
+  concurrencyLimit: 1 | 2;
   drawerOpen: boolean;
   loadingThreads: boolean;
 };
 
 const listeners = new Set<() => void>();
+const PLANNING_CONCURRENCY_SESSION_KEY = 'planix_planning_concurrency_limit';
 
-let state: CommandAgentState = {
+function loadPlanningConcurrencyLimit(): 1 | 2 {
+  try {
+    return globalThis.sessionStorage?.getItem(PLANNING_CONCURRENCY_SESSION_KEY) === '1' ? 1 : 2;
+  } catch {
+    return 2;
+  }
+}
+
+function savePlanningConcurrencyLimit(value: 1 | 2) {
+  try {
+    globalThis.sessionStorage?.setItem(PLANNING_CONCURRENCY_SESSION_KEY, String(value));
+  } catch {
+    // Storage can be unavailable in privacy-restricted WebViews. The current
+    // in-memory batch still remains safely downgraded.
+  }
+}
+
+function createWorkspace(id = createId('workspace')): CommandWorkspace {
+  return {
+    id,
+    messages: [],
+    title: '',
+    messageCount: 0,
+    status: 'idle',
+    sending: false,
+    loading: false,
+    updatedAt: Date.now()
+  };
+}
+
+const initialWorkspace = createWorkspace();
+
+let state: CommandAgentState = projectActiveWorkspace({
+  activeWorkspaceId: initialWorkspace.id,
+  workspaces: { [initialWorkspace.id]: initialWorkspace },
+  workspaceOrder: [initialWorkspace.id],
+  workspaceList: [],
   messages: [],
   threads: [],
   permission: 'low',
   mode: 'auto',
   advancedAgentTrace: loadAdvancedAgentTrace(),
   sending: false,
+  canSend: true,
+  runningWorkspaceCount: 0,
+  concurrencyLimit: loadPlanningConcurrencyLimit(),
   drawerOpen: false,
   loadingThreads: false
-};
+});
 
 function emit() {
   listeners.forEach((listener) => listener());
 }
 
 function updateState(updater: (current: CommandAgentState) => CommandAgentState) {
-  state = updater(state);
+  state = projectActiveWorkspace(updater(state));
   emit();
 }
 
@@ -75,34 +148,79 @@ function createId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function addMessage(message: Omit<CommandThreadMessage, 'id' | 'createdAt'>): string {
-  const id = createId(message.role);
-  updateState((current) => ({
+function projectActiveWorkspace(current: CommandAgentState): CommandAgentState {
+  const active = current.workspaces[current.activeWorkspaceId] || createWorkspace(current.activeWorkspaceId);
+  const runningWorkspaceCount = Object.values(current.workspaces).filter((workspace) => workspace.sending).length;
+  const workspaceList = current.workspaceOrder
+    .map((id) => current.workspaces[id])
+    .filter((workspace): workspace is CommandWorkspace => Boolean(workspace))
+    .map((workspace) => ({
+      id: workspace.id,
+      threadId: workspace.threadId,
+      title: workspace.title,
+      messageCount: workspace.messages.length,
+      status: workspace.status,
+      sending: workspace.sending,
+      updatedAt: workspace.updatedAt,
+      error: workspace.error
+    }));
+  return {
     ...current,
-    messages: [
-      ...current.messages,
-      { ...message, id, createdAt: Date.now() }
-    ]
-  }));
+    threadId: active.threadId,
+    messages: active.messages,
+    sending: active.sending,
+    canSend: !active.sending && !active.loading && runningWorkspaceCount < current.concurrencyLimit,
+    runningWorkspaceCount,
+    workspaceList
+  };
+}
+
+function updateWorkspace(
+  current: CommandAgentState,
+  workspaceId: string,
+  updater: (workspace: CommandWorkspace) => CommandWorkspace
+): CommandAgentState {
+  const workspace = current.workspaces[workspaceId];
+  if (!workspace) return current;
+  const next = updater(workspace);
+  return {
+    ...current,
+    workspaces: {
+      ...current.workspaces,
+      [workspaceId]: {
+        ...next,
+        messageCount: next.messages.length,
+        updatedAt: Date.now()
+      }
+    }
+  };
+}
+
+function addWorkspaceMessage(message: Omit<CommandThreadMessage, 'id' | 'createdAt'>, workspaceId = state.activeWorkspaceId): string {
+  const id = createId(message.role);
+  updateState((current) => updateWorkspace(current, workspaceId, (workspace) => ({
+    ...workspace,
+    messages: [...workspace.messages, { ...message, id, createdAt: Date.now() }]
+  })));
   return id;
 }
 
-function replaceMessage(id: string, patch: Partial<CommandThreadMessage>) {
-  updateState((current) => ({
-    ...current,
-    messages: current.messages.map((message) => (
+function replaceMessage(workspaceId: string, id: string, patch: Partial<CommandThreadMessage>) {
+  updateState((current) => updateWorkspace(current, workspaceId, (workspace) => ({
+    ...workspace,
+    messages: workspace.messages.map((message) => (
       message.id === id ? { ...message, ...patch } : message
     ))
-  }));
+  })));
 }
 
-function appendAssistantDelta(id: string, delta: string) {
-  updateState((current) => ({
-    ...current,
-    messages: current.messages.map((message) => (
+function appendAssistantDelta(workspaceId: string, id: string, delta: string) {
+  updateState((current) => updateWorkspace(current, workspaceId, (workspace) => ({
+    ...workspace,
+    messages: workspace.messages.map((message) => (
       message.id === id ? { ...message, content: `${message.content}${delta}` } : message
     ))
-  }));
+  })));
 }
 
 const CARD_KINDS = new Set([
@@ -205,56 +323,143 @@ async function refreshThreads() {
   }
 }
 
-function newThread() {
+function newThread(): string {
+  const workspace = createWorkspace();
   updateState((current) => ({
     ...current,
-    threadId: undefined,
-    messages: []
+    activeWorkspaceId: workspace.id,
+    workspaces: { ...current.workspaces, [workspace.id]: workspace },
+    workspaceOrder: [workspace.id, ...current.workspaceOrder]
   }));
   void refreshThreads();
+  return workspace.id;
+}
+
+function selectWorkspace(workspaceId: string) {
+  if (!state.workspaces[workspaceId]) return;
+  updateState((current) => ({ ...current, activeWorkspaceId: workspaceId, drawerOpen: false }));
 }
 
 async function loadThread(threadId: string) {
-  if (!threadId || state.sending) return;
-  updateState((current) => ({ ...current, sending: true }));
+  if (!threadId) return;
+  const existing = Object.values(state.workspaces).find((workspace) => workspace.threadId === threadId);
+  const workspace = existing || { ...createWorkspace(), threadId };
+  updateState((current) => ({
+    ...current,
+    activeWorkspaceId: workspace.id,
+    drawerOpen: false,
+    workspaces: existing
+      ? current.workspaces
+      : { ...current.workspaces, [workspace.id]: workspace },
+    workspaceOrder: existing
+      ? current.workspaceOrder
+      : [workspace.id, ...current.workspaceOrder]
+  }));
+  if (workspace.sending || workspace.loading) return;
+  updateState((current) => updateWorkspace(current, workspace.id, (item) => ({
+    ...item,
+    loading: true,
+    error: undefined
+  })));
   try {
     const thread = await fetchCommandThread(threadId);
-    updateState((current) => ({
-      ...current,
+    updateState((current) => updateWorkspace(current, workspace.id, (item) => ({
+      ...item,
       threadId: thread.id,
+      title: thread.title,
       messages: thread.messages.map(toThreadMessage),
-      sending: false,
-      drawerOpen: false
-    }));
+      status: deriveWorkspaceStatus(thread.messages.map(toThreadMessage)),
+      loading: false,
+      error: undefined
+    })));
     void refreshThreads();
   } catch (err) {
-    addMessage({
+    addWorkspaceMessage({
       role: 'card',
       kind: 'error',
       content: commandErrorText(err)
-    });
-    updateState((current) => ({ ...current, sending: false }));
+    }, workspace.id);
+    updateState((current) => updateWorkspace(current, workspace.id, (item) => ({
+      ...item,
+      loading: false,
+      status: 'failed',
+      error: commandErrorText(err)
+    })));
   }
 }
 
 async function removeThread(threadId: string) {
-  if (!threadId || state.sending) return;
+  if (!threadId) return;
+  const workspace = Object.values(state.workspaces).find((item) => item.threadId === threadId);
+  if (workspace?.sending) return;
   try {
     await deleteCommandThread(threadId);
-    updateState((current) => ({
-      ...current,
-      threadId: current.threadId === threadId ? undefined : current.threadId,
-      messages: current.threadId === threadId ? [] : current.messages,
-      threads: current.threads.filter((thread) => thread.id !== threadId)
-    }));
+    updateState((current) => {
+      const removedId = Object.values(current.workspaces).find((item) => item.threadId === threadId)?.id;
+      if (!removedId) {
+        return { ...current, threads: current.threads.filter((thread) => thread.id !== threadId) };
+      }
+      const workspaces = { ...current.workspaces };
+      delete workspaces[removedId];
+      const workspaceOrder = current.workspaceOrder.filter((id) => id !== removedId);
+      let activeWorkspaceId = current.activeWorkspaceId;
+      if (activeWorkspaceId === removedId) {
+        if (workspaceOrder.length) {
+          activeWorkspaceId = workspaceOrder[0];
+        } else {
+          const replacement = createWorkspace();
+          workspaces[replacement.id] = replacement;
+          workspaceOrder.push(replacement.id);
+          activeWorkspaceId = replacement.id;
+        }
+      }
+      return {
+        ...current,
+        activeWorkspaceId,
+        workspaces,
+        workspaceOrder,
+        threads: current.threads.filter((thread) => thread.id !== threadId)
+      };
+    });
     void refreshThreads();
   } catch (err) {
-    addMessage({
-      role: 'card',
-      kind: 'error',
-      content: commandErrorText(err)
-    });
+    if (workspace) {
+      addWorkspaceMessage({
+        role: 'card',
+        kind: 'error',
+        content: commandErrorText(err)
+      }, workspace.id);
+      updateState((current) => updateWorkspace(current, workspace.id, (item) => ({
+        ...item,
+        status: 'failed',
+        error: commandErrorText(err)
+      })));
+    }
   }
+}
+
+function removeWorkspace(workspaceId: string) {
+  const workspace = state.workspaces[workspaceId];
+  if (!workspace || workspace.sending) return;
+  if (workspace.threadId) {
+    void removeThread(workspace.threadId);
+    return;
+  }
+  updateState((current) => {
+    const workspaces = { ...current.workspaces };
+    delete workspaces[workspaceId];
+    const workspaceOrder = current.workspaceOrder.filter((id) => id !== workspaceId);
+    let activeWorkspaceId = current.activeWorkspaceId;
+    if (activeWorkspaceId === workspaceId) {
+      const replacement = workspaceOrder[0] ? undefined : createWorkspace();
+      if (replacement) {
+        workspaces[replacement.id] = replacement;
+        workspaceOrder.push(replacement.id);
+      }
+      activeWorkspaceId = workspaceOrder[0] || replacement!.id;
+    }
+    return { ...current, activeWorkspaceId, workspaces, workspaceOrder };
+  });
 }
 
 function commandErrorText(error: unknown): string {
@@ -270,7 +475,97 @@ function commandErrorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
+function deriveWorkspaceStatus(messages: CommandThreadMessage[]): CommandWorkspaceStatus {
+  for (const message of [...messages].reverse()) {
+    if (message.kind === 'error') return 'failed';
+    if (message.kind === 'clarify_question') return 'waiting_clarification';
+    if (message.kind === 'goal_understanding') {
+      const payload = message.payload || {};
+      const intentState = String(payload.intentState || '').toLowerCase();
+      const nextQuestion = String(payload.nextQuestion || '').trim();
+      const warnings = Array.isArray(payload.consistencyWarnings) ? payload.consistencyWarnings : [];
+      if (intentState === 'ambiguous_goal' || nextQuestion || warnings.length) return 'waiting_clarification';
+    }
+    if (message.kind === 'goal_completion_updated') {
+      const data = message.payload?.data as { complete?: boolean } | undefined;
+      if (data?.complete === false) return 'waiting_clarification';
+      if (data?.complete === true) return 'idle';
+    }
+    if (message.kind !== 'planning_session_status') continue;
+    const payload = message.payload || {};
+    const status = String(payload.status || message.content || '').toLowerCase();
+    const runtimeStatus = String(payload.runtimeStatus || '').toLowerCase();
+    const data = payload.data as Record<string, unknown> | undefined;
+    if (
+      runtimeStatus === 'blocked_model' ||
+      status === 'model_unavailable' ||
+      payload.modelFailure ||
+      data?.modelFailure
+    ) return 'blocked_model';
+    if (status === 'waiting_design_approval') return 'waiting_strategy_approval';
+    if (status === 'waiting_execution_approval') return 'accepted';
+    if (status.includes('failed') || status.includes('error')) return 'failed';
+  }
+  return 'idle';
+}
+
+function eventWorkspaceStatus(event: CommandChatEvent): CommandWorkspaceStatus | undefined {
+  if (event.type === 'clarify_question') return 'waiting_clarification';
+  if (event.type === 'goal_understanding') {
+    const intentState = String(event.intentState || '').toLowerCase();
+    const nextQuestion = String(event.nextQuestion || '').trim();
+    const warnings = Array.isArray(event.consistencyWarnings) ? event.consistencyWarnings : [];
+    if (intentState === 'ambiguous_goal' || nextQuestion || warnings.length) return 'waiting_clarification';
+  }
+  if (event.type === 'goal_completion_updated' && !event.data.complete) return 'waiting_clarification';
+  if (event.type === 'planning_session_status') {
+    const status = String(event.status || '').toLowerCase();
+    const runtimeStatus = String(event.runtimeStatus || event.data?.runtimeStatus || '').toLowerCase();
+    if (runtimeStatus === 'blocked_model' || status === 'model_unavailable' || event.modelFailure || event.data?.modelFailure) {
+      return 'blocked_model';
+    }
+    if (status === 'waiting_design_approval') return 'waiting_strategy_approval';
+    if (status === 'waiting_execution_approval') return 'accepted';
+    if (status.includes('failed') || status.includes('error')) return 'failed';
+  }
+  if (event.type === 'runtime_event' && event.status === 'error') return 'failed';
+  return undefined;
+}
+
+function containsDeepSeekRateLimit(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  const provider = String(record.provider || '').toLowerCase();
+  const errorType = String(record.errorType || record.error_type || '').toLowerCase();
+  if (provider.includes('deepseek') && (errorType.includes('rate') || errorType === '429')) return true;
+  return Object.values(record).some((item) => (
+    Array.isArray(item)
+      ? item.some(containsDeepSeekRateLimit)
+      : containsDeepSeekRateLimit(item)
+  ));
+}
+
+function applyStreamEventState(workspaceId: string, event: CommandChatEvent) {
+  const status = eventWorkspaceStatus(event);
+  const rateLimited = containsDeepSeekRateLimit(event) || (
+    event.type === 'error' && /deepseek/i.test(event.error) && /(rate.?limit|429)/i.test(event.error)
+  );
+  if (rateLimited) savePlanningConcurrencyLimit(1);
+  updateState((current) => {
+    const next = updateWorkspace(current, workspaceId, (workspace) => ({
+      ...workspace,
+      threadId: event.type === 'thread' ? event.threadId : workspace.threadId,
+      status: status || workspace.status,
+      error: status === 'failed' && event.type === 'error' ? event.error : workspace.error
+    }));
+    return rateLimited ? { ...next, concurrencyLimit: 1 } : next;
+  });
+}
+
+function addEventCard(event: CommandChatEvent, t: (key: string) => string, workspaceId: string) {
+  const addMessage = (message: Omit<CommandThreadMessage, 'id' | 'createdAt'>) => (
+    addWorkspaceMessage(message, workspaceId)
+  );
   if (event.type === 'runtime_started') {
     addMessage({
       role: 'card',
@@ -681,7 +976,7 @@ function addEventCard(event: CommandChatEvent, t: (key: string) => string) {
   }
 }
 
-function createStreamHandler(t: (key: string) => string) {
+function createStreamHandler(t: (key: string) => string, workspaceId: string) {
   let assistantId = '';
   let sawOutput = false;
   let sawDelta = false;
@@ -691,26 +986,24 @@ function createStreamHandler(t: (key: string) => string) {
     },
     finish() {
       if (assistantId && sawDelta) {
-        replaceMessage(assistantId, { streaming: false });
+        replaceMessage(workspaceId, assistantId, { streaming: false });
       }
     },
     onEvent(event: CommandChatEvent) {
-      if (event.type === 'thread') {
-        updateState((current) => ({ ...current, threadId: event.threadId }));
-      }
+      applyStreamEventState(workspaceId, event);
       if (event.type === 'assistant_delta') {
         if (!assistantId) {
-          assistantId = addMessage({
+          assistantId = addWorkspaceMessage({
             role: 'assistant',
             content: '',
             streaming: true
-          });
+          }, workspaceId);
         }
         const delta = event.text ?? event.content ?? '';
         if (delta) {
           sawOutput = true;
           sawDelta = true;
-          appendAssistantDelta(assistantId, delta);
+          appendAssistantDelta(workspaceId, assistantId, delta);
         }
       }
       if (
@@ -758,7 +1051,7 @@ function createStreamHandler(t: (key: string) => string) {
         event.type === 'execution_result'
       ) {
         sawOutput = true;
-        addEventCard(event, t);
+        addEventCard(event, t, workspaceId);
       }
       if (event.type === 'error') {
         throw new Error(event.error);
@@ -767,66 +1060,127 @@ function createStreamHandler(t: (key: string) => string) {
   };
 }
 
-async function sendCommand(input: string, t: (key: string) => string) {
-  const trimmed = input.trim();
-  if (!trimmed || state.sending) return;
-  addMessage({ role: 'user', content: trimmed });
-  updateState((current) => ({ ...current, sending: true }));
-
-  try {
-    const stream = createStreamHandler(t);
-    await runCommandChat({
-      threadId: state.threadId,
-      message: trimmed,
-      mode: state.mode,
-      permission: state.permission,
-      context: { date: todayISO() }
-    }, {
-      onEvent: stream.onEvent
-    });
-    stream.finish();
-    if (!stream.sawOutput) {
-      addMessage({ role: 'assistant', content: t('command.emptyReply') });
-    }
-  } catch (err) {
-    addMessage({
-      role: 'card',
-      kind: 'error',
-      content: commandErrorText(err)
-    });
-  } finally {
-    updateState((current) => ({ ...current, sending: false }));
-    void refreshThreads();
-  }
+function canStartWorkspace(workspaceId: string): boolean {
+  const workspace = state.workspaces[workspaceId];
+  return Boolean(
+    workspace &&
+    !workspace.sending &&
+    !workspace.loading &&
+    state.runningWorkspaceCount < state.concurrencyLimit
+  );
 }
 
-async function approveAction(actionId: string, decision: 'approve' | 'reject', t: (key: string) => string) {
-  if (!actionId || state.sending) return;
-  updateState((current) => ({ ...current, sending: true }));
-  try {
-    const stream = createStreamHandler(t);
-    await approveCommandAction({
-      threadId: state.threadId,
-      actionId,
-      decision,
-      permission: state.permission
-    }, {
-      onEvent: stream.onEvent
-    });
-    stream.finish();
-    if (!stream.sawOutput) {
-      addMessage({ role: 'assistant', content: t('command.emptyReply') });
+function sendCommand(input: string, t: (key: string) => string): false | Promise<true> {
+  const trimmed = input.trim();
+  const workspaceId = state.activeWorkspaceId;
+  if (!trimmed || !canStartWorkspace(workspaceId)) return false;
+  const workspace = state.workspaces[workspaceId];
+  const payload = {
+    threadId: workspace.threadId,
+    message: trimmed,
+    mode: state.mode,
+    permission: state.permission,
+    context: { date: todayISO() }
+  };
+  addWorkspaceMessage({ role: 'user', content: trimmed }, workspaceId);
+  updateState((current) => updateWorkspace(current, workspaceId, (item) => ({
+    ...item,
+    title: item.title || trimmed,
+    sending: true,
+    status: 'running',
+    error: undefined
+  })));
+
+  return (async () => {
+    let stream: ReturnType<typeof createStreamHandler> | undefined;
+    try {
+      stream = createStreamHandler(t, workspaceId);
+      await runCommandChat(payload, {
+        onEvent: stream.onEvent
+      });
+      stream.finish();
+      if (!stream.sawOutput) {
+        addWorkspaceMessage({ role: 'assistant', content: t('command.emptyReply') }, workspaceId);
+      }
+    } catch (err) {
+      stream?.finish();
+      const error = commandErrorText(err);
+      addWorkspaceMessage({
+        role: 'card',
+        kind: 'error',
+        content: error
+      }, workspaceId);
+      updateState((current) => updateWorkspace(current, workspaceId, (item) => ({
+        ...item,
+        status: item.status === 'blocked_model'
+          ? item.status
+          : item.threadId
+            ? 'failed'
+            : 'unconfirmed',
+        error
+      })));
+    } finally {
+      updateState((current) => updateWorkspace(current, workspaceId, (item) => ({
+        ...item,
+        sending: false,
+        status: item.status === 'running' ? deriveWorkspaceStatus(item.messages) : item.status
+      })));
+      void refreshThreads();
     }
-  } catch (err) {
-    addMessage({
-      role: 'card',
-      kind: 'error',
-      content: commandErrorText(err)
-    });
-  } finally {
-    updateState((current) => ({ ...current, sending: false }));
-    void refreshThreads();
-  }
+    return true as const;
+  })();
+}
+
+function approveAction(actionId: string, decision: 'approve' | 'reject', t: (key: string) => string): false | Promise<true> {
+  const workspaceId = state.activeWorkspaceId;
+  if (!actionId || !canStartWorkspace(workspaceId)) return false;
+  const workspace = state.workspaces[workspaceId];
+  const permission = state.permission;
+  updateState((current) => updateWorkspace(current, workspaceId, (item) => ({
+    ...item,
+    sending: true,
+    status: 'running',
+    error: undefined
+  })));
+  return (async () => {
+    let stream: ReturnType<typeof createStreamHandler> | undefined;
+    try {
+      stream = createStreamHandler(t, workspaceId);
+      await approveCommandAction({
+        threadId: workspace.threadId,
+        actionId,
+        decision,
+        permission
+      }, {
+        onEvent: stream.onEvent
+      });
+      stream.finish();
+      if (!stream.sawOutput) {
+        addWorkspaceMessage({ role: 'assistant', content: t('command.emptyReply') }, workspaceId);
+      }
+    } catch (err) {
+      stream?.finish();
+      const error = commandErrorText(err);
+      addWorkspaceMessage({
+        role: 'card',
+        kind: 'error',
+        content: error
+      }, workspaceId);
+      updateState((current) => updateWorkspace(current, workspaceId, (item) => ({
+        ...item,
+        status: item.status === 'blocked_model' ? item.status : 'failed',
+        error
+      })));
+    } finally {
+      updateState((current) => updateWorkspace(current, workspaceId, (item) => ({
+        ...item,
+        sending: false,
+        status: item.status === 'running' ? deriveWorkspaceStatus(item.messages) : item.status
+      })));
+      void refreshThreads();
+    }
+    return true as const;
+  })();
 }
 
 export function useCommandAgent() {
@@ -841,8 +1195,10 @@ export const commandAgentActions = {
   setDrawerOpen,
   refreshThreads,
   newThread,
+  selectWorkspace,
   loadThread,
   removeThread,
+  removeWorkspace,
   sendCommand,
   approveAction
 };

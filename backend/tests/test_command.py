@@ -1671,6 +1671,8 @@ def test_draft_save_error_returns_error_event_and_done(client, monkeypatch):
     assert response.status_code == 200
     events = _events(response)
     assert any(event["type"] == "error" and "计划草稿保存失败" in event["error"] for event in events)
+    assert "migration missing" not in response.text
+    assert all("detail" not in event for event in events if event["type"] == "error")
     assert events[-1]["type"] == "done"
     thread_id = events[-1]["threadId"]
     thread = client.get(f"/api/command/thread/{thread_id}").json()

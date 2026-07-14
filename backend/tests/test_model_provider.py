@@ -22,6 +22,13 @@ from backend.app.services.model_provider import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolate_model_provider_database(tmp_path, monkeypatch):
+    """Never let router unit tests overwrite the user's saved provider keys."""
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'model-provider-test.db'}")
+
+
 def _settings(
     *,
     provider: str = "deepseek",
@@ -234,6 +241,78 @@ def test_openai_compatible_provider_posts_expected_payload(monkeypatch):
     assert calls[0]["url"] == "https://api.openai.com/v1/chat/completions"
     assert calls[0]["json"]["max_tokens"] == 256
     assert "max_completion_tokens" not in calls[0]["json"]
+
+
+def test_deepseek_v4_execution_generation_requests_disable_thinking(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"choices":[{"message":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}'
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"ok":true}'}, "finish_reason": "stop"}],
+            }
+
+    class FakeHttpClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, headers, json):
+            calls.append(json)
+            return FakeResponse()
+
+    monkeypatch.setattr(model_provider.httpx, "Client", FakeHttpClient)
+    router = ModelRouter(_settings(provider="deepseek", model="deepseek-v4-flash"), routing_enabled=False)
+
+    for feature in (
+        "cognitive_execution_narrative",
+        "cognitive_execution_narrative_fallback",
+        "cognitive_execution_blueprint_fallback",
+        "cognitive_execution_single_pass",
+        "cognitive_os_execution_single_pass",
+        "cognitive_execution_preflight_repair",
+    ):
+        result, error = router.complete(
+            _request(
+                response_format_json=True,
+                task_type="planning_execution",
+                feature=feature,
+            )
+        )
+        assert error is None
+        assert result is not None
+        assert calls[-1]["response_format"] == {"type": "json_object"}
+        assert calls[-1]["thinking"] == {"type": "disabled"}
+
+    result, error = router.complete(
+        _request(
+            response_format_json=True,
+            task_type="planning_execution",
+            feature="cognitive_execution_blueprint",
+        )
+    )
+    assert error is None
+    assert result is not None
+    assert "thinking" not in calls[-1]
+
+    result, error = router.complete(
+        _request(
+            response_format_json=True,
+            task_type="planning_strategy",
+            feature="cognitive_execution_single_pass",
+        )
+    )
+    assert error is None
+    assert result is not None
+    assert "thinking" not in calls[-1]
 
 
 def test_kimi_temperature_policy_omits_k2_parameters_and_clamps_moonshot_models(monkeypatch):

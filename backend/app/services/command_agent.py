@@ -2416,7 +2416,11 @@ class CommandAgentService:
                 self.add_message(thread_id, "assistant", message)
             except Exception:
                 pass
-        yield _ndjson({"type": "error", "error": message, "detail": str(exc)})
+        # The caller receives a stable user-facing category only. Raw exception
+        # text can contain provider responses, local paths, or credentials and
+        # belongs exclusively in server-side sanitized diagnostics.
+        _ = exc
+        yield _ndjson({"type": "error", "error": message})
         if thread_id:
             yield _ndjson({"type": "done", "threadId": thread_id})
 

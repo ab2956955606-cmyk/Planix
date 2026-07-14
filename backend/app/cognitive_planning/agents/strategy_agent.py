@@ -14,6 +14,8 @@ For every route explain why it fits this user, why it is preferable to alternati
 evidence and assumptions support it, what could fail, and who should choose it. If only one route is credible,
 state the rejected alternatives and why. End with a meaningful user choice. Return only the requested JSON
 and never hidden chain-of-thought.
+This Agent can only propose a Strategy: always return status="waiting_user_approval" and approvedStrategyId=null.
+Only the runtime may derive an approved projection after a real, version-bound user approval.
 """.strip()
 
 

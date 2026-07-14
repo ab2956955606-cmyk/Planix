@@ -97,6 +97,12 @@ const technicalPlanningKinds = new Set<CommandThreadMessage['kind']>([
   'agent_message'
 ]);
 
+const planningWorkspaceDetailKinds: CommandThreadMessage['kind'][] = [
+  'strategy_portfolio_ready',
+  'execution_blueprint_ready',
+  'critique_report_ready'
+];
+
 type RenderItem =
   | { type: 'message'; message: CommandThreadMessage }
   | { type: 'execution_group'; id: string; messages: CommandThreadMessage[] }
@@ -350,6 +356,13 @@ function isNonPlanningGoalUnderstandingGroup(messages: CommandThreadMessage[]): 
   return !hasPlanningArtifact && (intentState === 'normal_chat' || intentState === 'command');
 }
 
+function latestPlanningWorkspaceDetails(messages: CommandThreadMessage[]): CommandThreadMessage[] {
+  return planningWorkspaceDetailKinds.flatMap((kind) => {
+    const message = [...messages].reverse().find((item) => item.kind === kind);
+    return message ? [message] : [];
+  });
+}
+
 function shouldExpandPlanningCard(message: CommandThreadMessage, groupMessages: CommandThreadMessage[], isLatestGroup: boolean): boolean {
   if (!isLatestGroup) return false;
   const status = latestPlanningStatus(groupMessages);
@@ -517,15 +530,32 @@ function DeepPlanningCardGroup({
   const summary = [status, labels.join(' / ')].filter(Boolean).join(' · ');
 
   if (!advancedAgentTrace) {
+    const workspaceDetails = latestPlanningWorkspaceDetails(messages);
     return (
-      <PlanningOverviewCard
-        messages={messages}
-        status={status}
-        sending={sending}
-        actionsEnabled={isLatest}
-        onSend={onSend}
-        t={t}
-      />
+      <div className="planning-workspace-surface">
+        <PlanningOverviewCard
+          messages={messages}
+          status={status}
+          sending={sending}
+          actionsEnabled={isLatest}
+          onSend={onSend}
+          t={t}
+        />
+        {workspaceDetails.length ? (
+          <div className="planning-workspace-detail-stack">
+            {workspaceDetails.map((message) => (
+              <PlanningCardContent
+                key={message.id}
+                message={message}
+                onSend={onSend}
+                t={t}
+                planningStatus={status}
+                actionsEnabled={isLatest}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
     );
   }
 

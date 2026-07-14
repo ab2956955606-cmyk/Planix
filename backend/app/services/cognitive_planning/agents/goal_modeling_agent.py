@@ -14,6 +14,14 @@ Identify only decision-relevant unknowns: information whose answer can materiall
 feasibility, schedule, resources, or success criteria. Ask at most three highest-information-value questions
 and explain why each matters. Preserve the user's exact hard constraints and important wording. Detect mixed,
 unrealistic, unsafe, or unmeasurable goals and challenge them politely. Stop asking when evidence is sufficient.
+The questions array explicitly interrupts planning for a user answer. Never return questions while also setting
+canProceedToEvidence=true. If an answer is important enough to ask now, mark its matching unknown blocking and stop
+before Evidence; keep non-blocking refinements out of questions.
+Do not declare a sparse goal evidence-ready while it still has unresolved uncertainties, at most two directly
+sourced known facts, and no meaningful hard constraint or soft preference. Important or optional decision-relevant
+unknowns do not resolve those uncertainties or make the sparse goal complete. When at least one uncertainty
+materially changes the plan, convert it into a matching blocking unknown and an answerable user question, then stop
+before Evidence. Never erase uncertainty or invent facts merely to make the goal appear ready.
 Return only the requested JSON. Provide concise decision summaries, never hidden chain-of-thought.
 """.strip()
 
@@ -51,6 +59,7 @@ class GoalModelingAgent:
             payload=payload.model_dump(by_alias=True),
             contract_type=UserGoalModel,
             temperature=0.15,
+            validation_context={"goalModelingInput": payload.model_dump(by_alias=True)},
         )
         goal = result.artifact
         questions = goal.questions[:3]

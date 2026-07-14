@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .base import CognitiveContract
 
@@ -63,3 +63,31 @@ class PlanCritiqueReport(CognitiveContract):
     remaining_risks: list[str] = Field(default_factory=list)
     calendar_writable: bool = False
     confidence: float = Field(default=0.8, ge=0, le=1)
+    # Runtime-owned lineage. Models are not trusted to bind their own review
+    # to an Execution artifact; the orchestration layer overwrites these
+    # values with the immutable artifact id/version it actually reviewed.
+    evaluated_execution_artifact_id: str | None = None
+    evaluated_execution_artifact_version: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def negative_status_requires_findings(self) -> "PlanCritiqueReport":
+        if bool(self.evaluated_execution_artifact_id) != bool(
+            self.evaluated_execution_artifact_version
+        ):
+            raise ValueError(
+                "evaluated Execution artifact id and version must be supplied together"
+            )
+        blockers = [issue for issue in self.issues if issue.severity == "blocker"]
+        repairable = [issue for issue in self.issues if issue.severity in {"blocker", "major"}]
+        if self.status == "passed":
+            if not self.calendar_writable:
+                raise ValueError("a passed critique must be calendarWritable")
+            if repairable:
+                raise ValueError("a passed critique cannot include major/blocker issues")
+            if self.repair_requests:
+                raise ValueError("a passed critique cannot include repair requests")
+        if self.status == "blocked" and not blockers:
+            raise ValueError("a blocked critique must identify at least one blocker")
+        if self.status == "needs_repair" and (not repairable or not self.repair_requests):
+            raise ValueError("a repair critique must identify a major/blocker issue and a repair request")
+        return self

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Mapping
 
+from .quality import MIN_CRITIC_PASS_SCORE, critic_score, meets_critic_score_gate
+
 
 class SchedulerAction(StrEnum):
     """The small set of lifecycle decisions the Harness may make."""
@@ -185,8 +187,36 @@ class AgentScheduler:
         if not critique:
             return self._decision("__end__", "critic_artifact_missing")
         status = getattr(critique, "status", "")
-        if status == "passed":
+        issues = list(getattr(critique, "issues", []) or [])
+        repair_requests = list(getattr(critique, "repair_requests", []) or [])
+        has_high_severity_issue = any(
+            getattr(issue, "severity", "") in {"major", "blocker"}
+            for issue in issues
+        )
+        calendar_writable = bool(getattr(critique, "calendar_writable", False))
+        score = critic_score(critique)
+        if (
+            status == "passed"
+            and meets_critic_score_gate(critique)
+            and calendar_writable
+            and not has_high_severity_issue
+            and not repair_requests
+        ):
             return self._decision("wait_for_execution_approval", "critic_passed")
+        if repair_requests and int(state.get("repair_count", 0)) < 2:
+            return self._decision("repair", "critic_requested_repair")
+        if (
+            status == "passed"
+            and score < MIN_CRITIC_PASS_SCORE
+            and int(state.get("repair_count", 0)) < 2
+        ):
+            return self._decision("repair", "critic_score_below_threshold")
+        if status == "passed":
+            return self._decision(
+                "wait_for_execution_approval",
+                "critic_inconsistent_pass",
+                action=SchedulerAction.WAIT_USER,
+            )
         if status == "blocked":
             return self._decision(
                 "wait_for_execution_approval",

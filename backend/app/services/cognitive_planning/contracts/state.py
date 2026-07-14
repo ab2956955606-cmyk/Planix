@@ -89,6 +89,7 @@ class CognitivePlanningState(TypedDict, total=False):
     repair_count: int
     repair_loop: bool
     repair_instructions: list[dict[str, Any]]
+    finalized_critique_artifact_id: str
     next_node: str
     errors: list[SafePlanningError]
     response: Any

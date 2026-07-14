@@ -23,6 +23,7 @@ The default entry point is **P Mode**. Dashboard, Calendar, Notes, Goals, Materi
 
 - **Cognitive planning**: independent Goal, Reality, Evidence, Strategy, Execution, and Critic stages.
 - **Persistent conversations**: stores goals, known facts, important unknowns, Artifacts, and wait states for later recovery.
+- **Two-lane single-page planning**: P Mode can keep two independent Threads planning in the background; each Thread remains serial, and rate limiting reduces the page to one lane.
 - **Local-material RAG**: searches TXT and Markdown content through SQLite FTS5 and BM25-style retrieval.
 - **Safe Calendar execution**: creating, updating, or deleting Calendar data always requires explicit user confirmation.
 - **Long-term user model**: automatically inferred durable rules must pass an independent Memory Evaluation before storage.
@@ -52,6 +53,10 @@ Goal Completion blocks only on information that can materially change the plan. 
 
 The Critic can route a targeted repair back to the responsible stage. Every new Execution version requires an independent Critique for that exact version, and repairs invalidate stale approvals.
 
+The Critic is also bound by deterministic semantic policy: a half-time simulation cannot invent a hard weekly quota, and a missing verified `sourceRef` cannot force a URL or named provider. A violating review is automatically re-run once against the same Execution; a second violation fails closed at Critic without consuming an Execution repair round.
+
+The initial Execution normally produces the complete Blueprint, including its Narrative, in one structured model call. Critic repairs use the Narrative → Blueprint flow with cumulative review history to prevent repair oscillation. Truncated or invalid structured output can also fall back to that two-call flow. Before persistence, each candidate must pass deterministic dependency-order, budget, and calculable-workload checks; only then is it sent to the independent Critic.
+
 ## Agent Runtime Harness
 
 `backend/app/harness` is the control plane around the Cognitive Agents. LangGraph executes scheduling decisions but does not own product policy.
@@ -69,6 +74,8 @@ The Critic can route a targeted repair back to the responsible stage. Every new 
 | Observability | Persists Harness decisions, Agent invocations, Artifact changes, and recovery events |
 
 The SQLite checkpoint stores the current stage, completed and pending Agents, Artifact versions, approvals, errors, and wait state. A restarted process resumes from the exact pending Agent instead of replaying the entire pipeline.
+
+File-backed databases use WAL, a five-second `busy_timeout`, one full Schema initialization per process, and an adjacent lock file that serializes cross-process initialization, allowing two independent planning Sessions and Uvicorn reload to coexist safely.
 
 ## Safety boundaries
 
@@ -220,6 +227,15 @@ npm.cmd run build
 .\scripts\check-packaging-toolchain.ps1
 ```
 
+Real-model acceptance Threads must first be created and advanced through the `/command` page. The audit script only reads replay data and never sends messages on behalf of the page:
+
+```powershell
+python scripts/live_planning_e2e.py --print-source-fingerprint
+python scripts/live_planning_e2e.py --audit-manifest data/e2e-manifest.json --required-provider deepseek
+```
+
+The manifest uses `{"sourceFingerprint":"<pre-batch output>","threads":{"travel":"..."}}`. Schema v3 permits `fullAcceptancePassed=true` only for GET-only replay, an unchanged source fingerprint, a completed travel canary before the other nine runs, and a final Critic score of at least 90 in every scenario. It separates browser request intervals from human wait time, aggregates actual model calls and latency by stage, and records two-lane utilization, rate limits, truncations, automatic repairs, and Execution generation modes. Skipped routes are not counted as requests.
+
 GitHub Actions validates the Backend and Web with Python 3.11 and Node.js 20 on Ubuntu runners, then runs the desktop configuration check on a Windows runner. The packaging toolchain check remains a local pre-release validation.
 
 ## Further documentation
@@ -233,4 +249,5 @@ GitHub Actions validates the Backend and Web with Python 3.11 and Node.js 20 on 
 - Packaged desktop builds target Windows first; Web development can run independently.
 - The root Dockerfile builds the FastAPI API only, not a complete Web or desktop image.
 - Planix uses a single-user, local-first data model rather than a multi-tenant cloud service.
+- P Mode runs at most two independent Threads concurrently by default; after a DeepSeek rate-limit response, that page falls back to one lane.
 - Real planning quality and availability depend on the selected model, API quota, and network conditions.

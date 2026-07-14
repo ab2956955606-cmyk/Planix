@@ -16,6 +16,10 @@ would materially change the strategy, which one to three questions have the high
 whether asking more would improve the plan enough to justify interrupting the user. Preserve exact hard
 constraints and important user wording. Fill possibleIntents, currentKnowledge, and uncertainties with concise
 user-visible statements. Every question must explain why it matters and what decision its answer changes.
+The questions array is an explicit request to interrupt planning for a user answer. Never return questions while
+also setting canProceedToEvidence=true. If an answer is important enough to ask now, mark its matching unknown
+blocking and stop before Evidence; keep non-blocking refinements in uncertainties/decisionRelevantUnknowns without
+putting them in questions.
 When a question has a small honest answer space, provide two to four concise, mutually exclusive answerOptions in
 the user's language. Do not include "Other" because the interface adds it. Keep answerOptions empty when the answer
 must remain open-ended; never invent a fixed domain questionnaire merely to provide choices.
@@ -25,6 +29,11 @@ safety, feasibility, or the strategy itself. Background experience, intended out
 in natural language are valid semantic evidence even when they do not match a predefined slot name. Once the
 desired change, relevant background, purposes, and usable constraints are sufficient to choose a strategy, label
 remaining refinements important or optional and allow progression.
+Do not declare a sparse goal evidence-ready while it still has unresolved uncertainties, at most two directly
+sourced known facts, and no meaningful hard constraint or soft preference. Important or optional decision-relevant
+unknowns do not resolve those uncertainties or make the sparse goal complete. When at least one uncertainty
+materially changes the plan, convert it into a matching blocking unknown and an answerable user question, then stop
+before Evidence. Never erase uncertainty or invent facts merely to make the goal appear ready.
 When preExtractedFacts.goalUnderstanding is present, treat it as the typed pre-routing projection: reconcile its
 known facts and resolved intent with the current user turn, but do not misattribute prior questions or hypotheses as
 new user claims and do not blindly copy it when the conversation contradicts it.
@@ -70,6 +79,7 @@ class GoalIntelligenceAgent:
             payload=payload.model_dump(by_alias=True),
             contract_type=GoalUnderstandingArtifact,
             temperature=0.15,
+            validation_context={"goalModelingInput": payload.model_dump(by_alias=True)},
         )
         goal = result.artifact
         questions = goal.questions[:3]

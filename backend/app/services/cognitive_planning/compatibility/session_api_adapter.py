@@ -313,6 +313,23 @@ class SessionApiAdapter:
         evidence = EvidencePack.model_validate(evidence_raw) if evidence_raw else None
         reality = RealityAssessment.model_validate(reality_raw) if reality_raw else None
         strategy = StrategyPortfolio.model_validate(strategy_raw) if strategy_raw else None
+        row_approved_strategy_id = (
+            (row["approved_strategy_id"] or None)
+            if "approved_strategy_id" in row.keys()
+            else None
+        )
+        if (
+            strategy is not None
+            and row_approved_strategy_id
+            and row_approved_strategy_id == strategy.recommended_strategy_id
+        ):
+            strategy = strategy.model_copy(
+                update={
+                    "approved_strategy_id": row_approved_strategy_id,
+                    "status": "approved",
+                }
+            )
+            strategy_raw = strategy.model_dump(by_alias=True)
         execution = ExecutionBlueprint.model_validate(execution_raw) if execution_raw else None
         critique = PlanCritiqueReport.model_validate(critique_raw) if critique_raw else None
         learning = PlanningLearningUpdate.model_validate(learning_raw) if learning_raw else None
@@ -429,8 +446,13 @@ class SessionApiAdapter:
         public_critique_raw = (critique_raw or None) if not legacy_evidence else None
         public_learning_raw = (learning_raw or None) if not legacy_evidence else None
         public_approved_strategy_id = (
-            (row["approved_strategy_id"] or None)
-            if "approved_strategy_id" in row.keys() and not legacy_evidence
+            row_approved_strategy_id
+            if (
+                not legacy_evidence
+                and strategy is not None
+                and strategy.status == "approved"
+                and strategy.approved_strategy_id == strategy.recommended_strategy_id
+            )
             else None
         )
         failure_resume_node = model_failure.resume_node if model_failure else None

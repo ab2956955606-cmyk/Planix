@@ -107,6 +107,61 @@ def test_scheduler_owns_resume_critic_and_repair_decisions() -> None:
     assert repair.action.value == "repair"
     assert repair.next_node == "repair"
 
+    blocked_repair = scheduler.after_critic(
+        {
+            "planning_mode": "model_backed",
+            "critique_report": SimpleNamespace(
+                status="blocked",
+                repair_requests=[SimpleNamespace(target_agent="execution_designer")],
+            ),
+            "repair_count": 0,
+        }
+    )
+    assert blocked_repair.action.value == "repair"
+    assert blocked_repair.next_node == "repair"
+
+    blocked_terminal = scheduler.after_critic(
+        {
+            "planning_mode": "model_backed",
+            "critique_report": SimpleNamespace(status="blocked", repair_requests=[]),
+            "repair_count": 0,
+        }
+    )
+    assert blocked_terminal.action.value == "wait_user"
+    assert blocked_terminal.next_node == "wait_for_execution_approval"
+
+    inconsistent_pass = scheduler.after_critic(
+        {
+            "planning_mode": "model_backed",
+            "critique_report": SimpleNamespace(
+                status="passed",
+                score=95,
+                calendar_writable=True,
+                issues=[SimpleNamespace(severity="major")],
+                repair_requests=[],
+            ),
+            "repair_count": 0,
+        }
+    )
+    assert inconsistent_pass.action.value == "wait_user"
+    assert inconsistent_pass.reason_code == "critic_inconsistent_pass"
+
+    inconsistent_repair = scheduler.after_critic(
+        {
+            "planning_mode": "model_backed",
+            "critique_report": SimpleNamespace(
+                status="passed",
+                score=95,
+                calendar_writable=True,
+                issues=[],
+                repair_requests=[SimpleNamespace(target_agent="execution_designer")],
+            ),
+            "repair_count": 0,
+        }
+    )
+    assert inconsistent_repair.action.value == "repair"
+    assert inconsistent_repair.next_node == "repair"
+
 
 @pytest.mark.parametrize("reason_code", ["reality_judgment", "evidence_judgment"])
 def test_non_critic_user_wait_never_records_a_critic_failure(runtime_db, reason_code: str) -> None:

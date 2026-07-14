@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ....harness.quality import meets_critic_score_gate
 from ..contracts import CognitivePlanningState
 
 
@@ -69,11 +70,17 @@ def route_after_strategy(state: CognitivePlanningState) -> str:
 
 def route_after_critic(state: CognitivePlanningState) -> str:
     critique = state.get("critique_report")
-    if not critique or critique.status in {"passed", "blocked"}:
+    if not critique:
+        return "wait_for_execution_approval"
+    if critique.status == "passed" and meets_critic_score_gate(critique):
         return "wait_for_execution_approval"
     if int(state.get("repair_count", 0)) >= 2:
         return "wait_for_execution_approval"
-    return "repair_router"
+    return (
+        "repair_router"
+        if critique.repair_requests or critique.status == "passed"
+        else "wait_for_execution_approval"
+    )
 
 
 def route_after_repair(state: CognitivePlanningState) -> str:

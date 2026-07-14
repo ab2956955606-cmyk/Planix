@@ -243,6 +243,11 @@ class CognitiveOSRuntime(Phase6Runtime):
                     for item in goal.decision_relevant_unknowns
                 ],
                 "assumptions": assumptions,
+                # The explicit control accepts ordinary unresolved Goal-stage
+                # information as best-effort assumptions. Its text remains
+                # auditable below and in optionalUnknowns, but it is no longer
+                # an unresolved uncertainty when Reality revalidates the Goal.
+                "uncertainties": [],
                 "questions": [],
                 "can_proceed_to_evidence": True,
             }

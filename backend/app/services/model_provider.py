@@ -367,6 +367,27 @@ class OpenAICompatibleProvider:
             payload["max_tokens"] = token_limit
         if request.response_format_json:
             payload["response_format"] = {"type": "json_object"}
+            # DeepSeek V4 defaults to thinking mode.  Execution design is the
+            # longest structured stage and already receives an
+            # explicit JSON Schema plus local validation.  Disable hidden
+            # reasoning only there so large blueprints finish within the
+            # synchronous connection budget; Goal/Evidence/Strategy keep their
+            # reasoning quality.
+            if (
+                self.provider == "deepseek"
+                and self.settings.model.startswith("deepseek-v4-")
+                and request.task_type == "planning_execution"
+                and request.feature.endswith(
+                    (
+                        "execution_narrative",
+                        "execution_narrative_fallback",
+                        "execution_blueprint_fallback",
+                        "execution_single_pass",
+                        "execution_preflight_repair",
+                    )
+                )
+            ):
+                payload["thinking"] = {"type": "disabled"}
         return payload
 
     def complete(self, request: ModelCallRequest) -> tuple[ModelCallResult | None, ModelCallError | None]:

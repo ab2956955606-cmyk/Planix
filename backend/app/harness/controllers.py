@@ -18,6 +18,7 @@ from .contracts import (
     PolicyDecision,
 )
 from .policy import PolicyEngine
+from .quality import MIN_CRITIC_PASS_SCORE, critic_score, meets_critic_score_gate
 
 
 def _now() -> str:
@@ -204,11 +205,22 @@ class CriticController:
             and execution_artifact.same_version(evaluated_execution_artifact)
         )
         status = str(_value(report, "status", default=""))
+        score = critic_score(report)
         writable = bool(_value(report, "calendar_writable", "calendarWritable", default=False))
         issues = list(_value(report, "issues", default=[]) or [])
         requests = list(_value(report, "repair_requests", "repairRequests", default=[]) or [])
-        has_blocker = any(str(_value(item, "severity", default="")) == "blocker" for item in issues)
-        passed = bool(version_matches and status == "passed" and writable and not has_blocker and not requests)
+        has_high_severity_issue = any(
+            str(_value(item, "severity", default="")) in {"major", "blocker"}
+            for item in issues
+        )
+        passed = bool(
+            version_matches
+            and status == "passed"
+            and meets_critic_score_gate(report)
+            and writable
+            and not has_high_severity_issue
+            and not requests
+        )
 
         repair_target: ArtifactKind | None = None
         if version_matches and requests:
@@ -219,12 +231,19 @@ class CriticController:
             reason = "Critic result is stale because it did not evaluate the current Execution artifact version."
         elif passed:
             reason = "The independent Critic passed the current Execution artifact for Calendar gating."
+        elif status == "passed" and score < MIN_CRITIC_PASS_SCORE:
+            reason = (
+                f"The independent Critic score {score} is below the required "
+                f"{MIN_CRITIC_PASS_SCORE} quality threshold."
+            )
         elif repair_target:
             reason = f"The independent Critic requested repair of {repair_target}."
         elif status == "passed" and not writable:
             reason = "Critic output is internally inconsistent: passed but not Calendar writable."
-        elif has_blocker:
-            reason = "The independent Critic found a blocking issue without an actionable repair target."
+        elif status == "passed" and has_high_severity_issue:
+            reason = "Critic output is internally inconsistent: passed with a major or blocking issue."
+        elif has_high_severity_issue:
+            reason = "The independent Critic found a major or blocking issue without an actionable repair target."
         else:
             reason = "The independent Critic did not pass the current Execution artifact."
 

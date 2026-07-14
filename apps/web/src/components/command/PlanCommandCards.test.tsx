@@ -917,6 +917,20 @@ describe('Plan command cards', () => {
     expect(html).not.toContain('Planning process');
     expect(html).not.toContain('Old Go plan');
     expect(html).not.toContain('waiting_design_approval');
+
+    const advancedHtml = renderToStaticMarkup(
+      <AgentThread
+        messages={messages}
+        sending={false}
+        onApprove={() => undefined}
+        onSend={() => undefined}
+        advancedAgentTrace
+        t={t}
+      />
+    );
+    expect(advancedHtml).toContain('command-collapsible collapsed deep-planning-group historical');
+    expect(advancedHtml).toContain('aria-expanded="false"');
+    expect(advancedHtml).not.toContain('Old Go plan');
   });
 
   it('updates the same workspace across follow-ups and lets a complete goal advance to strategy', () => {
@@ -1513,7 +1527,7 @@ describe('Plan command cards', () => {
     expect(disabledHtml).toContain('aria-disabled="true"');
   });
 
-  it('hides technical agent trace cards from the cognitive planning workspace', () => {
+  it('shows the latest strategy in the default workspace while keeping technical trace cards advanced-only', () => {
     const messages = [
       {
         id: 'decision-1',
@@ -1560,7 +1574,7 @@ describe('Plan command cards', () => {
       <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
     );
     expect(html).toContain('Planning Workspace');
-    expect(html).not.toContain('Evidence route');
+    expect(html).toContain('Evidence route');
     expect(html).not.toContain('Agent decision');
     expect(html).not.toContain('technical trace detail hidden until expanded');
 
@@ -1571,6 +1585,170 @@ describe('Plan command cards', () => {
     expect(advancedHtml).toContain('Context &amp; Evidence Agent');
     expect(advancedHtml).toContain('technical trace detail hidden until expanded');
     expect(advancedHtml).toContain('waiting_design_approval');
+  });
+
+  it('renders only the latest Strategy, Execution Blueprint, and Critic details in the default live workspace', () => {
+    const messages = [
+      {
+        id: 'strategy-old',
+        role: 'card' as const,
+        kind: 'strategy_portfolio_ready' as const,
+        content: '',
+        createdAt: 1,
+        payload: {
+          sessionId: 's-live-details',
+          data: {
+            recommendedStrategyId: 'old-route',
+            recommendationReason: 'Superseded strategy reason',
+            strategies: [{ id: 'old-route', name: 'Superseded route', coreIdea: 'Old direction', phases: [] }]
+          }
+        }
+      },
+      {
+        id: 'execution-old',
+        role: 'card' as const,
+        kind: 'execution_blueprint_ready' as const,
+        content: '',
+        createdAt: 2,
+        payload: {
+          sessionId: 's-live-details',
+          data: {
+            narrative: { executionLogic: 'Superseded execution logic' },
+            tasks: [{ id: 'old-task', title: 'Superseded task', actionSteps: [] }]
+          }
+        }
+      },
+      {
+        id: 'critique-old',
+        role: 'card' as const,
+        kind: 'critique_report_ready' as const,
+        content: '',
+        createdAt: 3,
+        payload: {
+          sessionId: 's-live-details',
+          data: { simulationSummary: 'Superseded critique', calendarWritable: false }
+        }
+      },
+      {
+        id: 'strategy-latest',
+        role: 'card' as const,
+        kind: 'strategy_portfolio_ready' as const,
+        content: '',
+        createdAt: 4,
+        payload: {
+          sessionId: 's-live-details',
+          data: {
+            recommendedStrategyId: 'latest-route',
+            recommendationReason: 'Latest strategy reason',
+            strategies: [{
+              id: 'latest-route',
+              name: 'Latest evidence route',
+              coreIdea: 'Ship a verified backend incrementally',
+              phases: [{ title: 'Foundation', outcome: 'Working API skeleton' }]
+            }]
+          }
+        }
+      },
+      {
+        id: 'execution-latest',
+        role: 'card' as const,
+        kind: 'execution_blueprint_ready' as const,
+        content: '',
+        createdAt: 5,
+        payload: {
+          sessionId: 's-live-details',
+          data: {
+            narrative: {
+              executionLogic: 'Build and verify one deployable slice at a time.',
+              workloadReasoning: 'Ten hours per week fits the schedule.',
+              riskHandling: 'Use a smaller authenticated endpoint if blocked.'
+            },
+            tasks: [{
+              id: 'auth-api',
+              title: 'Build authentication API',
+              scheduleWindow: 'Week 3',
+              estimatedMinutes: 600,
+              difficulty: 'medium',
+              purpose: 'Deliver a secure vertical slice.',
+              actionSteps: ['Implement password hashing and token validation.'],
+              deliverable: 'Authenticated REST endpoints',
+              completionEvidence: ['Login integration test passes'],
+              fallbackAction: 'Limit the first slice to access tokens.',
+              dependencies: ['api-foundation'],
+              resources: [{
+                title: 'FastAPI security guide',
+                exactUsage: 'Apply the OAuth2 password bearer example.',
+                expectedContribution: 'Correct authentication flow'
+              }]
+            }]
+          }
+        }
+      },
+      {
+        id: 'critique-latest',
+        role: 'card' as const,
+        kind: 'critique_report_ready' as const,
+        content: '',
+        createdAt: 6,
+        payload: {
+          sessionId: 's-live-details',
+          data: {
+            status: 'passed',
+            score: 94,
+            simulationSummary: 'Latest quality review passed.',
+            calendarWritable: true,
+            strengths: ['Dependencies and completion evidence are explicit.'],
+            issues: [],
+            repairRequests: []
+          }
+        }
+      },
+      {
+        id: 'technical-decision',
+        role: 'card' as const,
+        kind: 'agent_decision' as const,
+        content: '',
+        createdAt: 7,
+        payload: {
+          sessionId: 's-live-details',
+          data: { agent: 'Critic Agent', decision: 'approve', reason: 'Private routing trace' }
+        }
+      },
+      {
+        id: 'status-live-details',
+        role: 'card' as const,
+        kind: 'planning_session_status' as const,
+        content: 'waiting_execution_approval',
+        createdAt: 8,
+        payload: {
+          sessionId: 's-live-details',
+          status: 'waiting_execution_approval',
+          businessStatus: 'execution_pending',
+          runtimeStatus: 'idle'
+        }
+      }
+    ];
+
+    const html = renderToStaticMarkup(
+      <AgentThread messages={messages} sending={false} onApprove={() => undefined} onSend={() => undefined} t={t} />
+    );
+
+    expect((html.match(/Planning Workspace/g) || [])).toHaveLength(1);
+    expect(html).toContain('Latest evidence route');
+    expect(html).toContain('Latest strategy reason');
+    expect(html).toContain('Build authentication API');
+    expect(html).toContain('Implement password hashing and token validation.');
+    expect(html).toContain('Authenticated REST endpoints');
+    expect(html).toContain('FastAPI security guide');
+    expect(html).toContain('Latest quality review passed.');
+    expect(html).toContain('Dependencies and completion evidence are explicit.');
+    expect(html).not.toContain('Superseded route');
+    expect(html).not.toContain('Superseded task');
+    expect(html).not.toContain('Superseded critique');
+    expect(html).not.toContain('Private routing trace');
+
+    expect(html.indexOf('Latest evidence route')).toBeLessThan(html.indexOf('Build authentication API'));
+    expect(html.indexOf('Build authentication API')).toBeLessThan(html.indexOf('Latest quality review passed.'));
   });
 
   it('aggregates goal understanding, consistency warnings, and the next question without debug details', () => {

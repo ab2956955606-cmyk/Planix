@@ -132,6 +132,7 @@ class ModelRouteAttempt(BaseModel):
     error_type: str | None = Field(default=None, alias="errorType")
     latency_ms: int | None = Field(default=None, alias="latencyMs")
     automatic_retry: bool | None = Field(default=None, alias="automaticRetry")
+    retry_reason: str | None = Field(default=None, alias="retryReason")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -148,6 +149,10 @@ class ModelUsage(BaseModel):
     fallback_used: bool | None = Field(default=None, alias="fallbackUsed")
     local_fallback_allowed: bool | None = Field(default=None, alias="localFallbackAllowed")
     attempts: list[ModelRouteAttempt] = Field(default_factory=list)
+    generation_mode: Literal["single_pass", "two_pass_fallback", "two_pass_repair"] | None = Field(
+        default=None,
+        alias="generationMode",
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1248,7 +1253,7 @@ class ExecutionTask(BaseModel):
     description: str = ""
     due_date: str | None = Field(default=None, alias="dueDate")
     scheduled_date: str | None = Field(default=None, alias="scheduledDate")
-    estimated_minutes: int = Field(alias="estimatedMinutes", ge=1, le=1440)
+    estimated_minutes: int = Field(alias="estimatedMinutes", ge=1, le=10080)
     priority: GoalPriority = "medium"
     why_this_task_matters: str = Field(alias="whyThisTaskMatters")
     action_steps: list[str] = Field(default_factory=list, alias="actionSteps")

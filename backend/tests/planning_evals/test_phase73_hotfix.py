@@ -848,6 +848,7 @@ def test_phase73_skip_goal_clarification_uses_saved_context_and_advances(isolate
     assert skipped_description in {
         item["statement"] for item in advanced.goal_model["assumptions"]
     }
+    assert advanced.goal_model["uncertainties"] == []
     assert _artifact_ids(advanced, "user_goal_model") == goal_artifacts_before
     assert len(_artifact_ids(advanced, "goal_completion")) == len(completion_artifacts_before) + 1
     assert model.attempts_by_task["planning_goal_model"] == calls_before["planning_goal_model"]

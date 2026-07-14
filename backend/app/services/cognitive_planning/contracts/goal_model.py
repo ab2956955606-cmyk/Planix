@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 
 from .base import CognitiveContract
 
@@ -96,6 +97,66 @@ class GoalQuestion(CognitiveContract):
         return result
 
 
+_GOAL_INPUT_UNIT = re.compile(r"[\u4e00-\u9fff]|[A-Za-z]+|\d+(?:\.\d+)?")
+_GOAL_INPUT_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+_GOAL_INPUT_CLAUSE = re.compile(r"[，,。.!！？?；;:\n]+")
+
+
+def _initial_sparse_input_requires_clarification(info: ValidationInfo) -> bool:
+    """Bind readiness to typed input evidence, not only model-authored labels."""
+
+    context = info.context if isinstance(info.context, dict) else {}
+    raw_input = context.get("goalModelingInput")
+    if not isinstance(raw_input, dict):
+        return False
+    if raw_input.get("previousGoalModel") or raw_input.get("previous_goal_model"):
+        return False
+
+    history = raw_input.get("conversationHistory") or raw_input.get("conversation_history") or []
+    if not isinstance(history, list):
+        return False
+    user_turns = [
+        str(turn.get("content") or "").strip()
+        for turn in history
+        if isinstance(turn, dict) and turn.get("role") == "user" and str(turn.get("content") or "").strip()
+    ]
+    if len(user_turns) != 1:
+        return False
+
+    pre_extracted = raw_input.get("preExtractedFacts") or raw_input.get("pre_extracted_facts") or {}
+    if not isinstance(pre_extracted, dict):
+        return False
+    understanding = pre_extracted.get("goalUnderstanding") or pre_extracted.get("goal_understanding") or {}
+    if not isinstance(understanding, dict):
+        return False
+    warnings = understanding.get("consistencyWarnings") or understanding.get("consistency_warnings") or []
+    if warnings:
+        return True
+    intent_state = str(
+        understanding.get("intentState") or understanding.get("intent_state") or ""
+    ).strip()
+    if intent_state not in {"clear_goal", "ambiguous_goal"}:
+        return False
+
+    # This is intentionally derived from the user-authored surface, not from
+    # model-authored facts, constraints, preferences, or uncertainties. A
+    # model can split one short sentence into several facts or mislabel one
+    # phrase as a constraint, but it cannot thereby add independent user
+    # evidence. Two numeric commitments or several explicit clauses are a
+    # conservative signal that the first turn has real planning shape.
+    text = user_turns[0]
+    unit_count = len(_GOAL_INPUT_UNIT.findall(text))
+    number_count = len(_GOAL_INPUT_NUMBER.findall(text))
+    clause_count = len([part for part in _GOAL_INPUT_CLAUSE.split(text) if part.strip()])
+    has_independent_planning_shape = (
+        unit_count > 24
+        or clause_count > 2
+        or number_count >= 3
+        or (number_count >= 2 and clause_count >= 2)
+    )
+    return not has_independent_planning_shape
+
+
 class UserGoalModel(CognitiveContract):
     goal_statement: str
     desired_change: str
@@ -120,8 +181,62 @@ class UserGoalModel(CognitiveContract):
     can_proceed_to_evidence: bool
 
     @model_validator(mode="after")
-    def blocked_goal_requires_a_user_question(self) -> "UserGoalModel":
+    def blocked_goal_requires_a_user_question(self, info: ValidationInfo) -> "UserGoalModel":
         blocking_unknowns = [item for item in self.decision_relevant_unknowns if item.priority == "blocking"]
+        unresolved_uncertainties = [item.strip() for item in self.uncertainties if item.strip()]
+        directly_sourced_facts = [
+            item for item in self.known_facts if item.source_text.strip()
+        ]
+        distinct_fact_sources = {
+            item.source_text.strip().casefold()
+            for item in directly_sourced_facts
+        }
+        unsupported_fact_fragments_claim_readiness = bool(
+            self.known_facts
+            and len(distinct_fact_sources) <= 1
+            and not self.hard_constraints
+            and not self.soft_preferences
+        )
+        unresolved_sparse_goal_claims_readiness = bool(
+            unresolved_uncertainties
+            and len(directly_sourced_facts) <= 2
+            and not self.hard_constraints
+            and not self.soft_preferences
+        )
+        sparse_goal_claims_readiness = (
+            self.can_proceed_to_evidence
+            and not self.questions
+            and (
+                (
+                    unsupported_fact_fragments_claim_readiness
+                    and not self.decision_relevant_unknowns
+                )
+                or unresolved_sparse_goal_claims_readiness
+            )
+        )
+        input_requires_clarification = _initial_sparse_input_requires_clarification(info)
+        input_clarification_is_incomplete = (
+            self.can_proceed_to_evidence
+            or (
+                not self.consistency_warnings
+                and (not self.questions or not blocking_unknowns)
+            )
+        )
+        if input_requires_clarification and input_clarification_is_incomplete:
+            raise ValueError(
+                "initial single-turn input lacks enough independent user-authored planning commitments to "
+                "claim evidence readiness; splitting one user turn into fact fragments or relabeling one "
+                "phrase as a hard constraint does not add evidence, so add a matching blocking "
+                "decision-relevant unknown, ask at least one decision-shaping question, and set "
+                "canProceedToEvidence=false"
+            )
+        if sparse_goal_claims_readiness:
+            raise ValueError(
+                "a sparse goal without enough decision-shaping evidence cannot claim evidence readiness; "
+                "preserve any uncertainties, convert at least one material uncertainty into a blocking "
+                "decision-relevant unknown with an answerable user question, and set "
+                "canProceedToEvidence=false without inventing facts"
+            )
         if blocking_unknowns and self.can_proceed_to_evidence and not self.consistency_warnings:
             raise ValueError("blocking decision-relevant unknowns must stop evidence planning")
         if not self.can_proceed_to_evidence and not self.questions and not self.consistency_warnings:

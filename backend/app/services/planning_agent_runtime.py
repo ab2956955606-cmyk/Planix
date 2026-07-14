@@ -8,7 +8,14 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from ..db import get_conn
-from ..schemas import AgentDecision, AgentMessage, ModelUsage, PlanningArtifact, PlanningBlackboard
+from ..schemas import (
+    AgentDecision,
+    AgentMessage,
+    ModelUsage,
+    PlanningArtifact,
+    PlanningArtifactStatus,
+    PlanningBlackboard,
+)
 
 
 # Compatibility persistence protocol. New planning cognition belongs in
@@ -77,6 +84,313 @@ def _jsonable(value: Any) -> dict[str, Any]:
 
 
 class PlanningAgentRuntime:
+    def stage_execution_review(
+        self,
+        session_id: str,
+        *,
+        execution_owner: str,
+        critique_owner: str,
+        execution: Any,
+        pending_critique: Any,
+    ) -> tuple[PlanningArtifact, PlanningArtifact]:
+        """Atomically create one Execution version and its one Critique slot.
+
+        The Critique starts as a safe, blocked review placeholder.  The
+        independent Critic later finalizes this same artifact id/version.  A
+        crash or model failure therefore cannot leave a formal Execution
+        version without a corresponding Critique artifact.
+        """
+
+        if execution_owner not in ARTIFACT_OWNER_ALIASES["execution_blueprint"]:
+            raise ValueError(f"{execution_owner} cannot modify execution_blueprint")
+        if critique_owner not in ARTIFACT_OWNER_ALIASES["critique_report"]:
+            raise ValueError(f"{critique_owner} cannot modify critique_report")
+
+        now = _now()
+        execution_id = str(uuid4())
+        critique_id = str(uuid4())
+        execution_content = _jsonable(execution)
+        critique_content = _jsonable(pending_critique)
+        with get_conn() as conn:
+            execution_version_row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS next_version "
+                "FROM planning_artifacts WHERE session_id = ? AND artifact_type = 'execution_blueprint'",
+                (session_id,),
+            ).fetchone()
+            critique_version_row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS next_version "
+                "FROM planning_artifacts WHERE session_id = ? AND artifact_type = 'critique_report'",
+                (session_id,),
+            ).fetchone()
+            execution_version = int(execution_version_row["next_version"] or 1)
+            critique_version = int(critique_version_row["next_version"] or 1)
+            critique_content.update(
+                {
+                    "evaluatedExecutionArtifactId": execution_id,
+                    "evaluatedExecutionArtifactVersion": execution_version,
+                }
+            )
+            conn.execute(
+                """
+                INSERT INTO planning_artifacts(
+                  id, session_id, owner_agent, artifact_type, version, status,
+                  content_json, created_at, updated_at
+                ) VALUES (?, ?, ?, 'execution_blueprint', ?, 'draft', ?, ?, ?)
+                """,
+                (
+                    execution_id,
+                    session_id,
+                    execution_owner,
+                    execution_version,
+                    _dump(execution_content),
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO planning_artifacts(
+                  id, session_id, owner_agent, artifact_type, version, status,
+                  content_json, created_at, updated_at
+                ) VALUES (?, ?, ?, 'critique_report', ?, 'blocked', ?, ?, ?)
+                """,
+                (
+                    critique_id,
+                    session_id,
+                    critique_owner,
+                    critique_version,
+                    _dump(critique_content),
+                    now,
+                    now,
+                ),
+            )
+            # Keep the compatibility projection in the same transaction as
+            # the formal pair so a fresh runtime can always recover both.
+            conn.execute(
+                """
+                UPDATE planning_sessions
+                SET execution_blueprint_json = ?, critique_report_json = ?,
+                    business_status = 'execution_pending', runtime_status = 'running',
+                    version = version + 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    _dump(execution_content),
+                    _dump(critique_content),
+                    now,
+                    session_id,
+                ),
+            )
+            execution_row = conn.execute(
+                "SELECT * FROM planning_artifacts WHERE id = ?", (execution_id,)
+            ).fetchone()
+            critique_row = conn.execute(
+                "SELECT * FROM planning_artifacts WHERE id = ?", (critique_id,)
+            ).fetchone()
+        return self._artifact_from_row(execution_row), self._artifact_from_row(critique_row)
+
+    def finalize_execution_review(
+        self,
+        session_id: str,
+        *,
+        critique_artifact_id: str,
+        execution_artifact_id: str,
+        critique: Any,
+        status: PlanningArtifactStatus,
+    ) -> PlanningArtifact:
+        """Finalize the unique Critique slot bound to an Execution version."""
+
+        content = _jsonable(critique)
+        now = _now()
+        with get_conn() as conn:
+            execution_row = conn.execute(
+                """
+                SELECT * FROM planning_artifacts
+                WHERE id = ? AND session_id = ? AND artifact_type = 'execution_blueprint'
+                """,
+                (execution_artifact_id, session_id),
+            ).fetchone()
+            critique_row = conn.execute(
+                """
+                SELECT * FROM planning_artifacts
+                WHERE id = ? AND session_id = ? AND artifact_type = 'critique_report'
+                """,
+                (critique_artifact_id, session_id),
+            ).fetchone()
+            if not execution_row or not critique_row:
+                raise ValueError("execution review slot is missing or belongs to another session")
+            existing = _json_dict(critique_row["content_json"])
+            if (
+                existing.get("evaluatedExecutionArtifactId") != execution_artifact_id
+                or int(existing.get("evaluatedExecutionArtifactVersion") or 0)
+                != int(execution_row["version"] or 0)
+            ):
+                raise ValueError("critique slot is not bound to the current Execution artifact")
+            content.update(
+                {
+                    "evaluatedExecutionArtifactId": execution_artifact_id,
+                    "evaluatedExecutionArtifactVersion": int(execution_row["version"]),
+                }
+            )
+            conn.execute(
+                """
+                UPDATE planning_artifacts
+                SET status = ?, content_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, _dump(content), now, critique_artifact_id),
+            )
+            conn.execute(
+                """
+                UPDATE planning_sessions
+                SET critique_report_json = ?, version = version + 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (_dump(content), now, session_id),
+            )
+            result = conn.execute(
+                "SELECT * FROM planning_artifacts WHERE id = ?", (critique_artifact_id,)
+            ).fetchone()
+        return self._artifact_from_row(result)
+
+    def ensure_execution_review_slot(
+        self,
+        session_id: str,
+        *,
+        execution_artifact_id: str,
+        critique_owner: str,
+        pending_critique: Any,
+    ) -> PlanningArtifact:
+        """Return or create the sole Critique slot for a legacy Execution.
+
+        New executions use :meth:`stage_execution_review`; this compatibility
+        path lets an older persisted Execution resume safely at Critic without
+        first creating a second formal Execution version.
+        """
+
+        if critique_owner not in ARTIFACT_OWNER_ALIASES["critique_report"]:
+            raise ValueError(f"{critique_owner} cannot modify critique_report")
+        now = _now()
+        with get_conn() as conn:
+            execution_row = conn.execute(
+                """
+                SELECT * FROM planning_artifacts
+                WHERE id = ? AND session_id = ? AND artifact_type = 'execution_blueprint'
+                """,
+                (execution_artifact_id, session_id),
+            ).fetchone()
+            if not execution_row:
+                raise ValueError("current Execution artifact is missing")
+            rows = conn.execute(
+                """
+                SELECT * FROM planning_artifacts
+                WHERE session_id = ? AND artifact_type = 'critique_report'
+                ORDER BY version DESC, created_at DESC, id DESC
+                """,
+                (session_id,),
+            ).fetchall()
+            for row in rows:
+                content = _json_dict(row["content_json"])
+                if content.get("evaluatedExecutionArtifactId") == execution_artifact_id:
+                    return self._artifact_from_row(row)
+
+            # Pre-lineage releases bound Critic output through immutable
+            # AgentDecision input/output ids. Upgrade that existing artifact
+            # in place rather than creating a duplicate review for the same
+            # Execution version.
+            critique_rows = {str(row["id"]): row for row in rows}
+            decisions = conn.execute(
+                """
+                SELECT input_artifact_ids_json, output_artifact_ids_json
+                FROM agent_decisions
+                WHERE session_id = ?
+                  AND agent IN ('Critic Agent', 'Independent Critic & Learning Agent')
+                ORDER BY rowid DESC
+                """,
+                (session_id,),
+            ).fetchall()
+            for decision in decisions:
+                if execution_artifact_id not in _json_list(
+                    decision["input_artifact_ids_json"]
+                ):
+                    continue
+                matched = next(
+                    (
+                        critique_rows[item_id]
+                        for item_id in _json_list(decision["output_artifact_ids_json"])
+                        if item_id in critique_rows
+                    ),
+                    None,
+                )
+                if matched is None:
+                    continue
+                content = _json_dict(matched["content_json"])
+                content.update(
+                    {
+                        "evaluatedExecutionArtifactId": execution_artifact_id,
+                        "evaluatedExecutionArtifactVersion": int(execution_row["version"]),
+                    }
+                )
+                conn.execute(
+                    "UPDATE planning_artifacts SET content_json = ?, updated_at = ? WHERE id = ?",
+                    (_dump(content), now, matched["id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE planning_sessions
+                    SET critique_report_json = ?, version = version + 1, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (_dump(content), now, session_id),
+                )
+                upgraded = conn.execute(
+                    "SELECT * FROM planning_artifacts WHERE id = ?", (matched["id"],)
+                ).fetchone()
+                return self._artifact_from_row(upgraded)
+
+            version_row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS next_version "
+                "FROM planning_artifacts WHERE session_id = ? AND artifact_type = 'critique_report'",
+                (session_id,),
+            ).fetchone()
+            critique_id = str(uuid4())
+            content = _jsonable(pending_critique)
+            content.update(
+                {
+                    "evaluatedExecutionArtifactId": execution_artifact_id,
+                    "evaluatedExecutionArtifactVersion": int(execution_row["version"]),
+                }
+            )
+            conn.execute(
+                """
+                INSERT INTO planning_artifacts(
+                  id, session_id, owner_agent, artifact_type, version, status,
+                  content_json, created_at, updated_at
+                ) VALUES (?, ?, ?, 'critique_report', ?, 'blocked', ?, ?, ?)
+                """,
+                (
+                    critique_id,
+                    session_id,
+                    critique_owner,
+                    int(version_row["next_version"] or 1),
+                    _dump(content),
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE planning_sessions
+                SET critique_report_json = ?, version = version + 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (_dump(content), now, session_id),
+            )
+            result = conn.execute(
+                "SELECT * FROM planning_artifacts WHERE id = ?", (critique_id,)
+            ).fetchone()
+        return self._artifact_from_row(result)
+
     def record_artifact(
         self,
         session_id: str,

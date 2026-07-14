@@ -15,17 +15,20 @@ export function CommandPage({ t }: CommandPageProps) {
       <CommandThreadDrawer
         open={command.drawerOpen}
         threads={command.threads}
-        activeThreadId={command.threadId}
+        workspaces={command.workspaceList}
+        activeWorkspaceId={command.activeWorkspaceId}
         loading={command.loadingThreads}
         onOpenChange={commandAgentActions.setDrawerOpen}
         onNewThread={commandAgentActions.newThread}
+        onSelectWorkspace={commandAgentActions.selectWorkspace}
         onLoadThread={commandAgentActions.loadThread}
         onDeleteThread={commandAgentActions.removeThread}
+        onDeleteWorkspace={commandAgentActions.removeWorkspace}
         t={t}
       />
       <AgentThread
         messages={command.messages}
-        sending={command.sending}
+        sending={command.sending || !command.canSend}
         onApprove={(actionId, decision) => commandAgentActions.approveAction(actionId, decision, t)}
         onSend={(value) => commandAgentActions.sendCommand(value, t)}
         advancedAgentTrace={command.advancedAgentTrace}
@@ -33,6 +36,7 @@ export function CommandPage({ t }: CommandPageProps) {
       />
       <CommandComposer
         sending={command.sending}
+        disabled={!command.canSend}
         messages={command.messages}
         mode={command.mode}
         permission={command.permission}

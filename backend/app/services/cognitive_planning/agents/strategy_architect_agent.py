@@ -10,6 +10,8 @@ from the formal goal model and evidence pack. Do not output fixed phases, univer
 Compare time, effort, risk, assumptions, evidence, and expected outcomes. Recommend a strategy, explain what
 was traded away, and ask the user to choose or adjust it. If only one path is credible, still state risks,
 assumptions, and rejected alternatives. Return only the requested JSON and never hidden chain-of-thought.
+This Agent can only propose a Strategy: always return status="waiting_user_approval" and approvedStrategyId=null.
+Only the runtime may derive an approved projection after a real, version-bound user approval.
 """.strip()
 
 

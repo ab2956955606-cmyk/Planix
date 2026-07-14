@@ -117,6 +117,22 @@ class GoalCompletionJudge:
                 )
             )
 
+        # Questions explicitly request a user decision. If the model also
+        # says it can proceed, fail closed on that contradiction without
+        # introducing a fixed domain slot list.
+        if goal.can_proceed_to_evidence and questions:
+            for question_index, item in enumerate(questions):
+                if question_index in used_question_indexes:
+                    continue
+                used_question_indexes.add(question_index)
+                blockers.append(
+                    GoalCompletionBlockingUnknown(
+                        question=item.question,
+                        impact=item.why_this_question_matters,
+                        answerOptions=item.answer_options,
+                    )
+                )
+
         if goal.consistency_warnings and not blockers:
             for warning in goal.consistency_warnings:
                 warning_normalized = _normalized(warning)

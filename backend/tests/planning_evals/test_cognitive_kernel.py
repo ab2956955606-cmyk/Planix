@@ -26,6 +26,7 @@ from app.services.cognitive_planning.contracts import (
     ConversationTurn,
     CritiqueDimensions,
     CritiqueIssue,
+    CriticRepairRequest,
     DecisionRelevantUnknown,
     DomainEvidence,
     EvidencePack,
@@ -37,17 +38,20 @@ from app.services.cognitive_planning.contracts import (
     EvidenceResourceNeed,
     ExecutionBlueprint,
     ExecutionBlueprintTask,
+    ExecutionBudgetSummary,
     ExecutionCheckpoint,
     ExecutionNarrative,
     ExecutionResource,
     FeasibilityJudgment,
     GoalQuestion,
+    GoalCompletionResult,
     GoalModelingInput,
     GoalSuccessModel,
     KnownFact,
     LearningDiagnosis,
     PlanCritiqueReport,
     PlanningLearningUpdate,
+    Preference,
     RealityAssessment,
     RealityRisk,
     SafePlanningError,
@@ -61,7 +65,11 @@ from app.services.cognitive_planning.contracts import (
     UserModelHypothesisDraft,
     apply_evidence_authority_policy,
 )
-from app.services.cognitive_planning.orchestration.runtime import CognitivePlanningRuntime
+from app.services.cognitive_planning.orchestration.runtime import (
+    CognitivePlanningRuntime,
+    _normalize_learning_patch_target,
+)
+from app.services.cognitive_planning.compatibility.legacy_schema_adapter import execution_to_draft
 from app.services.cognitive_planning.orchestration.graph import build_cognitive_graph
 from app.services.cognitive_planning.evaluation import (
     CognitivePlanningShadowRunner,
@@ -190,6 +198,13 @@ class StubCognitiveModel:
             domain=domain,
             userLanguage=[text],
             knownFacts=[KnownFact(key="input", statement=text, sourceText=text, confidence=1)],
+            softPreferences=[
+                Preference(
+                    statement="Prefer the concrete, reviewable outcome encoded by this test model.",
+                    sourceText=text,
+                    confidence=1,
+                )
+            ],
             decisionRelevantUnknowns=unknowns,
             successModel=GoalSuccessModel(
                 definition="Produce observable evidence matched to the domain.",
@@ -525,28 +540,90 @@ class BlockingCriticModel(StubCognitiveModel):
         )
 
 
+class RepairableBlockedCriticModel(StubCognitiveModel):
+    def _critique(self) -> PlanCritiqueReport:
+        report = super()._critique()
+        if self.critique_calls > 1:
+            return report
+        return report.model_copy(
+            update={
+                "status": "blocked",
+                "score": 45,
+                "issues": [
+                    CritiqueIssue(
+                        severity="blocker",
+                        description="The fallback drops a hard requirement.",
+                        evidence="task-1 fallback",
+                        responsibleAgent="execution_designer",
+                    )
+                ],
+                "repair_requests": [
+                    CriticRepairRequest(
+                        targetAgent="execution_designer",
+                        instruction="Replace the fallback while preserving the hard requirement.",
+                        expectedChange="Every fallback still delivers the required outcome.",
+                    )
+                ],
+                "calendar_writable": False,
+            }
+        )
+
+
 class InconsistentPassingCriticModel(StubCognitiveModel):
     def _critique(self) -> PlanCritiqueReport:
-        self.critique_calls += 1
-        return PlanCritiqueReport(
-            status="passed",
-            score=90,
-            dimensions=CritiqueDimensions(
-                userFit=90,
-                goalAlignment=90,
-                domainCorrectness=90,
-                feasibility=90,
-                safety=90,
-                taskSpecificity=90,
-                resourceActionability=90,
-                scheduleFit=90,
-                adaptability=90,
-            ),
-            strengths=["Most fields look complete."],
-            issues=[CritiqueIssue(severity="blocker", description="Unsafe unresolved dependency.", evidence="task-1", responsibleAgent="execution_designer")],
-            repairRequests=[{"targetAgent": "execution_designer", "instruction": "Resolve the dependency.", "expectedChange": "No unsafe dependency remains."}],
-            simulationSummary="The model incorrectly marked an unresolved blocker as passed.",
-            calendarWritable=True,
+        report = super()._critique()
+        return report.model_copy(
+            update={
+                "issues": [
+                    CritiqueIssue(
+                        severity="blocker",
+                        description="Unsafe unresolved dependency.",
+                        evidence="task-1",
+                        responsibleAgent="execution_designer",
+                    )
+                ],
+                "repair_requests": [
+                    CriticRepairRequest(
+                        targetAgent="execution_designer",
+                        instruction="Resolve the dependency.",
+                        expectedChange="No unsafe dependency remains.",
+                    )
+                ],
+                "simulation_summary": "The model incorrectly marked an unresolved blocker as passed.",
+            }
+        )
+
+
+class MajorIssuePassingCriticModel(StubCognitiveModel):
+    def _critique(self) -> PlanCritiqueReport:
+        report = super()._critique()
+        return report.model_copy(
+            update={
+                "issues": [
+                    CritiqueIssue(
+                        severity="major",
+                        description="The weekly workload exceeds the user's limit.",
+                        evidence="execution workload arithmetic",
+                        responsibleAgent="execution_designer",
+                    )
+                ]
+            }
+        )
+
+
+class RepairRequestPassingCriticModel(StubCognitiveModel):
+    def _critique(self) -> PlanCritiqueReport:
+        report = super()._critique()
+        return report.model_copy(
+            update={
+                "repair_requests": [
+                    CriticRepairRequest(
+                        targetAgent="execution_designer",
+                        instruction="Repair the unresolved execution concern.",
+                        expectedChange="The concern is explicitly resolved.",
+                    )
+                ]
+            }
         )
 
 
@@ -667,6 +744,116 @@ def test_cognitive_invalid_json_is_blocked_without_template_fallback():
             contract_type=UserGoalModel,
         )
     assert exc_info.value.error.error_type == "invalid_model_output"
+
+
+def test_cognitive_contract_validation_uses_one_model_repair_call():
+    invalid = LlmResult(
+        content=json.dumps(
+            {
+                "complete": True,
+                "blockingUnknowns": [{"question": "Q", "impact": "changes strategy"}],
+                "optionalUnknowns": [],
+                "nextStage": "strategy",
+            }
+        ),
+        provider="deepseek",
+        model="stub",
+        usage={"promptTokens": 10, "completionTokens": 5, "totalTokens": 15},
+        latency_ms=4,
+        attempts=[{"provider": "deepseek", "model": "stub", "status": "success"}],
+    )
+    repaired = LlmResult(
+        content=json.dumps(
+            {
+                "complete": True,
+                "blockingUnknowns": [],
+                "optionalUnknowns": [],
+                "nextStage": "strategy",
+            }
+        ),
+        provider="deepseek",
+        model="stub",
+        usage={"promptTokens": 12, "completionTokens": 4, "totalTokens": 16},
+        latency_ms=5,
+        attempts=[{"provider": "deepseek", "model": "stub", "status": "success"}],
+    )
+
+    class SequencedLlm:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+            self.results = [invalid, repaired]
+
+        def complete(self, *_args: Any, **kwargs: Any):
+            self.calls.append(kwargs)
+            return self.results.pop(0), None
+
+    llm = SequencedLlm()
+    result = CognitiveModelClient(llm=llm).complete_contract(
+        stage="goal_completion",
+        task_type="planning_goal_model",
+        feature="test_contract_repair",
+        system="Return JSON.",
+        payload={"goal": "test"},
+        contract_type=GoalCompletionResult,
+    )
+
+    assert result.artifact.complete is True
+    assert len(llm.calls) == 2
+    assert result.model_usage["totalTokens"] == 31
+    assert result.model_usage["attempts"][-1]["automaticRetry"] is True
+    assert result.model_usage["attempts"][-1]["retryReason"] == "contract_validation"
+
+
+def test_inconsistent_passed_critique_uses_model_contract_repair():
+    valid = StubCognitiveModel()._critique().model_dump(by_alias=True)
+    invalid = {
+        **valid,
+        "issues": [
+            {
+                "severity": "major",
+                "description": "The schedule exceeds the user's weekly limit.",
+                "evidence": "workload arithmetic",
+                "responsibleAgent": "execution_designer",
+            }
+        ],
+    }
+    results = [
+        LlmResult(
+            content=json.dumps(invalid),
+            provider="deepseek",
+            model="stub",
+            attempts=[{"provider": "deepseek", "model": "stub", "status": "success"}],
+        ),
+        LlmResult(
+            content=json.dumps(valid),
+            provider="deepseek",
+            model="stub",
+            attempts=[{"provider": "deepseek", "model": "stub", "status": "success"}],
+        ),
+    ]
+
+    class SequencedCriticLlm:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        def complete(self, *_args: Any, **kwargs: Any):
+            self.calls.append(kwargs)
+            return results.pop(0), None
+
+    llm = SequencedCriticLlm()
+    result = CognitiveModelClient(llm=llm).complete_contract(
+        stage="critique",
+        task_type="planning_critique",
+        feature="test_critique_contract_repair",
+        system="Return the independent critique as JSON.",
+        payload={"execution": "test"},
+        contract_type=PlanCritiqueReport,
+    )
+
+    assert result.artifact.status == "passed"
+    assert len(llm.calls) == 2
+    assert result.model_usage["attempts"][-1]["automaticRetry"] is True
+    assert result.model_usage["attempts"][-1]["retryReason"] == "contract_validation"
 
 
 def test_cognitive_fallback_provider_success_keeps_real_attempt_trace():
@@ -865,6 +1052,149 @@ def test_execution_guard_rejects_blank_task_and_resource_semantics():
     assert f"{first.id} resource 1 has no exact usage" in exc_info.value.issues
 
 
+def test_execution_task_moves_relative_date_to_schedule_window():
+    task = StubCognitiveModel()._execution({"goalModel": {"domain": "go_backend"}}).tasks[0]
+    payload = task.model_dump(by_alias=True)
+    payload["scheduledDate"] = "Week 1, Day 1"
+    payload["scheduleWindow"] = None
+
+    normalized = ExecutionBlueprintTask.model_validate(payload)
+
+    assert normalized.scheduled_date is None
+    assert normalized.schedule_window == "Week 1, Day 1"
+
+
+def test_execution_task_rejects_an_invalid_iso_shaped_date():
+    task = StubCognitiveModel()._execution({"goalModel": {"domain": "go_backend"}}).tasks[0]
+    payload = task.model_dump(by_alias=True)
+    payload["scheduledDate"] = "2026-02-30"
+
+    with pytest.raises(ValidationError, match="valid ISO calendar date"):
+        ExecutionBlueprintTask.model_validate(payload)
+
+
+def test_execution_budget_summary_requires_unique_allocations_within_limit():
+    valid = {
+        "spendingLimitCny": 20_000,
+        "allocations": [
+            {"category": "transport", "amountCny": 6_000},
+            {"category": "lodging", "amountCny": 4_000},
+            {"category": "food", "amountCny": 4_000},
+            {"category": "activities", "amountCny": 2_000},
+            {"category": "contingency", "amountCny": 4_000},
+        ],
+    }
+    summary = ExecutionBudgetSummary.model_validate(valid)
+    assert sum(item.amount_cny for item in summary.allocations) == 20_000
+
+    duplicate = {**valid, "allocations": [*valid["allocations"], {"category": "food", "amountCny": 1}]}
+    with pytest.raises(ValidationError, match="categories must be unique"):
+        ExecutionBudgetSummary.model_validate(duplicate)
+
+    overspent = {**valid, "allocations": [*valid["allocations"], {"category": "visa", "amountCny": 1}]}
+    with pytest.raises(ValidationError, match="cannot exceed"):
+        ExecutionBudgetSummary.model_validate(overspent)
+
+
+def test_execution_task_accepts_multi_day_work_package_minutes():
+    task = StubCognitiveModel()._execution({"goalModel": {"domain": "go_backend"}}).tasks[0]
+    payload = task.model_dump(by_alias=True)
+    payload["estimatedMinutes"] = 1800
+
+    normalized = ExecutionBlueprintTask.model_validate(payload)
+
+    assert normalized.estimated_minutes == 1800
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("risks", []),
+        ("fallbackAction", ""),
+        ("deliverable", ""),
+    ],
+)
+def test_execution_task_requires_auditable_risk_and_delivery_fields(field: str, value: Any):
+    task = StubCognitiveModel()._execution({"goalModel": {"domain": "go_backend"}}).tasks[0]
+    payload = task.model_dump(by_alias=True)
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        ExecutionBlueprintTask.model_validate(payload)
+
+
+def test_legacy_execution_projection_accepts_multi_day_work_package_minutes():
+    model = StubCognitiveModel()
+    execution = model._execution({"goalModel": {"domain": "go_backend"}})
+    first = execution.tasks[0].model_copy(update={"estimated_minutes": 1800})
+    execution = execution.model_copy(update={"tasks": [first, *execution.tasks[1:]]})
+    strategy = model._strategy({"goalModel": {"domain": "go_backend"}})
+    critique = model._critique()
+
+    draft = execution_to_draft(execution, strategy, critique)
+
+    assert draft.tasks[0].estimated_minutes == 1800
+
+
+def test_blocked_critique_requires_an_explicit_blocker():
+    valid = StubCognitiveModel()._critique().model_dump(by_alias=True)
+    invalid = {
+        **valid,
+        "status": "blocked",
+        "score": 92,
+        "issues": [],
+        "repairRequests": [],
+        "calendarWritable": False,
+    }
+
+    with pytest.raises(ValidationError, match="must identify at least one blocker"):
+        PlanCritiqueReport.model_validate(invalid)
+
+
+def test_passed_critique_requires_calendar_writable():
+    valid = StubCognitiveModel()._critique().model_dump(by_alias=True)
+    invalid = {**valid, "calendarWritable": False}
+
+    with pytest.raises(ValidationError, match="must be calendarWritable"):
+        PlanCritiqueReport.model_validate(invalid)
+
+
+@pytest.mark.parametrize("severity", ["major", "blocker"])
+def test_passed_critique_rejects_major_and_blocker_issues(severity: str):
+    valid = StubCognitiveModel()._critique().model_dump(by_alias=True)
+    invalid = {
+        **valid,
+        "issues": [
+            {
+                "severity": severity,
+                "description": "An unresolved high-severity finding remains.",
+                "evidence": "task-1",
+                "responsibleAgent": "execution_designer",
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError, match="cannot include major/blocker issues"):
+        PlanCritiqueReport.model_validate(invalid)
+
+
+def test_passed_critique_rejects_repair_requests():
+    valid = StubCognitiveModel()._critique().model_dump(by_alias=True)
+    invalid = {
+        **valid,
+        "repairRequests": [
+            {
+                "targetAgent": "execution_designer",
+                "instruction": "Repair the unresolved concern.",
+                "expectedChange": "The concern is resolved.",
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError, match="cannot include repair requests"):
+        PlanCritiqueReport.model_validate(invalid)
+
+
 def test_goal_agent_asks_domain_specific_high_value_questions(isolated_db):
     runtime = CognitivePlanningRuntime(model_client=StubCognitiveModel())
     session = runtime.create_session(CreatePlanningSessionRequest(entryPoint="p_mode", threadId="swim-thread", userInput="我要学游泳，零基础，每天一小时，达到熟练"))
@@ -980,6 +1310,53 @@ def test_critic_repair_loop_is_bounded_and_rechecks(isolated_db):
     assert session.critique_report["status"] == "passed"
     assert session.cognitive_metadata.repair_count == 1
     assert model.critique_calls == 2
+    execution_calls = [payload for task, payload in model.calls if task == "planning_execution"]
+    # The initial candidate is single-pass; a Critic repair deliberately uses
+    # Narrative -> Blueprint so the reasoning and concrete task fields are
+    # recomputed together from the cumulative review history.
+    assert len(execution_calls) == 3
+    assert "previousExecutionBlueprint" not in execution_calls[0]
+    assert all(
+        payload.get("previousExecutionBlueprint", {}).get("tasks")
+        for payload in execution_calls[1:]
+    )
+    assert all(payload.get("repairInstructions") for payload in execution_calls[1:])
+    assert all(payload.get("previousCritiqueReport") for payload in execution_calls[1:])
+    assert all(payload.get("repairHistory") for payload in execution_calls[1:])
+
+    artifacts = runtime.agent_runtime.list_artifacts(session.session_id)
+    executions = [item for item in artifacts if item.artifact_type == "execution_blueprint"]
+    critiques = [item for item in artifacts if item.artifact_type == "critique_report"]
+    assert len(executions) == len(critiques) == 2
+    assert all(
+        payload["previousExecutionBlueprint"] == executions[0].content_json
+        for payload in execution_calls[1:]
+    )
+    critic_decisions = [
+        item
+        for item in runtime.agent_runtime.list_decisions(session.session_id)
+        if item.agent == "Independent Critic & Learning Agent"
+    ]
+    assert len(critic_decisions) == 2
+    reviewed_execution_ids: set[str] = set()
+    produced_critique_ids: set[str] = set()
+    for decision in critic_decisions:
+        matching_execution_ids = {
+            execution.id
+            for execution in executions
+            if execution.id in decision.input_artifact_ids
+        }
+        matching_critique_ids = {
+            critique.id
+            for critique in critiques
+            if critique.id in decision.output_artifact_ids
+        }
+        assert len(matching_execution_ids) == 1
+        assert len(matching_critique_ids) == 1
+        reviewed_execution_ids.update(matching_execution_ids)
+        produced_critique_ids.update(matching_critique_ids)
+    assert reviewed_execution_ids == {execution.id for execution in executions}
+    assert produced_critique_ids == {critique.id for critique in critiques}
 
 
 @pytest.mark.parametrize(
@@ -1007,8 +1384,21 @@ def test_forbidden_template_task_is_never_calendar_writable(isolated_db):
     runtime = CognitivePlanningRuntime(model_client=model)
     session = runtime.create_session(CreatePlanningSessionRequest(entryPoint="p_mode", threadId="template-thread", userInput="零基础学 Python，每天3小时，30天找实习"))
     session = runtime.approve_design(session.session_id)
-    assert session.cognitive_metadata.repair_count == 2
-    assert session.critique_report["status"] in {"needs_repair", "blocked"}
+    assert session.status == "needs_goal_clarification"
+    assert session.cognitive_metadata.planning_mode == "blocked_model_unavailable"
+    assert session.execution_blueprint is None
+    assert session.critique_report is None
+    assert model.critique_calls == 0
+    assert any(
+        "deterministic preflight" in item.reason
+        for item in runtime.agent_runtime.list_messages(session.session_id)
+        if item.message_type == "block"
+    )
+    assert not [
+        item
+        for item in runtime.agent_runtime.list_artifacts(session.session_id)
+        if item.artifact_type in {"execution_blueprint", "critique_report"}
+    ]
     with pytest.raises(HTTPException) as exc_info:
         runtime.approve_execution(session.session_id)
     assert exc_info.value.status_code == 409
@@ -1042,6 +1432,36 @@ def test_internally_inconsistent_critic_pass_is_normalized_and_blocked(isolated_
     assert session.critique_report["status"] == "blocked"
     assert session.critique_report["calendarWritable"] is False
     assert any("internally inconsistent" in item for item in session.critique_report["remainingRisks"])
+
+
+@pytest.mark.parametrize(
+    "model",
+    [MajorIssuePassingCriticModel(), RepairRequestPassingCriticModel()],
+    ids=["major-issue", "repair-request"],
+)
+def test_inconsistent_pass_from_model_copy_never_reaches_execution_approval(isolated_db, model):
+    runtime = CognitivePlanningRuntime(model_client=model)
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId=f"critic-inconsistent-{model.__class__.__name__}",
+            userInput="Learn Go with a safe, feasible execution plan",
+        )
+    )
+
+    session = runtime.approve_design(session.session_id)
+
+    assert session.status == "execution_revision"
+    assert session.critique_report["status"] == "blocked"
+    assert session.critique_report["calendarWritable"] is False
+    assert any(
+        issue["severity"] == "blocker"
+        for issue in session.critique_report["issues"]
+    )
+    assert any(
+        "internally inconsistent" in risk
+        for risk in session.critique_report["remainingRisks"]
+    )
 
 
 def test_critic_pass_without_calendar_permission_is_normalized_to_blocked(isolated_db):
@@ -1173,8 +1593,62 @@ def test_feedback_patch_is_consumed_once_without_using_critic_repair_budget(isol
     after_execution_calls = [task for task, _ in model.calls].count("planning_execution")
     assert updated.status == "waiting_execution_approval"
     assert updated.cognitive_metadata.repair_count == 0
-    assert after_execution_calls - before_execution_calls == 2
+    # Feedback is routed once. Execution generation may use its single bounded
+    # internal preflight-repair call before the independent Critic review.
+    assert 1 <= after_execution_calls - before_execution_calls <= 2
     assert [task for task, _ in model.calls].count("planning_learning") == 1
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("executionPlan", "execution_blueprint"),
+        ("execution_plan", "execution_blueprint"),
+        ("strategyPlan", "strategy_portfolio"),
+        ("evidencePack", "evidence_pack"),
+        ("realityAssessment", "reality_assessment"),
+        ("userGoalModel", "user_goal_model"),
+    ],
+)
+def test_feedback_patch_target_aliases_are_normalized(target, expected):
+    assert _normalize_learning_patch_target(target) == expected
+
+
+def test_execution_plan_feedback_alias_routes_to_execution_revision(isolated_db):
+    class ExecutionPlanFeedbackModel(StubCognitiveModel):
+        def _learning(self, payload: dict[str, Any]) -> PlanningLearningUpdate:
+            update = super()._learning(payload)
+            assert update.current_plan_patch is not None
+            return update.model_copy(
+                update={
+                    "current_plan_patch": update.current_plan_patch.model_copy(
+                        update={"target_artifact": "executionPlan"}
+                    )
+                }
+            )
+
+    model = ExecutionPlanFeedbackModel()
+    runtime = CognitivePlanningRuntime(model_client=model)
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="feedback-execution-plan-alias",
+            userInput="30天准备 Python AI 实习，每天2小时",
+        )
+    )
+    session = runtime.approve_design(session.session_id)
+    before_execution_calls = [task for task, _ in model.calls].count("planning_execution")
+
+    revised = runtime.revise_execution(
+        session.session_id,
+        PlanningSessionTextRequest(text="资料太理论，请换成引导示例"),
+    )
+
+    assert revised.status == "waiting_execution_approval"
+    assert revised.runtime_status == "idle"
+    assert revised.cognitive_metadata.repair_count == 0
+    after_execution_calls = [task for task, _ in model.calls].count("planning_execution")
+    assert 1 <= after_execution_calls - before_execution_calls <= 2
 
 
 def test_user_feedback_resets_repair_budget_for_the_new_draft(isolated_db):
@@ -1376,17 +1850,17 @@ def test_five_cognitive_agents_run_as_independent_contract_boundaries(isolated_d
     assert evidence_result.artifact.planning_rules
     assert strategy_result.artifact.user_decision.question
     assert execution_result.artifact.tasks[0].completion_evidence
-    assert execution_result.model_usage["promptTokens"] == 200
-    assert execution_result.model_usage["completionTokens"] == 100
-    assert execution_result.model_usage["totalTokens"] == 300
-    assert execution_result.model_usage["latencyMs"] == 10
-    assert len(execution_result.model_usage["attempts"]) == 2
+    assert execution_result.model_usage["promptTokens"] == 100
+    assert execution_result.model_usage["completionTokens"] == 50
+    assert execution_result.model_usage["totalTokens"] == 150
+    assert execution_result.model_usage["latencyMs"] == 5
+    assert len(execution_result.model_usage["attempts"]) == 1
+    assert execution_result.model_usage["generationMode"] == "single_pass"
     assert critique_result.artifact.calendar_writable is True
     assert [task for task, _ in model.calls] == [
         "planning_goal_model",
         "planning_evidence",
         "planning_strategy",
-        "planning_execution",
         "planning_execution",
         "planning_critique",
     ]
@@ -2413,6 +2887,90 @@ def test_phase7_critic_repair_loop_remains_bounded_to_two_rounds(isolated_db):
     assert session.status == "waiting_execution_approval"
     assert model.critique_calls == 2
     assert session.critique_report["status"] == "passed"
+    execution_calls = [payload for task, payload in model.calls if task == "planning_execution"]
+    assert len(execution_calls) == 3
+    assert "previousExecutionBlueprint" not in execution_calls[0]
+    assert all(
+        payload.get("previousExecutionBlueprint", {}).get("tasks")
+        for payload in execution_calls[1:]
+    )
+    assert all(payload.get("repairInstructions") for payload in execution_calls[1:])
+    assert all(payload.get("previousCritiqueReport") for payload in execution_calls[1:])
+    assert all(payload.get("repairHistory") for payload in execution_calls[1:])
+    artifacts = runtime.agent_runtime.list_artifacts(session.session_id)
+    executions = [item for item in artifacts if item.artifact_type == "execution_blueprint"]
+    critiques = [item for item in artifacts if item.artifact_type == "critique_report"]
+    assert len(executions) == len(critiques) == 2
+    assert all(
+        payload["previousExecutionBlueprint"] == executions[0].content_json
+        for payload in execution_calls[1:]
+    )
+    critic_decisions = [
+        item
+        for item in runtime.agent_runtime.list_decisions(session.session_id)
+        if item.agent == "Critic Agent"
+    ]
+    assert len(critic_decisions) == 2
+    reviewed_execution_ids: set[str] = set()
+    produced_critique_ids: set[str] = set()
+    for decision in critic_decisions:
+        matching_execution_ids = {
+            execution.id
+            for execution in executions
+            if execution.id in decision.input_artifact_ids
+        }
+        matching_critique_ids = {
+            critique.id
+            for critique in critiques
+            if critique.id in decision.output_artifact_ids
+        }
+        assert len(matching_execution_ids) == 1
+        assert len(matching_critique_ids) == 1
+        reviewed_execution_ids.update(matching_execution_ids)
+        produced_critique_ids.update(matching_critique_ids)
+    assert reviewed_execution_ids == {execution.id for execution in executions}
+    assert produced_critique_ids == {critique.id for critique in critiques}
+
+
+def test_phase7_preflight_failure_never_persists_or_runs_critic(isolated_db):
+    model = StubCognitiveModel(generic_task=True)
+    runtime = CognitiveOSRuntime(model_client=model)
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(
+            entryPoint="p_mode",
+            threadId="phase7-preflight-block",
+            userInput="Build a reviewable Python project in 30 days with three hours available daily",
+        )
+    )
+
+    session = runtime.approve_design(session.session_id)
+
+    assert session.status == "MODEL_UNAVAILABLE"
+    assert session.model_failure is not None
+    assert session.model_failure.resume_node == "execution"
+    assert session.execution_blueprint is None
+    assert session.critique_report is None
+    assert model.critique_calls == 0
+    assert not [
+        item
+        for item in runtime.agent_runtime.list_artifacts(session.session_id)
+        if item.artifact_type in {"execution_blueprint", "critique_report"}
+    ]
+
+
+def test_repairable_blocked_critic_enters_repair_loop(isolated_db):
+    model = RepairableBlockedCriticModel()
+    runtime = CognitiveOSRuntime(model_client=model)
+    session = runtime.create_session(
+        CreatePlanningSessionRequest(entryPoint="p_mode", threadId="repairable-blocked", userInput="Learn Go")
+    )
+
+    session = runtime.approve_design(session.session_id)
+
+    assert session.status == "waiting_execution_approval"
+    assert session.critique_report["status"] == "passed"
+    assert model.critique_calls == 2
+    assert session.cognitive_metadata.repair_count == 1
 
 
 def test_phase7_canonical_critic_rules_enforce_execution_invariants(isolated_db):

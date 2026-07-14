@@ -1,8 +1,18 @@
+import os
 import sqlite3
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 from uuid import uuid4
 
 from .desktop_paths import resolve_database_path
+
+
+_BUSY_TIMEOUT_MS = 5_000
+_DATABASE_INIT_LOCK = threading.RLock()
+_initialized_databases: dict[str, tuple[int, int, int, str]] = {}
 
 
 def get_db_path() -> Path:
@@ -11,12 +21,148 @@ def get_db_path() -> Path:
 
 def get_conn() -> sqlite3.Connection:
     db_path = get_db_path()
+    if str(db_path) == ":memory:":
+        conn = sqlite3.connect(":memory:", timeout=_BUSY_TIMEOUT_MS / 1_000)
+        _configure_connection(conn)
+        init_db(conn)
+        conn.commit()
+        return conn
+
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    init_db(conn)
+    conn = sqlite3.connect(db_path, timeout=_BUSY_TIMEOUT_MS / 1_000)
+    try:
+        _configure_connection(conn)
+        initialized = _ensure_file_database_initialized(conn, db_path)
+        if not initialized:
+            _sync_legacy_provider_config(conn)
+    except Exception:
+        conn.close()
+        raise
     return conn
+
+
+def _configure_connection(conn: sqlite3.Connection) -> None:
+    conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _ensure_file_database_initialized(conn: sqlite3.Connection, db_path: Path) -> bool:
+    canonical_path = db_path.expanduser().resolve(strict=False)
+    cache_key = os.path.normcase(str(canonical_path))
+
+    # Schema setup contains DDL and data migrations. Serializing it per process and
+    # caching the resulting database identity keeps ordinary connections off that
+    # write-heavy path while still detecting a deleted, replaced, or externally
+    # migrated test database at the same filesystem location.
+    with _DATABASE_INIT_LOCK:
+        with _database_init_file_lock(canonical_path):
+            # Re-read schema/journal state only after the cross-process lock is
+            # held. A Uvicorn reload can briefly overlap its old and new worker;
+            # the second process must observe migrations committed by the first
+            # before deciding whether to execute idempotent schema setup.
+            current_state = _database_state(conn, canonical_path)
+            if _initialized_databases.get(cache_key) == current_state:
+                return False
+
+            journal_mode = str(conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]).lower()
+            if journal_mode != "wal":
+                raise sqlite3.OperationalError(
+                    f"could not enable WAL journal mode for SQLite database: {canonical_path}"
+                )
+            init_db(conn)
+            conn.commit()
+            _initialized_databases[cache_key] = _database_state(conn, canonical_path)
+            return True
+
+
+@contextmanager
+def _database_init_file_lock(db_path: Path) -> Iterator[None]:
+    """Serialize schema initialization across reload workers and processes."""
+
+    lock_path = Path(f"{db_path}.init.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + (_BUSY_TIMEOUT_MS / 1_000)
+    with lock_path.open("a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+
+        acquired = False
+        while not acquired:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise sqlite3.OperationalError(
+                        f"timed out waiting for SQLite schema initialization: {db_path}"
+                    ) from exc
+                time.sleep(0.05)
+
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _database_state(conn: sqlite3.Connection, db_path: Path) -> tuple[int, int, int, str]:
+    stat = db_path.stat()
+    schema_version = int(conn.execute("PRAGMA schema_version").fetchone()[0])
+    journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    return (stat.st_dev, stat.st_ino, schema_version, journal_mode)
+
+
+def _sync_legacy_provider_config(conn: sqlite3.Connection) -> None:
+    # Older builds wrote a user-supplied key only to ai_settings. Keep that narrow
+    # compatibility path live without rerunning the schema and all data migrations
+    # for every connection. The common path is read-only; a write occurs once only
+    # when a newly written legacy row still lacks its provider config.
+    legacy = conn.execute(
+        """
+        SELECT provider, base_url, model, api_key_encrypted, api_key_source, updated_at
+        FROM ai_settings
+        WHERE id = 'local-default'
+          AND provider != 'mock'
+          AND api_key_source = 'user'
+          AND api_key_encrypted != ''
+          AND NOT EXISTS (
+            SELECT 1
+            FROM ai_provider_configs
+            WHERE ai_provider_configs.provider = ai_settings.provider
+          )
+        """
+    ).fetchone()
+    if legacy is None:
+        return
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO ai_provider_configs(
+          provider, base_url, model, api_key_encrypted, api_key_source, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        tuple(legacy),
+    )
+    conn.commit()
 
 
 def init_db(conn: sqlite3.Connection) -> None:

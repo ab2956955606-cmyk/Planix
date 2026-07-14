@@ -45,7 +45,8 @@ class StrategyPortfolio(CognitiveContract):
     strategies: list[StrategyOption] = Field(min_length=1)
     recommendation_reason: str
     user_decision: StrategyUserDecision
-    status: Literal["waiting_user_approval"] = "waiting_user_approval"
+    approved_strategy_id: str | None = None
+    status: Literal["waiting_user_approval", "approved"] = "waiting_user_approval"
 
     @model_validator(mode="after")
     def validate_strategy_ids(self) -> "StrategyPortfolio":
@@ -54,6 +55,12 @@ class StrategyPortfolio(CognitiveContract):
             raise ValueError("strategy ids must be unique")
         if self.recommended_strategy_id not in strategy_ids:
             raise ValueError("recommendedStrategyId must reference a strategy")
+        if self.status == "waiting_user_approval" and self.approved_strategy_id is not None:
+            raise ValueError("a strategy waiting for approval cannot have approvedStrategyId")
+        if self.status == "approved" and self.approved_strategy_id != self.recommended_strategy_id:
+            raise ValueError(
+                "an approved strategy must bind approvedStrategyId to recommendedStrategyId"
+            )
         return self
 
 

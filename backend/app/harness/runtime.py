@@ -155,7 +155,11 @@ class HarnessRuntime:
         current_refs = persistent.checkpoint.artifact_refs
         changed = (
             set(current_refs) != set(heads)
-            or any(not ref.same_version(current_refs.get(kind)) for kind, ref in heads.items())
+            or any(
+                not ref.same_version(current_refs.get(kind))
+                or ref.status != current_refs[kind].status
+                for kind, ref in heads.items()
+            )
         )
         if not changed and persistent.artifact_versions == versions:
             return persistent
@@ -510,8 +514,18 @@ class HarnessRuntime:
                 if contract.output_artifact
                 else None
             )
+            finalized_critique = bool(
+                agent_id == "critic"
+                and output is not None
+                and state.get("finalized_critique_artifact_id") == output.id
+            )
             if contract.output_artifact and (
-                output is None or (previous_output and output.same_version(previous_output))
+                output is None
+                or (
+                    previous_output
+                    and output.same_version(previous_output)
+                    and not finalized_critique
+                )
             ):
                 return self._fail_missing_output(
                     result_state,
